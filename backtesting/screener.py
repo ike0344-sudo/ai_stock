@@ -23,6 +23,17 @@ ETF_ETN_NAME_PREFIXES = (
 # 명칭 "기업인수목적"이 들어간다 — 이것도 같은 이름 휴리스틱으로 걸러낸다.
 SPAC_NAME_MARKERS = ("스팩", "기업인수목적")
 
+# ka10032 응답의 trde_prica(거래대금)는 백만원 단위로 내려온다 (universe.py의
+# TRADE_VALUE_UNIT_TO_EOK=100 확산 계산과 동일 컨벤션). 원 단위로 환산해서 저장한다 —
+# 그렇지 않으면 프론트엔드가 그대로 "원"으로 표시할 때 실제 거래대금보다 100만분의
+# 1로 작게 보인다.
+TRADE_VALUE_UNIT_WON = 1_000_000
+
+# stex_tp(거래소구분): 1=KRX, 2=NXT, 3=통합(KRX+NXT). 넥스트레이드(NXT) 출범 이후
+# KRX 단독(1)으로는 실제 총거래대금보다 낮게 집계된다(실측: SK하이닉스 KRX 단독
+# 5.15조 vs 통합 8.94조) — 반드시 3(통합)을 써야 한다.
+STEX_TP_COMBINED = "3"
+
 
 def _is_excluded_instrument(name: str) -> bool:
     """ETF/ETN/스팩처럼 개별 상장기업이 아닌 상품·명목회사를 이름 휴리스틱으로 판별."""
@@ -50,7 +61,7 @@ def top_by_trading_value(
     body = {
         "mrkt_tp": market,
         "mang_stk_incls": "0" if exclude_managed else "1",
-        "stex_tp": "1",
+        "stex_tp": STEX_TP_COMBINED,
     }
 
     rows = []
@@ -61,12 +72,17 @@ def top_by_trading_value(
             name = item["stk_nm"]
             if exclude_etf and _is_excluded_instrument(name):
                 continue
+            # stex_tp=3(통합) 응답은 종목코드에 "_AL" 접미사가 붙는다(예: "000660_AL")
+            # — 다운스트림(캔들 조회/주문/워치리스트 매칭)은 순수 6자리 코드를 기대하므로
+            # 여기서 한 번에 제거한다.
+            stock_code = item["stk_cd"].split("_")[0]
             rows.append(
                 {
-                    "stock_code": item["stk_cd"],
+                    "stock_code": stock_code,
                     "name": name,
                     "rank": int(item["now_rank"]),
-                    "trading_value": int(item["trde_prica"]),
+                    "trading_value": int(item["trde_prica"]) * TRADE_VALUE_UNIT_WON,
+                    "change_rate": float(item["flu_rt"]),
                 }
             )
         if len(rows) >= top_n or client.last_cont_yn != "Y" or not client.last_next_key:

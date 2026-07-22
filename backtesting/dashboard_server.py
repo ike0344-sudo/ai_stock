@@ -101,9 +101,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/sell-all-status":
             self._send_json(sell_all_job.get_status())
         elif parsed.path == "/api/trading-value-ranking":
-            window = query.get("window", ["regular"])[0]
-            if window not in ("regular", "extended"):
-                self._send_json({"error": "window는 regular 또는 extended만 허용됩니다"}, status=400)
+            window = query.get("window", ["extended"])[0]
+            if window != "extended":
+                self._send_json({"error": "window는 extended만 허용됩니다"}, status=400)
             else:
                 self._send_json(get_trading_value_ranking(self.kiwoom_appkey, self.kiwoom_secretkey, self.kiwoom_is_mock, window))
         elif parsed.path == "/api/strategies":

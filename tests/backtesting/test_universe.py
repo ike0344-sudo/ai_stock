@@ -23,7 +23,10 @@ class _StubClient:
 
 
 def _ranking_item(code, name, rank, trading_value):
-    return {"stk_cd": code, "stk_nm": name, "now_rank": str(rank), "trde_prica": str(trading_value)}
+    return {
+        "stk_cd": code, "stk_nm": name, "now_rank": str(rank), "trde_prica": str(trading_value),
+        "flu_rt": "+0.00",
+    }
 
 
 def _daily_records(trade_values: list[int]) -> dict:

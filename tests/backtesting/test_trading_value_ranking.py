@@ -53,11 +53,17 @@ def test_get_ranking_raises_for_unknown_window():
         get_ranking("key", "secret", True, "bogus")
 
 
+def test_get_ranking_rejects_regular_window():
+    # 정규장 전용 패널은 삭제됨 — extended만 유효한 window.
+    with pytest.raises(ValueError):
+        get_ranking("key", "secret", True, "regular", now=MONDAY_1000)
+
+
 def test_get_ranking_inactive_outside_window_returns_empty_with_no_fetch(monkeypatch):
     calls = []
     monkeypatch.setattr(trading_value_ranking, "top_by_trading_value", lambda client, top_n: calls.append(1) or _FakeDf([]))
 
-    result = get_ranking("key", "secret", True, "regular", now=MONDAY_1900)  # 정규장 아님(19시)
+    result = get_ranking("key", "secret", True, "extended", now=MONDAY_2100)  # 확장시간 아님(21시)
 
     assert result == {"rows": [], "as_of": None, "active": False}
     assert calls == []
@@ -71,7 +77,7 @@ def test_get_ranking_active_fetches_and_caches(monkeypatch):
         lambda client, top_n: calls.append(1) or _FakeDf(rows),
     )
 
-    result = get_ranking("key", "secret", True, "regular", now=MONDAY_1000)
+    result = get_ranking("key", "secret", True, "extended", now=MONDAY_1000)
 
     assert result["rows"] == rows
     assert result["as_of"] == "10:00:00"
@@ -87,8 +93,8 @@ def test_get_ranking_uses_cache_within_ttl(monkeypatch):
         lambda client, top_n: calls.append(1) or _FakeDf(rows),
     )
 
-    first = get_ranking("key", "secret", True, "regular", now=MONDAY_1000)
-    second = get_ranking("key", "secret", True, "regular", now=MONDAY_1000)
+    first = get_ranking("key", "secret", True, "extended", now=MONDAY_1000)
+    second = get_ranking("key", "secret", True, "extended", now=MONDAY_1000)
 
     assert first == second
     assert len(calls) == 1  # 두 번째는 캐시로 응답, 재조회 없음
@@ -98,8 +104,8 @@ def test_get_ranking_inactive_but_cached_returns_last_snapshot(monkeypatch):
     rows = [{"stock_code": "005930", "name": "삼성전자", "rank": 1, "trading_value": 1000}]
     monkeypatch.setattr(trading_value_ranking, "top_by_trading_value", lambda client, top_n: _FakeDf(rows))
 
-    get_ranking("key", "secret", True, "regular", now=MONDAY_1000)  # 활성 시간대에 한 번 채워둠
-    result = get_ranking("key", "secret", True, "regular", now=MONDAY_1900)  # 비활성 시간대(19시)
+    get_ranking("key", "secret", True, "extended", now=MONDAY_1000)  # 활성 시간대에 한 번 채워둠
+    result = get_ranking("key", "secret", True, "extended", now=MONDAY_2100)  # 비활성 시간대(21시)
 
     assert result["rows"] == rows
     assert result["as_of"] == "10:00:00"  # 마지막 조회 시각 그대로 — 새로 안 바뀜
@@ -113,7 +119,7 @@ def test_get_ranking_skips_fetch_when_credentials_missing(monkeypatch):
         lambda client, top_n: calls.append(1) or _FakeDf([]),
     )
 
-    result = get_ranking("", "", True, "regular", now=MONDAY_1000)
+    result = get_ranking("", "", True, "extended", now=MONDAY_1000)
 
     assert result == {"rows": [], "as_of": None, "active": True}
     assert calls == []
@@ -135,18 +141,3 @@ def test_get_ranking_keeps_previous_snapshot_when_refetch_fails(monkeypatch):
 
     assert result["rows"] == rows  # 실패했지만 마지막 성공값 유지
     assert result["active"] is True
-
-
-def test_get_ranking_regular_and_extended_windows_cache_independently(monkeypatch):
-    monkeypatch.setattr(
-        trading_value_ranking, "top_by_trading_value",
-        lambda client, top_n: _FakeDf([{"stock_code": "005930", "name": "삼성전자", "rank": 1, "trading_value": 1000}]),
-    )
-
-    regular_result = get_ranking("key", "secret", True, "regular", now=MONDAY_1000)
-    extended_result = get_ranking("key", "secret", True, "extended", now=MONDAY_0830)
-
-    assert "regular" in trading_value_ranking._cache
-    assert "extended" in trading_value_ranking._cache
-    assert regular_result["active"] is True
-    assert extended_result["active"] is True

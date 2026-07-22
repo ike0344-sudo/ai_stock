@@ -40,6 +40,16 @@ function formatKrw(value) {
   return Math.round(value).toLocaleString("ko-KR") + "원";
 }
 
+function formatTradingValueEok(value) {
+  const eok = Math.round(value / 100_000_000); // 1억원 = 100,000,000원
+  return eok.toLocaleString("ko-KR") + "억원";
+}
+
+function formatChangeRate(value) {
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(2)}%`;
+}
+
 function clearChildren(el) {
   while (el.firstChild) el.removeChild(el.firstChild);
 }
@@ -115,7 +125,7 @@ function renderDeposit(deposit) {
   }
 }
 
-const RANKING_WINDOWS = ["regular", "extended"];
+const RANKING_WINDOWS = ["extended"];
 
 function renderRanking(windowKey, data) {
   const tbody = document.getElementById(`ranking-${windowKey}-tbody`);
@@ -135,14 +145,26 @@ function renderRanking(windowKey, data) {
   empty.classList.add("hidden");
   table.classList.remove("hidden");
   clearChildren(tbody);
-  for (const item of rows) {
+  for (const [index, item] of rows.entries()) {
     const row = document.createElement("tr");
-    const cells = [item.rank, item.stock_code, item.name, formatKrw(item.trading_value)];
-    for (const value of cells) {
-      const td = document.createElement("td");
-      td.textContent = value;
-      row.appendChild(td);
-    }
+
+    const rankTd = document.createElement("td");
+    rankTd.textContent = index + 1; // API의 실제 순위(now_rank)는 ETF/ETN/스팩 제외로 건너뛴 번호가 있어
+    row.appendChild(rankTd);
+
+    const changeTd = document.createElement("td");
+    changeTd.textContent = formatChangeRate(item.change_rate);
+    changeTd.classList.add(item.change_rate > 0 ? "rate-up" : item.change_rate < 0 ? "rate-down" : "rate-flat");
+    row.appendChild(changeTd);
+
+    const nameTd = document.createElement("td");
+    nameTd.textContent = item.name;
+    row.appendChild(nameTd);
+
+    const valueTd = document.createElement("td");
+    valueTd.textContent = formatTradingValueEok(item.trading_value);
+    row.appendChild(valueTd);
+
     tbody.appendChild(row);
   }
 }

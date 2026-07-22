@@ -350,7 +350,7 @@ def test_get_api_account_snapshot_returns_deposit_and_holdings(running_server, m
     assert payload["holdings"][0]["code"] == "005930"
 
 
-def test_get_api_trading_value_ranking_defaults_to_regular_window(running_server, monkeypatch):
+def test_get_api_trading_value_ranking_defaults_to_extended_window(running_server, monkeypatch):
     from backtesting import dashboard_server
 
     captured = {}
@@ -365,7 +365,7 @@ def test_get_api_trading_value_ranking_defaults_to_regular_window(running_server
     response, body = running_server.get("/api/trading-value-ranking")
 
     assert response.status == 200
-    assert captured["window"] == "regular"
+    assert captured["window"] == "extended"
     payload = json.loads(body)
     assert payload["rows"][0]["stock_code"] == "005930"
     assert payload["active"] is True
@@ -384,6 +384,14 @@ def test_get_api_trading_value_ranking_accepts_extended_window(running_server, m
 
     assert response.status == 200
     assert captured["window"] == "extended"
+
+
+def test_get_api_trading_value_ranking_rejects_regular_window(running_server):
+    # 정규장 전용 패널은 삭제됨 — 더는 유효한 window가 아니다.
+    response, body = running_server.get("/api/trading-value-ranking?window=regular")
+
+    assert response.status == 400
+    assert "error" in json.loads(body)
 
 
 def test_get_api_trading_value_ranking_rejects_unknown_window(running_server):
