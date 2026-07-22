@@ -1,0 +1,12 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+.cache/
+.pytest_cache/
+*.csv
+*.joblib
+models/
+state/
+.bkit/
+*.log

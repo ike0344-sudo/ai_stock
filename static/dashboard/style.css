@@ -1,0 +1,281 @@
+body {
+  font-family: -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+  margin: 0;
+  padding: 24px;
+  background: #0f1115;
+  color: #e6e6e6;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+}
+
+h1 {
+  font-size: 1.25rem;
+  margin: 0;
+}
+
+.badge {
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.badge-ok {
+  background: #1f4d2e;
+  color: #6ee796;
+}
+
+.badge-danger {
+  background: #4d1f1f;
+  color: #e76e6e;
+}
+
+.badge-negative {
+  background: #4d1f1f;
+  color: #e76e6e;
+}
+
+.badge-positive {
+  background: #1f3a4d;
+  color: #6eb8e7;
+}
+
+#last-updated {
+  font-size: 0.85rem;
+  color: #888;
+}
+
+.warning {
+  background: #4d3a1f;
+  color: #e7b76e;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+}
+
+.hidden {
+  display: none;
+}
+
+section {
+  margin-bottom: 32px;
+}
+
+h2 {
+  font-size: 1rem;
+  color: #aaa;
+  margin-bottom: 8px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid #2a2d35;
+}
+
+th {
+  color: #888;
+  font-weight: 500;
+  font-size: 0.85rem;
+}
+
+.empty {
+  color: #666;
+  font-style: italic;
+}
+
+h2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+#top35-update-button {
+  background: #1f3a4d;
+  color: #6eb8e7;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+#top35-update-button:disabled {
+  background: #2a2d35;
+  color: #888;
+  cursor: default;
+}
+
+#top35-progress {
+  color: #6eb8e7;
+  font-size: 0.85rem;
+}
+
+#top35-summary {
+  color: #6ee796;
+  font-size: 0.85rem;
+}
+
+#result-detail-table {
+  margin-top: 16px;
+}
+
+#kill-switch-activate-button {
+  background: #4d1f1f;
+  color: #e76e6e;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+#kill-switch-clear-button {
+  background: #1f4d2e;
+  color: #6ee796;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+#kill-switch-override-status {
+  color: #e7b76e;
+  font-size: 0.85rem;
+}
+
+#pnl-view-daily-button, #pnl-view-weekly-button {
+  background: #2a2d35;
+  color: #aaa;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.toggle-active {
+  background: #1f3a4d !important;
+  color: #6eb8e7 !important;
+}
+
+#pnl-chart {
+  width: 100%;
+  height: 200px;
+  background: #14161b;
+  border-radius: 6px;
+}
+
+#top35-results-table {
+  margin-bottom: 16px;
+}
+
+.top35-row-fail td {
+  color: #e76e6e;
+}
+
+.holding-row-positive td:last-child {
+  color: #6eb8e7;
+}
+
+.holding-row-negative td:last-child {
+  color: #e76e6e;
+}
+
+#sell-all-button {
+  background: #4d1f1f;
+  color: #e76e6e;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+#sell-all-button:disabled {
+  background: #2a2d35;
+  color: #888;
+  cursor: default;
+}
+
+.sell-one-button {
+  background: #4d1f1f;
+  color: #e76e6e;
+  border: none;
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+#sell-all-progress {
+  color: #e7b76e;
+  font-size: 0.85rem;
+}
+
+#sell-all-result-table {
+  margin-bottom: 16px;
+}
+
+.sell-all-row-error td {
+  color: #e76e6e;
+}
+
+#strategy-info {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+#strategy-info h3 {
+  font-size: 0.85rem;
+  color: #888;
+  font-weight: 500;
+  margin: 0 0 6px;
+}
+
+#strategy-info ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+#trading-value-ranking {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 16px;
+}
+
+#trading-value-ranking h3 {
+  font-size: 0.85rem;
+  color: #888;
+  font-weight: 500;
+  margin: 0 0 6px;
+}
+
+#trading-value-ranking table {
+  max-height: 320px;
+  display: block;
+  overflow-y: auto;
+}
+
+#trading-value-ranking thead,
+#trading-value-ranking tbody {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+}

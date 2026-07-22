@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>trading-dashboard</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>trading-dashboard</h1>
+    <div id="market-ticker"></div>
+    <label for="strategy-select">전략:</label>
+    <select id="strategy-select"></select>
+    <div id="pnl-badge" class="badge">당일손익: -</div>
+    <div id="kill-switch-badge" class="badge badge-ok">상태 확인 중</div>
+    <button id="kill-switch-activate-button" type="button">수동 중단</button>
+    <button id="kill-switch-clear-button" type="button" class="hidden">수동 재개</button>
+    <span id="kill-switch-override-status" class="hidden"></span>
+    <div id="last-updated">마지막 갱신: -</div>
+    <div id="connection-warning" class="warning hidden">서버 연결 안 됨</div>
+  </header>
+
+  <main>
+    <section>
+      <h2>거래대금 상위 20 (ETF/ETN/스팩 제외)</h2>
+      <div id="trading-value-ranking">
+        <div>
+          <h3>정규장 (09:00~15:30) — <span id="ranking-regular-as-of">-</span></h3>
+          <table id="ranking-regular-table">
+            <thead><tr><th>순위</th><th>종목코드</th><th>종목명</th><th>거래대금</th></tr></thead>
+            <tbody id="ranking-regular-tbody"></tbody>
+          </table>
+          <p id="ranking-regular-empty" class="empty hidden">비활성 시간대입니다 (정규장 09:00~15:30에만 갱신)</p>
+        </div>
+        <div>
+          <h3>확장시간 (08:00~20:00) — <span id="ranking-extended-as-of">-</span></h3>
+          <table id="ranking-extended-table">
+            <thead><tr><th>순위</th><th>종목코드</th><th>종목명</th><th>거래대금</th></tr></thead>
+            <tbody id="ranking-extended-tbody"></tbody>
+          </table>
+          <p id="ranking-extended-empty" class="empty hidden">비활성 시간대입니다 (확장시간 08:00~20:00에만 갱신)</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>계좌 잔고</h2>
+      <table id="deposit-table">
+        <tbody id="deposit-tbody"></tbody>
+      </table>
+      <p id="deposit-empty" class="empty hidden">잔고 조회 실패 (키움 자격증명 확인 필요)</p>
+    </section>
+
+    <section>
+      <h2>
+        계좌 보유종목
+        <button id="sell-all-button" type="button">일괄 매도</button>
+      </h2>
+      <p id="sell-all-progress" class="hidden">매도 처리 중...</p>
+      <table id="sell-all-result-table" class="hidden">
+        <thead>
+          <tr>
+            <th>종목코드</th>
+            <th>종목명</th>
+            <th>수량</th>
+            <th>결과</th>
+          </tr>
+        </thead>
+        <tbody id="sell-all-result-tbody"></tbody>
+      </table>
+      <table id="holdings-table">
+        <thead>
+          <tr>
+            <th>종목코드</th>
+            <th>종목명</th>
+            <th>수량</th>
+            <th>평균단가</th>
+            <th>현재가</th>
+            <th>평가금액</th>
+            <th>평가손익</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="holdings-tbody"></tbody>
+      </table>
+      <p id="holdings-empty" class="empty hidden">보유 종목 없음</p>
+    </section>
+
+    <section>
+      <h2>전략 로직</h2>
+      <div id="strategy-info">
+        <div>
+          <h3>진입 조건</h3>
+          <ul id="strategy-info-entry"></ul>
+        </div>
+        <div>
+          <h3>청산 규칙</h3>
+          <ul id="strategy-info-exit"></ul>
+        </div>
+        <div>
+          <h3>운용</h3>
+          <ul id="strategy-info-operation"></ul>
+        </div>
+      </div>
+      <p id="strategy-info-empty" class="empty hidden">이 전략에 등록된 규칙 설명이 없습니다</p>
+    </section>
+
+    <section>
+      <h2>실행 조건</h2>
+      <table id="config-table">
+        <tbody id="config-tbody"></tbody>
+      </table>
+      <p id="config-empty" class="empty hidden">이 전략은 아직 run-trading으로 시작된 적이 없습니다</p>
+    </section>
+
+    <section>
+      <h2>보유 포지션</h2>
+      <table id="positions-table">
+        <thead>
+          <tr>
+            <th>종목코드</th>
+            <th>진입시각</th>
+            <th>배정자금</th>
+            <th>잔여비중</th>
+            <th>진입가</th>
+          </tr>
+        </thead>
+        <tbody id="positions-tbody"></tbody>
+      </table>
+      <p id="positions-empty" class="empty hidden">보유 포지션 없음</p>
+    </section>
+
+    <section>
+      <h2>진입 신호 이력 (최근 200건)</h2>
+      <table id="signals-table">
+        <thead>
+          <tr>
+            <th>종목코드</th>
+            <th>신호시각</th>
+            <th>가격</th>
+            <th>확률</th>
+          </tr>
+        </thead>
+        <tbody id="signals-tbody"></tbody>
+      </table>
+      <p id="signals-empty" class="empty hidden">신호 이력 없음</p>
+    </section>
+
+    <section>
+      <h2>체결/주문 이력 (최근 200건)</h2>
+      <table id="orders-table">
+        <thead>
+          <tr>
+            <th>종목코드</th>
+            <th>매수/매도</th>
+            <th>수량</th>
+            <th>가격</th>
+            <th>사유</th>
+            <th>시각</th>
+          </tr>
+        </thead>
+        <tbody id="orders-tbody"></tbody>
+      </table>
+      <p id="orders-empty" class="empty hidden">체결 이력 없음</p>
+    </section>
+
+    <section>
+      <h2>
+        손익 추이
+        <span>
+          <button id="pnl-view-daily-button" type="button" class="toggle-active">일별</button>
+          <button id="pnl-view-weekly-button" type="button">주간</button>
+          <button id="pnl-view-monthly-button" type="button">월별</button>
+        </span>
+      </h2>
+      <canvas id="pnl-chart" width="800" height="200"></canvas>
+      <p id="pnl-history-empty" class="empty hidden">손익 이력 없음</p>
+    </section>
+
+    <section>
+      <h2>
+        백테스트 결과
+        <button id="top35-update-button" type="button">top35 업데이트</button>
+      </h2>
+      <p id="top35-progress" class="hidden"></p>
+      <p id="top35-summary" class="hidden"></p>
+      <p id="top35-error" class="warning hidden"></p>
+      <table id="top35-results-table" class="hidden">
+        <thead>
+          <tr>
+            <th>종목코드</th>
+            <th>종목명</th>
+            <th>상태</th>
+          </tr>
+        </thead>
+        <tbody id="top35-results-tbody"></tbody>
+      </table>
+      <table id="results-table">
+        <thead>
+          <tr>
+            <th>파일명</th>
+            <th>생성시각</th>
+          </tr>
+        </thead>
+        <tbody id="results-tbody"></tbody>
+      </table>
+      <p id="results-empty" class="empty hidden">표시할 결과 없음</p>
+
+      <table id="result-detail-table" class="hidden">
+        <thead><tr id="result-detail-head"></tr></thead>
+        <tbody id="result-detail-tbody"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

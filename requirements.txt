@@ -1,0 +1,7 @@
+requests
+python-dotenv
+pandas
+mplfinance
+pytest
+scikit-learn
+websocket-client
