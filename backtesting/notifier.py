@@ -69,6 +69,19 @@ def notify_nasdaq_drop(change_pct: float, price: float, headlines: list[str], bo
     return send_telegram("\n".join(lines), bot_token, chat_id)
 
 
+def notify_dashboard_down(reason: str, bot_token: str, chat_id: str) -> bool:
+    """대시보드 서버(dashboard_server.py)가 응답하지 않을 때 통지 — dashboard_monitor.py가
+    호출한다. 원인(연결 실패/타임아웃/HTTP 5xx 등)을 그대로 붙여 어떤 종류의 장애인지
+    바로 구분할 수 있게 한다."""
+    return send_telegram(f"[대시보드] 응답 없음: {reason}", bot_token, chat_id)
+
+
+def notify_dashboard_recovered(bot_token: str, chat_id: str) -> bool:
+    """다운으로 판단된 이후 다시 응답이 돌아왔을 때 통지 — 직접 대시보드를 열어보지
+    않아도 복구를 알 수 있게 한다."""
+    return send_telegram("[대시보드] 복구됨", bot_token, chat_id)
+
+
 def notify_kill_switch(strategy: str, realized_pnl_krw: float, threshold_krw: float, bot_token: str, chat_id: str) -> bool:
     message = (
         f"[{strategy}] [KILL SWITCH 발동] 당일 실현손익 {realized_pnl_krw:,.0f}원 "

@@ -129,6 +129,21 @@ async function pollNasdaqDropMonitorStatus() {
   }
 }
 
+function renderDashboardMonitorStatus(running) {
+  const badge = document.getElementById("dashboard-monitor-badge");
+  badge.className = "badge " + (running ? "badge-ok" : "badge-danger");
+  badge.textContent = "대시보드 감시";
+}
+
+async function pollDashboardMonitorStatus() {
+  try {
+    const res = await fetch("/api/dashboard-monitor-status");
+    if (res.ok) renderDashboardMonitorStatus((await res.json()).running);
+  } catch (err) {
+    // 다음 폴링에서 자연히 재시도됨.
+  }
+}
+
 const DEPOSIT_FIELD_LABELS = [
   ["deposit_krw", "예수금"],
   ["order_available_krw", "주문가능금액"],
@@ -817,10 +832,12 @@ pollAccountSnapshot();
 pollSellAllStatus();
 pollAllRankings();
 pollNasdaqDropMonitorStatus();
+pollDashboardMonitorStatus();
 setInterval(pollOnce, POLL_INTERVAL_MS);
 setInterval(pollTop35Status, TOP35_POLL_INTERVAL_MS);
 setInterval(pollKillSwitchOverrideStatus, TOP35_POLL_INTERVAL_MS);
 setInterval(pollNasdaqDropMonitorStatus, MARKET_POLL_INTERVAL_MS);
+setInterval(pollDashboardMonitorStatus, MARKET_POLL_INTERVAL_MS);
 setInterval(pollMarketSnapshot, MARKET_POLL_INTERVAL_MS);
 setInterval(pollAccountSnapshot, POLL_INTERVAL_MS);
 setInterval(pollSellAllStatus, TOP35_POLL_INTERVAL_MS);

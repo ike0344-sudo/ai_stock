@@ -1,6 +1,8 @@
 import json
 from datetime import datetime
 
+import pytest
+
 from backtesting import orderbook_collector
 from backtesting.orderbook_collector import (
     append_jsonl,
@@ -8,6 +10,7 @@ from backtesting.orderbook_collector import (
     is_market_open,
     poll_all_once,
     run_collection_loop,
+    wait_until_extended_market_open,
 )
 
 
@@ -92,6 +95,42 @@ def test_poll_all_once_appends_across_multiple_calls_same_day(tmp_path):
 
     lines = (tmp_path / "20260720" / "005930.jsonl").read_text(encoding="utf-8").strip().split("\n")
     assert len(lines) == 2
+
+
+def test_wait_until_extended_market_open_returns_immediately_when_already_open(monkeypatch):
+    monkeypatch.setattr(orderbook_collector.time, "sleep", lambda s: pytest.fail("should not sleep"))
+    now = datetime(2026, 7, 24, 10, 30)  # 금요일, 이미 통합장 시간
+
+    assert wait_until_extended_market_open(now_fn=lambda: now) is True
+
+
+def test_wait_until_extended_market_open_returns_false_immediately_on_weekend(monkeypatch):
+    monkeypatch.setattr(orderbook_collector.time, "sleep", lambda s: pytest.fail("should not sleep"))
+    saturday = datetime(2026, 7, 18, 7, 0)  # 토요일, 8시 이전이지만 주말이라 대기하지 않음
+
+    assert wait_until_extended_market_open(now_fn=lambda: saturday) is False
+
+
+def test_wait_until_extended_market_open_returns_false_immediately_after_close(monkeypatch):
+    monkeypatch.setattr(orderbook_collector.time, "sleep", lambda s: pytest.fail("should not sleep"))
+    now = datetime(2026, 7, 24, 21, 0)  # 금요일 20시 마감 이후
+
+    assert wait_until_extended_market_open(now_fn=lambda: now) is False
+
+
+def test_wait_until_extended_market_open_waits_then_starts_at_8am(monkeypatch):
+    times = iter([
+        datetime(2026, 7, 24, 7, 59, 30),  # 최초 확인 - 8시 전이라 대기 시작
+        datetime(2026, 7, 24, 7, 59, 45),  # while 조건 - 아직 8시 전
+        datetime(2026, 7, 24, 8, 0, 0),  # while 조건 - 8시 도달, 루프 종료
+    ])
+    sleeps = []
+    monkeypatch.setattr(orderbook_collector.time, "sleep", lambda s: sleeps.append(s))
+
+    result = wait_until_extended_market_open(now_fn=lambda: next(times))
+
+    assert result is True
+    assert sleeps == [15.0]
 
 
 def test_run_collection_loop_polls_until_market_closes(monkeypatch):

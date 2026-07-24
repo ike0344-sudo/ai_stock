@@ -38,6 +38,7 @@ from .dashboard_data import (
     load_pnl_history,
     load_strategy_config,
 )
+from .dashboard_monitor import DEFAULT_STATE_DIR as DASHBOARD_MONITOR_STATE_DIR
 from .heartbeat import read_heartbeat_age_seconds
 from .market_snapshot import get_market_snapshot
 from .nasdaq_drop_monitor import DEFAULT_STATE_DIR as NASDAQ_DROP_MONITOR_STATE_DIR
@@ -129,7 +130,10 @@ STATE_FILENAMES = {
 }
 
 
-NON_STRATEGY_STATE_FOLDERS = {os.path.basename(NASDAQ_DROP_MONITOR_STATE_DIR)}
+NON_STRATEGY_STATE_FOLDERS = {
+    os.path.basename(NASDAQ_DROP_MONITOR_STATE_DIR),
+    os.path.basename(DASHBOARD_MONITOR_STATE_DIR),
+}
 
 
 def list_strategies(state_root: str) -> list[str]:
@@ -225,6 +229,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             # is_strategy_running을 그대로 재사용할 수 있다 — 폴더 이름만 다르게 넘긴다.
             self._send_json({
                 "running": is_strategy_running(self.state_root, os.path.basename(NASDAQ_DROP_MONITOR_STATE_DIR)),
+            })
+        elif parsed.path == "/api/dashboard-monitor-status":
+            self._send_json({
+                "running": is_strategy_running(self.state_root, os.path.basename(DASHBOARD_MONITOR_STATE_DIR)),
             })
         elif parsed.path == "/api/trading-value-ranking":
             window = query.get("window", ["extended"])[0]

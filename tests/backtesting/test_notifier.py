@@ -2,6 +2,8 @@ import pytest
 
 from backtesting import notifier
 from backtesting.notifier import (
+    notify_dashboard_down,
+    notify_dashboard_recovered,
     notify_error,
     notify_kill_switch,
     notify_nasdaq_drop,
@@ -163,3 +165,23 @@ def test_notify_nasdaq_drop_handles_empty_headlines(monkeypatch):
     notify_nasdaq_drop(-1.5, 17800.0, [], "TOKEN", "CHAT")
 
     assert "가져오지 못했습니다" in captured["message"]
+
+
+def test_notify_dashboard_down_includes_reason(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(notifier, "send_telegram", lambda message, bot_token, chat_id: captured.setdefault("message", message) or True)
+
+    notify_dashboard_down("Connection refused", "TOKEN", "CHAT")
+
+    assert "대시보드" in captured["message"]
+    assert "Connection refused" in captured["message"]
+
+
+def test_notify_dashboard_recovered_sends_message(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(notifier, "send_telegram", lambda message, bot_token, chat_id: captured.setdefault("message", message) or True)
+
+    notify_dashboard_recovered("TOKEN", "CHAT")
+
+    assert "대시보드" in captured["message"]
+    assert "복구" in captured["message"]

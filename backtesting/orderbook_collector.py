@@ -43,6 +43,31 @@ def is_extended_market_open(now: datetime) -> bool:
     return start <= now <= end
 
 
+def wait_until_extended_market_open(now_fn=datetime.now) -> bool:
+    """지금이 평일 08:00 이전이면 08:00까지 대기했다가 True를 반환한다 — 사람이 8시
+    정각에 맞춰 수동으로 실행해야 하는 부담/오차(전략1~4를 8시에 직접 실행하려 했으나
+    정확히 맞추지 못해 그냥 종료되곤 했던 문제) 없이, 미리 켜두면 자동으로 통합장
+    시작 시각에 맞춰 시작되게 하기 위함. 주말이거나 이미 20:00을 지났으면 대기하지
+    않고 즉시 is_extended_market_open 결과(False)를 그대로 반환한다 — 그 경우까지
+    다음 개장일을 기다리게 하는 건 이 함수의 범위 밖이다.
+
+    now_fn: 매 폴링마다 현재 시각을 얻는 콜백(기본 datetime.now) — 테스트에서 가짜
+    시계를 주입할 수 있도록 nasdaq_drop_monitor.py의 _now() 래퍼와 같은 이유로 존재."""
+    now = now_fn()
+    today_open = now.replace(hour=EXTENDED_OPEN_HOUR, minute=EXTENDED_OPEN_MINUTE, second=0, microsecond=0)
+    if now.weekday() >= 5 or now >= today_open:
+        return is_extended_market_open(now)
+
+    print(
+        f"통합장 시작({EXTENDED_OPEN_HOUR:02d}:{EXTENDED_OPEN_MINUTE:02d}) 전입니다 — "
+        "그때까지 대기합니다. 중단하려면 Ctrl+C.",
+        flush=True,
+    )
+    while now_fn() < today_open:
+        time.sleep(15.0)
+    return True
+
+
 def collect_once(client: KiwoomClient, stock_code: str, now: datetime | None = None) -> dict:
     """호가 1회 폴링, 수신시각·종목코드를 붙여 반환. 실패해도 예외를 올리지 않고
     error 필드를 채워 반환 — 폴링 루프가 한 종목 실패로 멈추지 않게 하기 위함."""

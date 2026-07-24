@@ -20,6 +20,7 @@ from kiwoom_client import KiwoomClient
 
 from . import grid_search, report
 from .bracket_scan import scan_bracket_zones, summarize_zones
+from .dashboard_monitor import run_dashboard_monitor_loop
 from .dashboard_server import run_dashboard_server
 from .data_loader import (
     load_full_index_minute_history,
@@ -35,7 +36,7 @@ from .final_strategy import (
 from .live_monitor import run_monitor_loop
 from .ml_entry_filter import FEATURE_COLUMNS, load_model
 from .nasdaq_drop_monitor import DROP_THRESHOLD_PCT, WINDOW_SECONDS, run_nasdaq_drop_monitor
-from .orderbook_collector import is_extended_market_open, is_market_open, run_collection_loop
+from .orderbook_collector import is_market_open, run_collection_loop, wait_until_extended_market_open
 from .oversold_strategy import STOCK_CODE as OVERSOLD_STOCK_CODE
 from .oversold_trading_loop import run_oversold_trading_loop
 from .screener import top_by_trading_value
@@ -470,7 +471,7 @@ def _run_monitor_signals(args) -> None:
     다른 실행 경로(텔레그램 알림 포함)로 분기한다 — run-trading의 strategy_2 분기와
     같은 이유(다른 전략을 strategy_1 경로로 잘못 태우는 버그 방지)."""
     client = _build_client()
-    if not is_extended_market_open(pd.Timestamp.now().to_pydatetime()):
+    if not wait_until_extended_market_open():
         print("현재 통합장 시간이 아닙니다(평일 08:00~20:00). 아무 것도 감시하지 않고 종료합니다.")
         return
 
@@ -535,7 +536,7 @@ def _run_trading(args) -> None:
         return
 
     client = _build_client()
-    if not is_extended_market_open(pd.Timestamp.now().to_pydatetime()):
+    if not wait_until_extended_market_open():
         print("현재 통합장 시간이 아닙니다(평일 08:00~20:00). 실주문을 시작하지 않고 종료합니다.")
         return
 
@@ -671,6 +672,35 @@ def _run_monitor_nasdaq_drop(args) -> None:
             break  # 정상 종료(stop 요청) — 재시작하지 않음
         except Exception as exc:
             print(f"나스닥 급락 감시가 예상치 못하게 종료됨 — {RESTART_DELAY_SECONDS}초 후 자동 재시작: {exc}", flush=True)
+            time.sleep(RESTART_DELAY_SECONDS)
+
+
+def _run_monitor_dashboard(args) -> None:
+    """트레이딩 대시보드(dashboard_server.py)가 응답하는지 주기적으로 확인해, 응답이
+    끊기면/복구되면 텔레그램으로 알린다. 대시보드와 완전히 분리된 프로세스라 대시보드가
+    죽거나 멈춰도 이 감시 자체는 영향받지 않는다."""
+    load_dotenv()
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if not bot_token or not chat_id:
+        print("TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID가 .env에 설정되어 있지 않습니다. 알림 없이는 감시를 시작하지 않습니다.")
+        return
+
+    url = f"http://{args.host}:{args.port}/"
+    print(
+        f"대시보드 감시 시작 — {url} (폴링간격 {args.interval_seconds:.0f}초). 중단하려면 Ctrl+C.",
+        flush=True,
+    )
+    # 상시 감시라 run_dashboard_monitor_loop가 사이클 안에서 못 막은 예외로 죽더라도
+    # 프로세스 자체는 계속 살아 있어야 한다 — monitor-nasdaq-drop과 같은 이유.
+    while True:
+        try:
+            run_dashboard_monitor_loop(
+                bot_token, chat_id, url=url, poll_interval_seconds=args.interval_seconds,
+            )
+            break  # 정상 종료(stop 요청) — 재시작하지 않음
+        except Exception as exc:
+            print(f"대시보드 감시가 예상치 못하게 종료됨 — {RESTART_DELAY_SECONDS}초 후 자동 재시작: {exc}", flush=True)
             time.sleep(RESTART_DELAY_SECONDS)
 
 
@@ -869,6 +899,15 @@ def build_parser() -> argparse.ArgumentParser:
     nasdaq_drop_parser.add_argument("--window-seconds", type=float, default=WINDOW_SECONDS, help="급락 판단 기준 시간창(초), 기본 3분")
     nasdaq_drop_parser.add_argument("--threshold-pct", type=float, default=DROP_THRESHOLD_PCT, help="이 값(%%) 이하로 떨어지면 알림, 기본 -1.0")
     nasdaq_drop_parser.set_defaults(func=_run_monitor_nasdaq_drop)
+
+    dashboard_monitor_parser = sub.add_parser(
+        "monitor-dashboard",
+        help="트레이딩 대시보드가 응답하는지 주기적으로 확인해 응답 없음/복구 시 텔레그램 알림 (대시보드와 분리된 프로세스, Kiwoom API 호출 없음)",
+    )
+    dashboard_monitor_parser.add_argument("--host", default="127.0.0.1", help="확인할 대시보드 호스트 (dashboard 명령의 --host와 맞출 것)")
+    dashboard_monitor_parser.add_argument("--port", type=int, default=8765, help="확인할 대시보드 포트 (dashboard 명령의 --port와 맞출 것)")
+    dashboard_monitor_parser.add_argument("--interval-seconds", type=float, default=30.0, help="확인 간격(초)")
+    dashboard_monitor_parser.set_defaults(func=_run_monitor_dashboard)
 
     return parser
 

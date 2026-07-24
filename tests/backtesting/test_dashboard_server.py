@@ -618,6 +618,21 @@ def test_get_api_strategies_excludes_nasdaq_drop_monitor_folder(running_server):
     assert "nasdaq_drop_monitor" not in payload["running"]
 
 
+def test_get_api_strategies_excludes_dashboard_monitor_folder(running_server):
+    # dashboard_monitor도 nasdaq_drop_monitor와 같은 이유로 매매 전략이 아니다 —
+    # 전략 드롭다운/상태 배지에 섞여 나오면 안 된다.
+    monitor_dir = os.path.join(running_server.state_root, "dashboard_monitor")
+    os.makedirs(monitor_dir, exist_ok=True)
+    with open(os.path.join(monitor_dir, "heartbeat.json"), "w", encoding="utf-8") as f:
+        json.dump({"updated_at": time.time()}, f)
+
+    response, body = running_server.get("/api/strategies")
+
+    payload = json.loads(body)
+    assert payload["strategies"] == ["strategy_1"]
+    assert "dashboard_monitor" not in payload["running"]
+
+
 # ---- 나스닥 급락 감시 상태 ----
 
 def test_get_nasdaq_drop_monitor_status_returns_false_when_no_heartbeat(running_server):
@@ -647,6 +662,39 @@ def test_get_nasdaq_drop_monitor_status_returns_false_when_stop_requested(runnin
         f.write("{}")
 
     response, body = running_server.get("/api/nasdaq-drop-monitor-status")
+
+    assert json.loads(body) == {"running": False}
+
+
+# ---- 대시보드 감시 상태 ----
+
+def test_get_dashboard_monitor_status_returns_false_when_no_heartbeat(running_server):
+    response, body = running_server.get("/api/dashboard-monitor-status")
+
+    assert response.status == 200
+    assert json.loads(body) == {"running": False}
+
+
+def test_get_dashboard_monitor_status_returns_true_with_fresh_heartbeat(running_server):
+    monitor_dir = os.path.join(running_server.state_root, "dashboard_monitor")
+    os.makedirs(monitor_dir, exist_ok=True)
+    with open(os.path.join(monitor_dir, "heartbeat.json"), "w", encoding="utf-8") as f:
+        json.dump({"updated_at": time.time()}, f)
+
+    response, body = running_server.get("/api/dashboard-monitor-status")
+
+    assert json.loads(body) == {"running": True}
+
+
+def test_get_dashboard_monitor_status_returns_false_when_stop_requested(running_server):
+    monitor_dir = os.path.join(running_server.state_root, "dashboard_monitor")
+    os.makedirs(monitor_dir, exist_ok=True)
+    with open(os.path.join(monitor_dir, "heartbeat.json"), "w", encoding="utf-8") as f:
+        json.dump({"updated_at": time.time()}, f)
+    with open(os.path.join(monitor_dir, "stop_requested.json"), "w", encoding="utf-8") as f:
+        f.write("{}")
+
+    response, body = running_server.get("/api/dashboard-monitor-status")
 
     assert json.loads(body) == {"running": False}
 
