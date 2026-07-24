@@ -1,0 +1,9 @@
+{
+  "strategy": "strategy_2",
+  "stock_code": "000660",
+  "total_capital_krw": 10000000.0,
+  "interval_seconds": 30.0,
+  "max_daily_loss_krw": 3000000.0,
+  "is_mock": false,
+  "started_at": "2026-07-24T11:57:23"
+}

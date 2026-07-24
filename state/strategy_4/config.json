@@ -1,0 +1,8 @@
+{
+  "strategy": "strategy_4",
+  "top_n": 35,
+  "interval_seconds": 5.0,
+  "is_mock": false,
+  "mode": "signal_only",
+  "started_at": "2026-07-24T11:57:30"
+}
