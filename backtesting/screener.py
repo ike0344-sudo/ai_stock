@@ -57,6 +57,11 @@ def top_by_trading_value(
 
     market: "000"=코스피+코스닥 통합, "001"=코스피, "101"=코스닥.
     ETF/ETN/스팩·관리종목을 걸러내며 페이지를 이어받아(cont-yn/next-key) top_n개를 채운다.
+
+    키움 [0184](당일거래량상위) 화면과 비슷한 정보를 보여주기 위해, ka10032 응답에
+    이미 들어있는 필드들을 추가로 파싱해 반환한다 — current_price(현재가), change_amount
+    (대비, 부호 있는 증감액), volume(거래량), prev_day_volume(전일 거래량),
+    volume_vs_prev_day_pct(전일비 %, 전일 거래량이 0이면 None).
     """
     body = {
         "mrkt_tp": market,
@@ -76,6 +81,8 @@ def top_by_trading_value(
             # — 다운스트림(캔들 조회/주문/워치리스트 매칭)은 순수 6자리 코드를 기대하므로
             # 여기서 한 번에 제거한다.
             stock_code = item["stk_cd"].split("_")[0]
+            volume = int(item["now_trde_qty"])
+            prev_volume = int(item["pred_trde_qty"])
             rows.append(
                 {
                     "stock_code": stock_code,
@@ -83,6 +90,16 @@ def top_by_trading_value(
                     "rank": int(item["now_rank"]),
                     "trading_value": int(item["trde_prica"]) * TRADE_VALUE_UNIT_WON,
                     "change_rate": float(item["flu_rt"]),
+                    # cur_prc/sel_bid/buy_bid 등 호가·현재가류 필드는 부호가 실제 가격의
+                    # 부호가 아니라 전일종가 대비 방향 표시일 뿐이다(kiwoom_client.py의
+                    # place_order 문서화와 동일한 키움 API 관례) — 그대로 float()하면
+                    # 하락 종목 가격이 음수로 잘못 파싱된다. 반면 pred_pre(대비)는 그
+                    # 자체가 부호 있는 증감액이라 그대로 float()해야 방향이 살아있다.
+                    "current_price": abs(float(item["cur_prc"])),
+                    "change_amount": float(item["pred_pre"]),
+                    "volume": volume,
+                    "prev_day_volume": prev_volume,
+                    "volume_vs_prev_day_pct": (volume / prev_volume * 100) if prev_volume else None,
                 }
             )
         if len(rows) >= top_n or client.last_cont_yn != "Y" or not client.last_next_key:

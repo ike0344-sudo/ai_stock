@@ -21,30 +21,100 @@ backtest_results.list_results()가 반환한 이름만 허용한다.
 바로 맞아떨어진다).
 """
 import json
+import math
 import os
+import subprocess
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import kill_switch_control, sell_all_job, sell_order, top35_job
+from . import kill_switch_control, sell_all_job, sell_order, stop_control, top35_job
 from .account_status import get_account_snapshot
 from .backtest_results import list_results, read_result
 from .dashboard_data import (
+    load_all_signal_history,
     load_dashboard_state,
     load_order_history,
     load_pnl_history,
-    load_signal_history,
     load_strategy_config,
 )
+from .heartbeat import read_heartbeat_age_seconds
 from .market_snapshot import get_market_snapshot
+from .nasdaq_drop_monitor import DEFAULT_STATE_DIR as NASDAQ_DROP_MONITOR_STATE_DIR
 from .strategy_catalog import describe_strategy
 from .trading_value_ranking import get_ranking as get_trading_value_ranking
+from .trading_value_ranking import start_background_poller as start_ranking_background_poller
 
-STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static", "dashboard")
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+STATIC_DIR = os.path.join(PROJECT_ROOT, "static", "dashboard")
+
+# run-trading/monitor-signals의 --strategy 실행 파라미터 플래그 중, config.json
+# 스냅샷(cli.py의 _write_strategy_config/_write_scalp_config)에 실제로 남는 키만
+# 매핑한다 — "시작" 버튼이 직전 실행과 동일한 옵션(예: 전략1의 --interval-seconds 1)으로
+# 재시작하기 위함. 전략마다 config.json에 있는 키가 다르므로(strategy_3은 top_n/
+# interval_seconds만 있음) 없는 키는 그냥 건너뛴다 — 상위 커맨드(run-trading 또는
+# monitor-signals)가 애초에 받지 않는 플래그가 잘못 섞이는 일도 이 방식으로 막힌다.
+CONFIG_TO_CLI_FLAG = {
+    "top_n": "--top-n",
+    "proba_threshold": "--proba-threshold",
+    "max_concurrent_positions": "--max-concurrent-positions",
+    "total_capital_krw": "--total-capital",
+    "interval_seconds": "--interval-seconds",
+    "model_path": "--model-path",
+}
+
+
+def spawn_detached(command: list[str], cwd: str, log_file) -> subprocess.Popen:
+    """대시보드가 재시작/종료돼도 방금 띄운 전략 프로세스가 같이 죽지 않도록, 가능하면
+    부모의 프로세스 그룹/잡 오브젝트에서 분리해 띄운다(실측 사고: 대시보드 프로세스를
+    재시작했더니 그 "시작" 버튼으로 띄웠던 전략1·3 실계좌 프로세스가 같이 종료됐다 —
+    상위에서 프로세스 트리 전체를 정리하는 방식으로 관리되고 있었던 것으로 보임).
+
+    CREATE_BREAKAWAY_FROM_JOB은 상위가 잡 오브젝트로 관리 중이고 그 잡이 breakaway를
+    허용하면 분리에 성공하지만, 허용하지 않으면 프로세스 생성 자체가 예외로 실패한다
+    (조용히 무시되지 않음) — 그래서 먼저 시도하고, 실패하면 그 플래그 없이(그래도
+    CREATE_NEW_PROCESS_GROUP은 유지해 최소한 Ctrl+C 전파는 막고서) 다시 시도한다.
+    다만 이건 잡 오브젝트 기반 관리에만 통하는 방어책이고, 상위가 프로세스 트리(부모
+    PID) 기준으로 통째로 정리하는 방식이면 이 플래그로도 못 막는다 — 그런 경우
+    대비책은 코드가 아니라 운용 규칙(REAL_TRADING_SAFETY.md 등에 안내: 실계좌
+    프로세스는 대시보드 "시작" 버튼 대신 별도 터미널에서 CLI로 직접 띄우면 대시보드
+    재시작의 영향을 받지 않는다)."""
+    if os.name == "nt":
+        try:
+            return subprocess.Popen(
+                command, cwd=cwd, stdout=log_file, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_BREAKAWAY_FROM_JOB,
+            )
+        except OSError:
+            return subprocess.Popen(
+                command, cwd=cwd, stdout=log_file, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+            )
+    return subprocess.Popen(
+        command, cwd=cwd, stdout=log_file, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+MONITOR_ONLY_STRATEGIES = {"strategy_3", "strategy_4"}  # 주문 없이 관찰만 하는 전략 — monitor-signals로 실행
+
+
+def build_strategy_command(strategy: str, config: dict) -> list[str]:
+    """대시보드 "시작" 버튼이 실행할 커맨드를 조립한다. strategy_3/4만 monitor-signals
+    (주문 없는 감시 전용)로 실행하고 나머지는 run-trading — cli.py 자체가 이미 이 둘을
+    strategy_1과 다른 실행 경로로 분기하는 것과 같은 특별 취급이다."""
+    subcommand = "monitor-signals" if strategy in MONITOR_ONLY_STRATEGIES else "run-trading"
+    command = [sys.executable, "-m", "backtesting.cli", subcommand, "--strategy", strategy]
+    for key, flag in CONFIG_TO_CLI_FLAG.items():
+        if key in config:
+            command += [flag, str(config[key])]
+    return command
 
 CONTENT_TYPES = {
     "index.html": "text/html; charset=utf-8",
     "app.js": "application/javascript; charset=utf-8",
     "style.css": "text/css; charset=utf-8",
+    "ranking.html": "text/html; charset=utf-8",
 }
 
 DEFAULT_STRATEGY = "strategy_1"
@@ -59,16 +129,65 @@ STATE_FILENAMES = {
 }
 
 
+NON_STRATEGY_STATE_FOLDERS = {os.path.basename(NASDAQ_DROP_MONITOR_STATE_DIR)}
+
+
 def list_strategies(state_root: str) -> list[str]:
     """state_root 밑의 서브폴더 이름을 전략 목록으로 반환한다(정렬됨). run-trading
     --strategy가 전략마다 state/{strategy}/ 폴더를 쓰기 때문에, 폴더 존재 여부로
-    "실행된 적 있는 전략"을 판별할 수 있다. state_root 자체가 없으면 빈 리스트."""
+    "실행된 적 있는 전략"을 판별할 수 있다. state_root 자체가 없으면 빈 리스트.
+
+    NON_STRATEGY_STATE_FOLDERS에 있는 폴더(nasdaq_drop_monitor 등)는 같은 state/
+    루트를 쓰지만 strategy_catalog에 등록된 매매 전략이 아니라 별도 유틸리티라
+    전략 선택 드롭다운/상태 배지에서 제외한다(자기 전용 상태 API로 따로 노출)."""
     if not os.path.isdir(state_root):
         return []
     return sorted(
         name for name in os.listdir(state_root)
-        if os.path.isdir(os.path.join(state_root, name))
+        if os.path.isdir(os.path.join(state_root, name)) and name not in NON_STRATEGY_STATE_FOLDERS
     )
+
+
+def _json_safe(value):
+    """NaN/Infinity를 None으로 바꿔 표준 JSON으로만 직렬화되게 한다. json.dumps 기본값은
+    NaN을 리터럴 NaN으로 그대로 내보내는데(파이썬 확장, 표준 JSON 아님) 브라우저
+    JSON.parse는 이를 파싱하지 못해 그 요청을 통째로 실패시킨다 — pandas DataFrame이
+    None 값을 가진 float 컬럼을 NaN으로 바꿔버리는 경로(trading_value_ranking.py의
+    prev_day_volume=0 종목 등)에서 실측으로 발생했다. 특정 엔드포인트만 고치는 대신
+    모든 응답이 거치는 이 지점에서 한 번에 막아, 앞으로 비슷한 경로가 추가돼도 같은
+    문제가 재발하지 않게 한다."""
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return None
+    if isinstance(value, dict):
+        return {key: _json_safe(v) for key, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+MIN_STALE_THRESHOLD_SECONDS = 60.0
+STALE_THRESHOLD_MULTIPLIER = 3
+
+
+def is_strategy_running(state_root: str, strategy: str) -> bool:
+    """폴더가 "실행된 적 있음"을 의미하는 list_strategies와 달리, 이건 "지금도 살아
+    있는지"를 heartbeat.json의 나이로 판단한다(dashboard_server는 별도 프로세스라 PID를
+    모름). 임계값은 이 전략의 config.json에 적힌 interval_seconds(폴링 주기)의 3배 —
+    한 사이클이 조금 늦어져도 오탐(false "중지됨")이 안 나게 여유를 둔다. config가 없거나
+    interval_seconds를 모르면 60초를 기본 임계값으로 쓴다.
+
+    stop_requested.json이 있으면 하트비트 나이와 무관하게 무조건 False — 그렇지 않으면
+    "중지" 버튼을 눌러 루프가 실제로 막 종료됐어도 마지막 하트비트가 아직 임계값을 안
+    넘긴 동안(최대 90초 가까이) "실행중"으로 잘못 보이는 문제가 있었다(실측). 정지
+    요청 파일은 다음 "시작"에서만 지워지므로(clear_stop_flag) 그 전까지는 계속 "중지됨"으로
+    남는다."""
+    if stop_control.is_stop_requested(os.path.join(state_root, strategy, stop_control.DEFAULT_STOP_FLAG_FILENAME)):
+        return False
+    config = load_strategy_config(os.path.join(state_root, strategy, STATE_FILENAMES["config"]))
+    interval_seconds = config.get("interval_seconds")
+    threshold = max(MIN_STALE_THRESHOLD_SECONDS, float(interval_seconds) * STALE_THRESHOLD_MULTIPLIER) if interval_seconds else MIN_STALE_THRESHOLD_SECONDS
+    age = read_heartbeat_age_seconds(os.path.join(state_root, strategy))
+    return age is not None and age < threshold
 
 
 class DashboardRequestHandler(BaseHTTPRequestHandler):
@@ -100,16 +219,25 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._send_json(get_account_snapshot(self.kiwoom_appkey, self.kiwoom_secretkey, self.kiwoom_is_mock))
         elif parsed.path == "/api/sell-all-status":
             self._send_json(sell_all_job.get_status())
+        elif parsed.path == "/api/nasdaq-drop-monitor-status":
+            # nasdaq_drop_monitor는 state/{strategy}/ 규칙을 그대로 따르는 별도
+            # 유틸리티(전략1~4처럼 strategy_catalog에 등록된 "전략"은 아님)라
+            # is_strategy_running을 그대로 재사용할 수 있다 — 폴더 이름만 다르게 넘긴다.
+            self._send_json({
+                "running": is_strategy_running(self.state_root, os.path.basename(NASDAQ_DROP_MONITOR_STATE_DIR)),
+            })
         elif parsed.path == "/api/trading-value-ranking":
             window = query.get("window", ["extended"])[0]
-            if window != "extended":
-                self._send_json({"error": "window는 extended만 허용됩니다"}, status=400)
+            if window not in ("regular", "extended"):
+                self._send_json({"error": "window는 regular 또는 extended만 허용됩니다"}, status=400)
             else:
                 self._send_json(get_trading_value_ranking(self.kiwoom_appkey, self.kiwoom_secretkey, self.kiwoom_is_mock, window))
         elif parsed.path == "/api/strategies":
+            strategies = list_strategies(self.state_root)
             self._send_json({
-                "strategies": list_strategies(self.state_root),
+                "strategies": strategies,
                 "selected": self._selected_strategy(query),
+                "running": {name: is_strategy_running(self.state_root, name) for name in strategies},
             })
         elif parsed.path == "/api/state":
             strategy = self._selected_strategy(query)
@@ -121,9 +249,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             strategy = self._selected_strategy(query)
             self._send_json(describe_strategy(strategy))
         elif parsed.path == "/api/signals":
-            strategy = self._selected_strategy(query)
             limit = int(query.get("limit", ["200"])[0])
-            self._send_json(load_signal_history(self._strategy_path(strategy, "signals"), limit=limit))
+            signal_paths = {s: self._strategy_path(s, "signals") for s in list_strategies(self.state_root)}
+            self._send_json(load_all_signal_history(signal_paths, limit=limit))
         elif parsed.path == "/api/results":
             self._send_json(list_results(self.results_dir))
         elif parsed.path.startswith("/api/results/"):
@@ -152,6 +280,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._send_static("app.js")
         elif parsed.path == "/style.css":
             self._send_static("style.css")
+        elif parsed.path == "/ranking.html":
+            self._send_static("ranking.html")
         else:
             self.send_response(404)
             self.end_headers()
@@ -196,12 +326,28 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     self._send_json({"ok": ok, "message": result.get("return_msg", "")}, status=200 if ok else 502)
                 except Exception as exc:
                     self._send_json({"ok": False, "message": str(exc)}, status=502)
+        elif parsed.path == "/api/strategy/start":
+            strategy = self._selected_strategy(query)
+            if is_strategy_running(self.state_root, strategy):
+                self._send_json({"started": False, "reason": "이미 실행 중입니다"}, status=409)
+            else:
+                config = load_strategy_config(self._strategy_path(strategy, "config"))
+                command = build_strategy_command(strategy, config)
+                strategy_dir = os.path.join(self.state_root, strategy)
+                os.makedirs(strategy_dir, exist_ok=True)
+                log_file = open(os.path.join(strategy_dir, "loop_log.txt"), "a", encoding="utf-8")
+                spawn_detached(command, PROJECT_ROOT, log_file)
+                self._send_json({"started": True})
+        elif parsed.path == "/api/strategy/stop":
+            strategy = self._selected_strategy(query)
+            stop_control.request_stop(os.path.join(self.state_root, strategy, stop_control.DEFAULT_STOP_FLAG_FILENAME))
+            self._send_json({"stopped": True})
         else:
             self.send_response(404)
             self.end_headers()
 
     def _send_json(self, payload, status: int = 200) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        body = json.dumps(_json_safe(payload), ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -255,13 +401,29 @@ def run_dashboard_server(
     kiwoom_secretkey: str = "",
     kiwoom_is_mock: bool = True,
     port: int = 8765,
+    host: str = "127.0.0.1",
 ) -> None:
-    """localhost:port에서 대시보드 서버를 기동한다(블로킹). Ctrl+C로 중단."""
+    """host:port에서 대시보드 서버를 기동한다(블로킹). Ctrl+C로 중단.
+
+    host="127.0.0.1"(기본값)은 이 PC에서만 접속 가능 — 모바일 등 다른 기기에서
+    접속하려면 host="0.0.0.0"으로 모든 인터페이스에 바인딩해야 한다. 이 대시보드는
+    로그인 등 인증이 전혀 없고 일괄매도/개별매도 버튼이 실주문을 내므로, 0.0.0.0으로
+    띄울 땐 신뢰할 수 있는 사설망(가정용 와이파이, Tailscale 같은 개인 VPN)에서만
+    접근 가능하게 방화벽/네트워크를 제한해야 한다 — 공인 IP에 그대로 노출하면 안 된다.
+    """
     server = build_dashboard_server(
         state_root, results_dir,
-        kiwoom_appkey, kiwoom_secretkey, kiwoom_is_mock, port=port,
+        kiwoom_appkey, kiwoom_secretkey, kiwoom_is_mock, port=port, host=host,
     )
-    print(f"대시보드 서버 시작: http://127.0.0.1:{port} (Ctrl+C로 중단)", flush=True)
+    if kiwoom_appkey and kiwoom_secretkey:
+        # 브라우저 탭 없이도 08:00~09:00 사이 "extended" 조회가 자연히 한 번은 일어나게
+        # 해서, 거래대금 랭킹의 "장중"(regular) 베이스라인이 사람이 그 시간에 대시보드를
+        # 열어봤는지에 의존하지 않게 한다(trading_value_ranking.py 모듈 docstring 참고).
+        start_ranking_background_poller(kiwoom_appkey, kiwoom_secretkey, kiwoom_is_mock)
+    display_host = "127.0.0.1" if host == "0.0.0.0" else host
+    print(f"대시보드 서버 시작: http://{display_host}:{port} (Ctrl+C로 중단)", flush=True)
+    if host == "0.0.0.0":
+        print("0.0.0.0에 바인딩됨 — 신뢰할 수 있는 네트워크(가정용 와이파이/개인 VPN)에서만 접근하세요.", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -9,6 +9,11 @@
 
 데이트레이딩 전제: 포지션은 진입일 안에서만 유지되고, 당일 마감(같은 날짜의 마지막
 캔들)에 도달하면 강제 청산된다.
+
+거래소 기준: 이 모듈 자체는 candles(분봉 DataFrame)를 받아 계산만 할 뿐 KRX/통합
+구분에 관여하지 않는다 — 그 구분은 호출부가 결정한다(final_strategy.py/전략1,
+strategy3_scalp.py/전략3 모두 통합 기준 분봉을 넘긴다, live_monitor.fetch_today_candles
+참고).
 """
 from dataclasses import dataclass, field
 

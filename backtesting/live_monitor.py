@@ -8,7 +8,7 @@
 import json
 import os
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 
@@ -26,45 +26,72 @@ from .final_strategy import (
     detect_final_entries,
 )
 from .ml_entry_filter import TrainedEntryFilterModel, extract_entry_features, predict_quality_proba
-from .orderbook_collector import is_market_open
+from .orderbook_collector import is_extended_market_open
 from .realtime_feed import RealtimeFeed
 from .screener import top_by_trading_value
 
 
-def fetch_today_candles(client: KiwoomClient, stock_code: str, feed: RealtimeFeed | None = None) -> pd.DataFrame:
+def fetch_today_candles(
+    client: KiwoomClient, stock_code: str, feed: RealtimeFeed | None = None, exchange: str = "1"
+) -> pd.DataFrame:
     """당일 1분봉을 조회한다. feed(RealtimeFeed)가 주어지고 이미 데이터가 쌓여 있으면
     REST 호출 없이 그걸 그대로 쓴다 — WebSocket 실시간체결로 조립한 분봉이라 REST보다
     최신이고, 무엇보다 종목당 매번 REST 왕복(키움 rate limit로 1종목≈1.1초)이 사라져
     35종목 스캔이 초 단위로 끝난다(realtime_feed.py 참고). feed가 없거나 아직 그
     종목의 틱을 한 번도 못 받았으면(장 시작 직후, 거래 없는 종목 등) 기존처럼 REST로
     폴백한다 — get_minute_chart(_pages)가 한 번에 최근 ~12거래일을 반환하므로(실측)
-    오늘 하루는 페이지네이션 없이 항상 커버된다."""
+    오늘 하루는 페이지네이션 없이 항상 커버된다.
+
+    exchange: 기본값 "1"(KRX) — strategy3_scalp.py가 이 기본값 그대로 쓴다.
+    trading_loop.py(전략1)는 "3"(통합)을 명시적으로 넘긴다(전략1은 진입 조건 기준을
+    통합으로 바꾸기로 결정)."""
     if feed is not None:
         live_df = feed.get_minute_df(stock_code)
         if not live_df.empty:
             return live_df
     today = date.today()
-    return load_history(client, stock_code, today, today, interval="1", use_cache=False)
+    return load_history(client, stock_code, today, today, interval="1", use_cache=False, exchange=exchange)
 
 
 def fetch_today_regime(client: KiwoomClient, data_dir: str = "data") -> bool:
     """코스피 지수 로컬 이력 + 당일 실시간 데이터를 합쳐 오늘의 레짐(15분봉 60이평선
     위/아래)을 판단한다. 60기간 이평선은 여러 거래일에 걸쳐 계산돼야 하므로 로컬
     이력이 필요하고, 로컬 데이터만으로는 당일 봉이 아직 없을 수 있어 실시간 조회로
-    보완한다. 장 시작 시 한 번만 계산해 그날 내내 재사용하는 용도(장중 재평가 없음)."""
+    보완한다. 장 시작 시 한 번만 계산해 그날 내내 재사용하는 용도(장중 재평가 없음).
+
+    로컬 이력의 마지막 날짜와 오늘 사이에 갭(며칠간 update가 안 돌아 비어있는 거래일)이
+    있으면 60기간 이평선이 그 갭을 건너뛰고 훨씬 과거 봉으로 이어붙어 계산돼 레짐
+    판정이 왜곡된다(실측: 로컬 이력이 4거래일 밀려 있던 상태에서 하락으로 잘못
+    판정 — 갭을 메우니 상승으로 뒤집힘). 그래서 갭이 있으면 그 구간만 추가로
+    조회해 로컬 파일에도 병합 저장해 둔다(updater.py의 증분 갱신과 동일한 패턴)."""
     today = date.today()
     local_path = os.path.join(data_dir, "index", "minute", f"{KOSPI_INDEX_CODE}.csv")
     local_df = pd.read_csv(local_path, index_col=0, parse_dates=True) if os.path.exists(local_path) else pd.DataFrame()
+
+    gap_df = pd.DataFrame()
+    if not local_df.empty:
+        gap_start = local_df.index.max().date() + timedelta(days=1)
+        if gap_start < today:
+            try:
+                gap_df = load_index_history(client, KOSPI_INDEX_CODE, gap_start, today - timedelta(days=1), interval="1", use_cache=False)
+            except Exception:
+                gap_df = pd.DataFrame()
 
     try:
         live_df = load_index_history(client, KOSPI_INDEX_CODE, today, today, interval="1", use_cache=False)
     except Exception:
         live_df = pd.DataFrame()
 
-    combined = pd.concat([local_df, live_df])
+    combined = pd.concat([local_df, gap_df, live_df])
     if combined.empty:
         return False
     combined = combined[~combined.index.duplicated(keep="last")].sort_index()
+
+    if not gap_df.empty:
+        merged_local = pd.concat([local_df, gap_df])
+        merged_local = merged_local[~merged_local.index.duplicated(keep="last")].sort_index()
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        merged_local.to_csv(local_path)
 
     regime_by_day = compute_index_regime_by_day(combined, ma_period=REGIME_MA_PERIOD, resample_minutes=REGIME_RESAMPLE_MINUTES)
     return regime_by_day.get(pd.Timestamp(today), False)
@@ -87,10 +114,11 @@ def check_candidate(
     data_dir: str = "data",
     proba_threshold: float = RECOMMENDED_PROBA_THRESHOLD,
     feed: RealtimeFeed | None = None,
+    exchange: str = "1",
 ) -> dict | None:
     """1~8번 조건(레짐 포함)을 모두 확인해, 당일 마지막(=지금) 캔들이 막 신호를
     냈으면 신호 정보 dict를, 아니면 None을 반환한다."""
-    minute_df = fetch_today_candles(client, stock_code, feed=feed)
+    minute_df = fetch_today_candles(client, stock_code, feed=feed, exchange=exchange)
     if minute_df.empty:
         return None
     daily_df = load_recent_daily(stock_code, data_dir)
@@ -125,6 +153,7 @@ def scan_watchlist_once(
     proba_threshold: float = RECOMMENDED_PROBA_THRESHOLD,
     seen_signals: set | None = None,
     feed: RealtimeFeed | None = None,
+    exchange: str = "1",
 ) -> list[dict]:
     """watchlist 전 종목을 1바퀴 확인해 새로 발생한 신호 목록을 반환.
 
@@ -139,7 +168,9 @@ def scan_watchlist_once(
     new_signals = []
     for code in today_top35:
         try:
-            signal = check_candidate(client, code, trained, today_top35, regime_ok, data_dir, proba_threshold, feed=feed)
+            signal = check_candidate(
+                client, code, trained, today_top35, regime_ok, data_dir, proba_threshold, feed=feed, exchange=exchange
+            )
         except Exception as exc:
             print(f"{code}: 확인 중 오류 - {exc}", flush=True)
             continue
@@ -180,7 +211,7 @@ def run_monitor_loop(
     print(f"감시 대상 {len(today_top35)}종목 (코스피 레짐={'상승' if regime_ok else '하락'}): {sorted(today_top35)}", flush=True)
 
     seen_signals: set = set()
-    while is_market_open(datetime.now()):
+    while is_extended_market_open(datetime.now()):
         new_signals = scan_watchlist_once(client, trained, today_top35, regime_ok, data_dir, proba_threshold, seen_signals)
         for signal in new_signals:
             log_signal(signal, output_path)

@@ -4,6 +4,7 @@
 - 실전 도메인: https://api.kiwoom.com
 - 모의투자 도메인: https://mockapi.kiwoom.com
 """
+import threading
 import time
 from datetime import date
 
@@ -27,6 +28,13 @@ class KiwoomClient:
         # 있게 잡는다.
         self.min_request_interval = min_request_interval
         self._last_request_at: float | None = None
+        # 대시보드처럼 여러 패널이 하나의 KiwoomClient 인스턴스를 공유하면(kiwoom_session.py)
+        # ThreadingHTTPServer가 요청마다 스레드를 새로 띄우기 때문에 같은 인스턴스에 동시
+        # 접근할 수 있다 — _throttle()의 "확인 후 대기" 로직 자체가 락 없이는 원자적이지
+        # 않아서, 두 스레드가 거의 동시에 들어오면 둘 다 대기 시간을 짧게 계산해 거의 동시에
+        # 실제 요청을 쏴버릴 수 있다(실측: 토큰 발급 엔드포인트 자체가 429). request_tr()
+        # 전체(토큰 발급~요청~응답 헤더 반영)를 이 락으로 감싸 인스턴스당 완전히 직렬화한다.
+        self._request_lock = threading.Lock()
 
     def issue_token(self) -> str:
         url = f"{self.base_url}/oauth2/token"
@@ -54,6 +62,12 @@ class KiwoomClient:
             wait = self.min_request_interval - (now - self._last_request_at)
             if wait > 0:
                 time.sleep(wait)
+                # 대기했다면 now를 요청 직전 시각으로 다시 잰다 — 대기 전 시각을 그대로
+                # 쓰면 실제 요청 간격이 min_request_interval보다 짧게 기록돼, 바로 다음
+                # 요청의 대기시간이 과소 계산된다(연속 호출이 촘촘할수록 누적돼 결국
+                # 페이싱이 무너진다 — 실측: 락으로 스레드를 직렬화해도 이 버그 때문에
+                # 세 번째 요청부터 대기시간이 0으로 계산됐다).
+                now = time.monotonic()
         self._last_request_at = now
 
     def request_tr(
@@ -69,25 +83,31 @@ class KiwoomClient:
         cont_yn/next_key는 이전 응답의 cont-yn/next-key 헤더를 그대로 넘기면 다음
         페이지(더 과거 데이터)를 받을 수 있다 (실제 API로 검증됨). 응답을 받으면
         self.last_cont_yn/last_next_key를 갱신해 호출자가 다음 페이지 여부를 알 수 있다.
+
+        토큰 발급~페이싱~요청 전체를 _request_lock으로 감싸 인스턴스당 직렬화한다 —
+        여러 스레드가 같은 인스턴스를 동시에 쓸 수 있는 환경(dashboard의 kiwoom_session
+        공유 클라이언트)에서, 락 없이는 두 스레드가 거의 동시에 페이싱 검사를 통과해
+        실제 요청을 겹쳐 쏠 수 있다.
         """
-        if not self.token:
-            self.issue_token()
+        with self._request_lock:
+            if not self.token:
+                self.issue_token()
 
-        self._throttle()
+            self._throttle()
 
-        url = f"{self.base_url}{path}"
-        headers = {
-            "Content-Type": "application/json;charset=UTF-8",
-            "authorization": f"Bearer {self.token}",
-            "api-id": api_id,
-            "cont-yn": cont_yn,
-            "next-key": next_key,
-        }
-        res = requests.post(url, headers=headers, json=body, timeout=10)
-        res.raise_for_status()
+            url = f"{self.base_url}{path}"
+            headers = {
+                "Content-Type": "application/json;charset=UTF-8",
+                "authorization": f"Bearer {self.token}",
+                "api-id": api_id,
+                "cont-yn": cont_yn,
+                "next-key": next_key,
+            }
+            res = requests.post(url, headers=headers, json=body, timeout=10)
+            res.raise_for_status()
 
-        self.last_cont_yn = res.headers.get("cont-yn", "N")
-        self.last_next_key = res.headers.get("next-key", "")
+            self.last_cont_yn = res.headers.get("cont-yn", "N")
+            self.last_next_key = res.headers.get("next-key", "")
 
         return res.json()
 
@@ -123,14 +143,26 @@ class KiwoomClient:
         body = {"stk_cd": stock_code, "base_dt": base_date, "upd_stkpc_tp": "1"}
         return self._paginate("ka10081", body, path="/api/dostk/chart", max_pages=max_pages)
 
-    def get_minute_chart(self, stock_code: str, tic_scope: str = "1") -> dict:
-        """주식분봉차트조회요청 (ka10080). tic_scope: 1/3/5/10/15/30/45/60분. 첫 페이지만 반환."""
+    def get_minute_chart(self, stock_code: str, tic_scope: str = "1", exchange: str | None = None) -> dict:
+        """주식분봉차트조회요청 (ka10080). tic_scope: 1/3/5/10/15/30/45/60분. 첫 페이지만 반환.
+
+        exchange 미지정 시 stex_tp 필드 자체를 안 보낸다 — 라이브로 확인한 결과 이
+        경우가 "1"(KRX)과 사실상 동일하게 동작한다(거래량/종가가 stex_tp="3"(통합)일
+        때만 눈에 띄게 달라짐 — 통합은 NXT 체결까지 섞여 같은 분봉의 거래량이 더 크고
+        종가도 달라짐). 명시적으로 "3"을 넘기면 그 분봉에 NXT 체결까지 포함된다."""
         body = {"stk_cd": stock_code, "tic_scope": tic_scope, "upd_stkpc_tp": "1"}
+        if exchange is not None:
+            body["stex_tp"] = exchange
         return self.request_tr("ka10080", body)
 
-    def get_minute_chart_pages(self, stock_code: str, tic_scope: str = "1", max_pages: int = 20) -> list[dict]:
-        """분봉 데이터를 cont-yn/next-key로 여러 페이지 이어받아 반환 (더 긴 과거 이력 확보용)."""
+    def get_minute_chart_pages(
+        self, stock_code: str, tic_scope: str = "1", max_pages: int = 20, exchange: str | None = None
+    ) -> list[dict]:
+        """분봉 데이터를 cont-yn/next-key로 여러 페이지 이어받아 반환 (더 긴 과거 이력 확보용).
+        exchange 의미는 get_minute_chart와 동일."""
         body = {"stk_cd": stock_code, "tic_scope": tic_scope, "upd_stkpc_tp": "1"}
+        if exchange is not None:
+            body["stex_tp"] = exchange
         return self._paginate("ka10080", body, path="/api/dostk/chart", max_pages=max_pages)
 
     def get_stock_list(self, market_type: str) -> list[dict]:
@@ -159,13 +191,21 @@ class KiwoomClient:
         body = {"inds_cd": index_code, "tic_scope": tic_scope}
         return self._paginate("ka20005", body, path="/api/dostk/chart", max_pages=max_pages)
 
-    def get_stock_quote(self, stock_code: str) -> dict:
+    def get_stock_quote(self, stock_code: str, exchange: str | None = None) -> dict:
         """주식호가요청 (ka10004). 호출 시점 기준 매도/매수 호가·잔량 스냅샷 1건.
 
         차트류(ka10081 등)와 달리 과거 이력을 조회하는 API가 아니다 — 호가는
         브로커 쪽에도 보관되지 않는 데이터라, 매 호출은 "지금 이 순간"만 반환한다.
-        """
-        return self.request_tr("ka10004", {"stk_cd": stock_code}, path="/api/dostk/mrkcond")
+
+        exchange 미지정 시 place_order와 같은 규칙(모의투자="1"=KRX, 실전="3"=통합)을
+        쓴다 — trading_loop.py/oversold_trading_loop.py가 청산 판단 시 실시간피드에
+        아직 틱이 없으면 이 호출로 폴백하는데, 넥스트레이드(NXT) 거래시간대(~20:00)에
+        KRX 호가만 보면 그 시간대 실제 체결 가능 가격과 어긋날 수 있어 place_order와
+        같은 기준(통합)으로 맞춘다. 필드명(stex_tp)과 값("1"/"3")은 place_order의
+        dmst_stex_tp("KRX"/"SOR")와 다른 이 TR 고유의 표기라 그대로 매핑한다."""
+        if exchange is None:
+            exchange = "1" if self.is_mock else "3"
+        return self.request_tr("ka10004", {"stk_cd": stock_code, "stex_tp": exchange}, path="/api/dostk/mrkcond")
 
     def place_order(
         self,
@@ -174,7 +214,7 @@ class KiwoomClient:
         quantity: int,
         price: int = 0,
         order_type: str = "3",
-        exchange: str = "KRX",
+        exchange: str | None = None,
     ) -> dict:
         """주식 매수(kt10000)/매도(kt10001) 주문.
 
@@ -183,7 +223,17 @@ class KiwoomClient:
         키움 매매구분 코드 전체 목록은 공식 가이드 참고. 시장가일 때 price는
         무시되고 주문단가(ord_uv)는 빈 문자열로 전송된다.
         응답에 주문번호(ord_no)가 포함되어야 취소/체결확인에 사용할 수 있다.
+
+        exchange 미지정 시 실전은 "SOR"(통합), 모의투자는 "KRX"로 기본값이 갈린다.
+        실전에서 "KRX" 고정이면 정규장(09:00~15:30) 밖, 즉 넥스트레이드(NXT)
+        시간대(08:00~20:00)에 주문을 넣어도 체결/거부 여부가 불확실해서 "SOR"(그
+        순간 체결 가능한 거래소로 자동 라우팅)을 쓴다. 반면 모의투자 계좌는 SOR
+        주문 자체가 막혀 있어서(실측: return_code=20, "RC9000:모의투자에서는
+        해당업무가 제공되지 않습니다") "KRX"로 보내야 주문이 들어간다 — 조회용
+        TR(kt00004 등)은 모의투자에서도 SOR이 되는 것과 다르다.
         """
+        if exchange is None:
+            exchange = "KRX" if self.is_mock else "SOR"
         api_id = "kt10000" if side == "buy" else "kt10001"
         body = {
             "dmst_stex_tp": exchange,
@@ -195,8 +245,14 @@ class KiwoomClient:
         }
         return self.request_tr(api_id, body, path="/api/dostk/ordr")
 
-    def cancel_order(self, order_no: str, stock_code: str, quantity: int, exchange: str = "KRX") -> dict:
-        """주식 취소주문 (kt10003). quantity=0이면 잔량 전부 취소."""
+    def cancel_order(self, order_no: str, stock_code: str, quantity: int, exchange: str | None = None) -> dict:
+        """주식 취소주문 (kt10003). quantity=0이면 잔량 전부 취소.
+
+        exchange 기본값은 place_order와 동일한 규칙(모의투자="KRX", 실전="SOR") —
+        주문을 넣은 거래소와 다른 값으로 취소를 보내면 거부될 수 있어 둘의
+        기본값을 맞춰둔다."""
+        if exchange is None:
+            exchange = "KRX" if self.is_mock else "SOR"
         body = {
             "dmst_stex_tp": exchange,
             "orig_ord_no": order_no,

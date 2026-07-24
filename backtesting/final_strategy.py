@@ -9,6 +9,14 @@
       — 포트폴리오 시뮬레이션(portfolio_sim.py)으로 검증된 조합.
 
 이 규칙으로 로컬 데이터 전체를 스캔해 ML 진입필터 모델을 학습·저장한다.
+
+거래소 기준: 학습/백테스트는 NXT(넥스트레이드) 출범 전 KRX 단독 이력으로 이뤄졌지만,
+실전 매매에서는 "거래대금 상위 35위" 선정과 3분 거래대금/수익률·당일상승률·장중 신고가·
+고점대비 하락 등 분봉 기반 조건 판정 모두 통합(KRX+NXT, stex_tp="3") 기준으로 맞췄다
+(trading_loop.py가 live_monitor.py의 fetch_today_candles/scan_watchlist_once 호출 시
+exchange="3"을 명시). 통합 분봉은 NXT 체결까지 섞여 같은 시각의 거래량/종가가 KRX
+단독과 달라지므로 학습 당시 기준과 완전히 동일하지는 않지만, 실제 체결 가능 물량을
+더 폭넓게 반영한다는 판단으로 전략1은 통합을 택했다(전략3은 여전히 KRX 단독 기준).
 """
 import os
 
@@ -71,6 +79,11 @@ def describe_strategy_1() -> dict:
         "operation": [
             f"ML 진입필터 성공확률 {RECOMMENDED_PROBA_THRESHOLD} 이상만 채택",
             f"동시보유 최대 {RECOMMENDED_MAX_CONCURRENT_POSITIONS}종목(종목당 원금의 {100 / RECOMMENDED_MAX_CONCURRENT_POSITIONS:.0f}%)",
+        ],
+        "exchange_basis": [
+            "워치리스트 선정(거래대금 상위): 통합(KRX+NXT)",
+            f"진입 신호용 분봉({WINDOW_MINUTES}분 거래대금/수익률 등): 통합(KRX+NXT)",
+            "청산 시 호가 조회 폴백: 실전 계좌 기준 통합(SOR) — 실제 매도 주문이 체결될 거래소와 일치",
         ],
     }
 

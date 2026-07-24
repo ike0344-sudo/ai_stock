@@ -5,11 +5,24 @@
 
 const POLL_INTERVAL_MS = 5000;
 const TOP35_POLL_INTERVAL_MS = 2000;
+const MARKET_POLL_INTERVAL_MS = 2000; // 코스피+코스닥 순차 조회 자체가 ~1.1~1.5초 걸려 이보다 짧으면 요청이 겹침
 
 let currentStrategy = null;
 
 function strategyQuery() {
   return currentStrategy ? "?strategy=" + encodeURIComponent(currentStrategy) : "";
+}
+
+function renderStrategyStatus(strategies, running) {
+  const container = document.getElementById("strategy-status-list");
+  clearChildren(container);
+  for (const name of strategies) {
+    const badge = document.createElement("span");
+    const isRunning = Boolean(running && running[name]);
+    badge.className = "badge " + (isRunning ? "badge-ok" : "badge-danger");
+    badge.textContent = name;
+    container.appendChild(badge);
+  }
 }
 
 async function loadStrategies() {
@@ -31,6 +44,10 @@ async function loadStrategies() {
     // 없어진 경우에만 서버가 알려준 selected로 되돌아간다.
     currentStrategy = options.includes(previous) ? previous : data.selected;
     select.value = currentStrategy;
+    renderStrategyStatus(data.strategies, data.running);
+    const currentlyRunning = Boolean(data.running && data.running[currentStrategy]);
+    document.getElementById("strategy-start-button").disabled = currentlyRunning;
+    document.getElementById("strategy-stop-button").disabled = !currentlyRunning;
   } catch (err) {
     // 다음 폴링에서 자연히 재시도됨.
   }
@@ -57,7 +74,7 @@ function clearChildren(el) {
 const MARKET_INDEX_LABELS = [
   ["kospi", "코스피"],
   ["kosdaq", "코스닥"],
-  ["nasdaq", "나스닥"],
+  ["nasdaq", "나스닥100선물"],
 ];
 
 function formatIndexValue(value) {
@@ -79,7 +96,7 @@ function renderMarketTicker(snapshot) {
         ? ""
         : ` (${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%)`;
       span.textContent = `${label} ${formatIndexValue(data.value)}${changeText}`;
-      span.classList.add(changePct >= 0 ? "badge-positive" : "badge-negative");
+      span.classList.add(changePct >= 0 ? "badge-up" : "badge-down"); // 상승 빨강/하락 파랑 (국내 주식 표기 관행)
     } else {
       span.textContent = `${label} -`;
       span.classList.add("badge-ok");
@@ -94,6 +111,21 @@ async function pollMarketSnapshot() {
     if (res.ok) renderMarketTicker(await res.json());
   } catch (err) {
     // 메인 연결경고와 별개로 조용히 재시도.
+  }
+}
+
+function renderNasdaqDropMonitorStatus(running) {
+  const badge = document.getElementById("nasdaq-drop-monitor-badge");
+  badge.className = "badge " + (running ? "badge-ok" : "badge-danger");
+  badge.textContent = "나스닥 급락 감시";
+}
+
+async function pollNasdaqDropMonitorStatus() {
+  try {
+    const res = await fetch("/api/nasdaq-drop-monitor-status");
+    if (res.ok) renderNasdaqDropMonitorStatus((await res.json()).running);
+  } catch (err) {
+    // 다음 폴링에서 자연히 재시도됨.
   }
 }
 
@@ -343,6 +375,7 @@ function renderStrategyInfo(info) {
   renderStrategyInfoList("strategy-info-entry", info.entry);
   renderStrategyInfoList("strategy-info-exit", info.exit);
   renderStrategyInfoList("strategy-info-operation", info.operation);
+  renderStrategyInfoList("strategy-info-exchange", info.exchange_basis);
 }
 
 function renderSignals(signals) {
@@ -354,10 +387,11 @@ function renderSignals(signals) {
   for (const signal of signals) {
     const row = document.createElement("tr");
     const cells = [
+      signal.strategy,
       signal.stock_code,
       signal.signal_time,
       formatKrw(signal.price),
-      signal.proba.toFixed(2),
+      signal.proba != null ? signal.proba.toFixed(2) : "-",  // strategy3_scalp처럼 ML 게이트가 없는 전략은 proba 필드 자체가 없음
     ];
     for (const value of cells) {
       const td = document.createElement("td");
@@ -511,6 +545,31 @@ async function triggerKillSwitchClear() {
   } catch (err) {
     // 실패해도 다음 상태 폴링에서 자연히 복구됨.
   }
+}
+
+async function triggerStrategyStart() {
+  const statusEl = document.getElementById("strategy-action-status");
+  try {
+    const res = await fetch("/api/strategy/start" + strategyQuery(), { method: "POST" });
+    const data = await res.json();
+    statusEl.textContent = res.ok ? `${currentStrategy} 시작됨` : `${currentStrategy} 시작 실패: ${data.reason || ""}`;
+  } catch (err) {
+    statusEl.textContent = "요청 실패 — 다시 시도해 주세요";
+  }
+  statusEl.classList.remove("hidden");
+  loadStrategies();
+}
+
+async function triggerStrategyStop() {
+  const statusEl = document.getElementById("strategy-action-status");
+  try {
+    await fetch("/api/strategy/stop" + strategyQuery(), { method: "POST" });
+    statusEl.textContent = `${currentStrategy} 중지 요청됨 (다음 사이클에 종료)`;
+  } catch (err) {
+    statusEl.textContent = "요청 실패 — 다시 시도해 주세요";
+  }
+  statusEl.classList.remove("hidden");
+  loadStrategies();
 }
 
 function renderResults(results) {
@@ -739,6 +798,8 @@ document.getElementById("top35-update-button").addEventListener("click", trigger
 document.getElementById("sell-all-button").addEventListener("click", triggerSellAll);
 document.getElementById("kill-switch-activate-button").addEventListener("click", triggerKillSwitchActivate);
 document.getElementById("kill-switch-clear-button").addEventListener("click", triggerKillSwitchClear);
+document.getElementById("strategy-start-button").addEventListener("click", triggerStrategyStart);
+document.getElementById("strategy-stop-button").addEventListener("click", triggerStrategyStop);
 document.getElementById("pnl-view-daily-button").addEventListener("click", () => setPnlViewMode("daily"));
 document.getElementById("pnl-view-weekly-button").addEventListener("click", () => setPnlViewMode("weekly"));
 document.getElementById("pnl-view-monthly-button").addEventListener("click", () => setPnlViewMode("monthly"));
@@ -755,10 +816,12 @@ pollMarketSnapshot();
 pollAccountSnapshot();
 pollSellAllStatus();
 pollAllRankings();
+pollNasdaqDropMonitorStatus();
 setInterval(pollOnce, POLL_INTERVAL_MS);
 setInterval(pollTop35Status, TOP35_POLL_INTERVAL_MS);
 setInterval(pollKillSwitchOverrideStatus, TOP35_POLL_INTERVAL_MS);
-setInterval(pollMarketSnapshot, POLL_INTERVAL_MS);
+setInterval(pollNasdaqDropMonitorStatus, MARKET_POLL_INTERVAL_MS);
+setInterval(pollMarketSnapshot, MARKET_POLL_INTERVAL_MS);
 setInterval(pollAccountSnapshot, POLL_INTERVAL_MS);
 setInterval(pollSellAllStatus, TOP35_POLL_INTERVAL_MS);
 setInterval(pollAllRankings, POLL_INTERVAL_MS);

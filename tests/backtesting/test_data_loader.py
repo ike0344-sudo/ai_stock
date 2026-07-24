@@ -109,7 +109,7 @@ class _StubMinuteClient:
     def __init__(self, pages: list[dict]):
         self._pages = pages
 
-    def get_minute_chart_pages(self, stock_code, tic_scope="1", max_pages=20):
+    def get_minute_chart_pages(self, stock_code, tic_scope="1", max_pages=20, exchange=None):
         return self._pages
 
 
@@ -225,7 +225,7 @@ class _StubFullMinuteClient:
         self._pages = pages
         self.calls = 0
 
-    def get_minute_chart_pages(self, stock_code, tic_scope="1", max_pages=20):
+    def get_minute_chart_pages(self, stock_code, tic_scope="1", max_pages=20, exchange=None):
         self.calls += 1
         return self._pages
 

@@ -19,6 +19,8 @@ from kiwoom_client import KiwoomClient
 
 MARKET_OPEN_HOUR, MARKET_OPEN_MINUTE = 9, 0
 MARKET_CLOSE_HOUR, MARKET_CLOSE_MINUTE = 15, 30
+EXTENDED_OPEN_HOUR, EXTENDED_OPEN_MINUTE = 8, 0
+EXTENDED_CLOSE_HOUR, EXTENDED_CLOSE_MINUTE = 20, 0
 
 
 def is_market_open(now: datetime) -> bool:
@@ -27,6 +29,17 @@ def is_market_open(now: datetime) -> bool:
         return False
     start = now.replace(hour=MARKET_OPEN_HOUR, minute=MARKET_OPEN_MINUTE, second=0, microsecond=0)
     end = now.replace(hour=MARKET_CLOSE_HOUR, minute=MARKET_CLOSE_MINUTE, second=0, microsecond=0)
+    return start <= now <= end
+
+
+def is_extended_market_open(now: datetime) -> bool:
+    """평일 08:00~20:00(KST) — NXT(넥스트레이드) 장전/장후 시간외까지 포함하는 통합장
+    창구. 전략1~4가 정규장 전용 is_market_open 대신 이걸로 운영 시간을 넓혀 통합장에서도
+    감시/매매하도록 쓴다. 공휴일 캘린더는 반영하지 않음(is_market_open과 동일)."""
+    if now.weekday() >= 5:
+        return False
+    start = now.replace(hour=EXTENDED_OPEN_HOUR, minute=EXTENDED_OPEN_MINUTE, second=0, microsecond=0)
+    end = now.replace(hour=EXTENDED_CLOSE_HOUR, minute=EXTENDED_CLOSE_MINUTE, second=0, microsecond=0)
     return start <= now <= end
 
 

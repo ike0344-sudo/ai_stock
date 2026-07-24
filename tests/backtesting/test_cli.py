@@ -471,7 +471,7 @@ def test_run_collect_orderbook_polls_todays_top_n_when_market_open(monkeypatch, 
 
 def test_run_monitor_signals_skips_when_market_closed(monkeypatch, capsys):
     monkeypatch.setattr(cli, "_build_client", lambda: object())
-    monkeypatch.setattr(cli, "is_market_open", lambda now: False)
+    monkeypatch.setattr(cli, "is_extended_market_open", lambda now: False)
     calls = []
     monkeypatch.setattr(cli, "load_model", lambda path: calls.append(("load", path)))
     monkeypatch.setattr(cli, "run_monitor_loop", lambda *a, **k: calls.append(("run", a, k)))
@@ -483,12 +483,45 @@ def test_run_monitor_signals_skips_when_market_closed(monkeypatch, capsys):
     cli._run_monitor_signals(args)
 
     assert calls == []
-    assert "정규장 시간이 아닙니다" in capsys.readouterr().out
+    assert "통합장 시간이 아닙니다" in capsys.readouterr().out
+
+
+def test_run_monitor_signals_routes_strategy_3_to_scalp_loop_without_loading_model(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "is_extended_market_open", lambda now: True)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "TOKEN")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "CHAT")
+
+    model_loads = []
+    monkeypatch.setattr(cli, "load_model", lambda path: model_loads.append(path))
+    scalp_calls = []
+    monkeypatch.setattr(
+        cli, "run_scalp_monitor_loop",
+        lambda client, bot_token, chat_id, output_path, top_n, poll_interval_seconds: scalp_calls.append(
+            (client, bot_token, chat_id, output_path, top_n, poll_interval_seconds)
+        ),
+    )
+
+    args = Namespace(
+        strategy="strategy_3", model_path="models/strategy_1/entry_filter_model.joblib", top_n=35,
+        proba_threshold=0.6, interval_seconds=30.0, data_dir="data", output="signals.jsonl",
+    )
+    cli._run_monitor_signals(args)
+
+    assert model_loads == []  # strategy_3은 ML 모델을 아예 로드하지 않음
+    assert len(scalp_calls) == 1
+    client, bot_token, chat_id, output_path, top_n, poll_interval_seconds = scalp_calls[0]
+    assert client == "client-obj"
+    assert bot_token == "TOKEN"
+    assert chat_id == "CHAT"
+    assert output_path == "state/strategy_3/signals.jsonl"  # --output 미지정 시 전략3 전용 경로로 대체
+    assert top_n == 35
+    assert poll_interval_seconds == 30.0
 
 
 def test_run_monitor_signals_loads_model_and_runs_loop_when_market_open(monkeypatch):
     monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
-    monkeypatch.setattr(cli, "is_market_open", lambda now: True)
+    monkeypatch.setattr(cli, "is_extended_market_open", lambda now: True)
     monkeypatch.setattr(cli, "load_model", lambda path: f"trained:{path}")
     calls = []
     monkeypatch.setattr(
@@ -559,14 +592,14 @@ def test_run_trading_skips_when_market_closed(monkeypatch, capsys):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
     monkeypatch.setattr(cli, "_build_client", lambda: object())
-    monkeypatch.setattr(cli, "is_market_open", lambda now: False)
+    monkeypatch.setattr(cli, "is_extended_market_open", lambda now: False)
     calls = []
     monkeypatch.setattr(cli, "run_trading_loop", lambda *a, **k: calls.append((a, k)))
 
     cli._run_trading(_trading_args())
 
     assert calls == []
-    assert "정규장 시간이 아닙니다" in capsys.readouterr().out
+    assert "통합장 시간이 아닙니다" in capsys.readouterr().out
 
 
 def test_run_trading_starts_loop_with_env_values_when_market_open(monkeypatch, capsys):
@@ -576,7 +609,7 @@ def test_run_trading_starts_loop_with_env_values_when_market_open(monkeypatch, c
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
     monkeypatch.setenv("KIWOOM_IS_MOCK", "true")
     monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
-    monkeypatch.setattr(cli, "is_market_open", lambda now: True)
+    monkeypatch.setattr(cli, "is_extended_market_open", lambda now: True)
     monkeypatch.setattr(cli, "load_model", lambda path: f"trained:{path}")
     monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
     calls = []
@@ -605,7 +638,7 @@ def test_run_trading_warns_real_account_when_not_mock(monkeypatch, capsys):
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
     monkeypatch.setenv("KIWOOM_IS_MOCK", "false")
     monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
-    monkeypatch.setattr(cli, "is_market_open", lambda now: True)
+    monkeypatch.setattr(cli, "is_extended_market_open", lambda now: True)
     monkeypatch.setattr(cli, "load_model", lambda path: "trained")
     monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
     monkeypatch.setattr(cli, "run_trading_loop", lambda *a, **k: None)
@@ -621,25 +654,27 @@ def test_run_trading_derives_paths_from_strategy_when_not_explicit(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
     monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
-    monkeypatch.setattr(cli, "is_market_open", lambda now: True)
+    monkeypatch.setattr(cli, "is_extended_market_open", lambda now: True)
     monkeypatch.setattr(cli, "load_model", lambda path: f"trained:{path}")
     monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
     calls = []
     monkeypatch.setattr(cli, "run_trading_loop", lambda *a, **k: calls.append((a, k)))
 
+    # strategy_2는 오버솔드 전용 경로로 분기되므로(아래 test_run_trading_dispatches_*),
+    # 여기서는 일반적인(ML 기반) 향후 전략을 흉내내는 다른 이름으로 경로 유도 규칙만 검증한다.
     args = _trading_args(
-        strategy="strategy_2", model_path=None, risk_state_path=None,
+        strategy="strategy_3", model_path=None, risk_state_path=None,
         order_log_path=None, pnl_history_path=None, kill_switch_override_path=None,
     )
     cli._run_trading(args)
 
     assert len(calls) == 1
     trained_args, kwargs = calls[0]
-    assert trained_args[1] == "trained:models/strategy_2/entry_filter_model.joblib"
-    assert kwargs["risk_state_path"] == "state/strategy_2/risk_state.json"
-    assert kwargs["order_log_path"] == "state/strategy_2/orders.jsonl"
-    assert kwargs["pnl_history_path"] == "state/strategy_2/pnl_history.jsonl"
-    assert kwargs["kill_switch_override_path"] == "state/strategy_2/kill_switch_override.json"
+    assert trained_args[1] == "trained:models/strategy_3/entry_filter_model.joblib"
+    assert kwargs["risk_state_path"] == "state/strategy_3/risk_state.json"
+    assert kwargs["order_log_path"] == "state/strategy_3/orders.jsonl"
+    assert kwargs["pnl_history_path"] == "state/strategy_3/pnl_history.jsonl"
+    assert kwargs["kill_switch_override_path"] == "state/strategy_3/kill_switch_override.json"
 
 
 def test_run_trading_writes_strategy_config_snapshot(monkeypatch):
@@ -649,24 +684,81 @@ def test_run_trading_writes_strategy_config_snapshot(monkeypatch):
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
     monkeypatch.setenv("KIWOOM_IS_MOCK", "true")
     monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
-    monkeypatch.setattr(cli, "is_market_open", lambda now: True)
+    monkeypatch.setattr(cli, "is_extended_market_open", lambda now: True)
     monkeypatch.setattr(cli, "load_model", lambda path: "trained")
     monkeypatch.setattr(cli, "run_trading_loop", lambda *a, **k: None)
     config_calls = []
     monkeypatch.setattr(cli, "_write_strategy_config", lambda risk_state_path, config: config_calls.append((risk_state_path, config)))
 
-    cli._run_trading(_trading_args(strategy="strategy_2"))
+    cli._run_trading(_trading_args(strategy="strategy_1"))
 
     assert len(config_calls) == 1
     risk_state_path, config = config_calls[0]
     assert risk_state_path == "state/risk_state.json"
-    assert config["strategy"] == "strategy_2"
+    assert config["strategy"] == "strategy_1"
     assert config["model_path"] == "models/strategy_1/entry_filter_model.joblib"
     assert config["top_n"] == 35
     assert config["proba_threshold"] == 0.5
     assert config["max_concurrent_positions"] == 5
     assert config["total_capital_krw"] == 10_000_000
     assert config["max_daily_loss_krw"] == 300000.0
+
+
+def test_run_trading_dispatches_strategy_2_to_oversold_loop_without_loading_model(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "load_dotenv", lambda: None)
+    monkeypatch.setenv("MAX_DAILY_LOSS_KRW", "300000")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
+    monkeypatch.setenv("KIWOOM_IS_MOCK", "true")
+    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "is_extended_market_open", lambda now: True)
+    monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
+    model_calls = []
+    monkeypatch.setattr(cli, "load_model", lambda path: model_calls.append(path) or "trained")
+    ml_calls = []
+    monkeypatch.setattr(cli, "run_trading_loop", lambda *a, **k: ml_calls.append((a, k)))
+    oversold_calls = []
+    monkeypatch.setattr(cli, "run_oversold_trading_loop", lambda *a, **k: oversold_calls.append((a, k)))
+
+    cli._run_trading(_trading_args(strategy="strategy_2"))
+
+    assert model_calls == []  # 전략2는 ML 모델을 쓰지 않음
+    assert ml_calls == []  # strategy_1용 루프는 호출되지 않음
+    assert len(oversold_calls) == 1
+    args, kwargs = oversold_calls[0]
+    client, bot_token, chat_id, max_daily_loss_krw = args
+    assert client == "client-obj"
+    assert bot_token == "token123"
+    assert chat_id == "chat456"
+    assert max_daily_loss_krw == 300000.0
+    assert kwargs["total_capital_krw"] == 10_000_000
+    assert kwargs["risk_state_path"] == "state/risk_state.json"
+    assert kwargs["poll_interval_seconds"] == 30.0
+
+
+def test_run_trading_strategy_2_config_snapshot_has_no_ml_fields(monkeypatch):
+    monkeypatch.setattr(cli, "load_dotenv", lambda: None)
+    monkeypatch.setenv("MAX_DAILY_LOSS_KRW", "300000")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
+    monkeypatch.setenv("KIWOOM_IS_MOCK", "true")
+    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "is_extended_market_open", lambda now: True)
+    monkeypatch.setattr(cli, "run_oversold_trading_loop", lambda *a, **k: None)
+    config_calls = []
+    monkeypatch.setattr(cli, "_write_strategy_config", lambda risk_state_path, config: config_calls.append((risk_state_path, config)))
+
+    cli._run_trading(_trading_args(strategy="strategy_2"))
+
+    assert len(config_calls) == 1
+    _, config = config_calls[0]
+    assert config["strategy"] == "strategy_2"
+    assert config["stock_code"] == "000660"
+    assert config["total_capital_krw"] == 10_000_000
+    assert config["max_daily_loss_krw"] == 300000.0
+    assert "model_path" not in config
+    assert "top_n" not in config
+    assert "proba_threshold" not in config
     assert config["is_mock"] is True
     assert "started_at" in config
 
@@ -689,7 +781,7 @@ def test_run_dashboard_forwards_args_to_server(monkeypatch):
     calls = []
     monkeypatch.setattr(cli, "run_dashboard_server", lambda **kwargs: calls.append(kwargs))
 
-    args = Namespace(port=9999, state_root="custom/state", results_dir="custom/results")
+    args = Namespace(port=9999, host="127.0.0.1", state_root="custom/state", results_dir="custom/results")
     cli._run_dashboard(args)
 
     assert calls == [{
@@ -699,7 +791,22 @@ def test_run_dashboard_forwards_args_to_server(monkeypatch):
         "kiwoom_secretkey": "secret456",
         "kiwoom_is_mock": True,
         "port": 9999,
+        "host": "127.0.0.1",
     }]
+
+
+def test_dashboard_parser_defaults_host_to_localhost():
+    # 기본값은 127.0.0.1(로컬 전용)이어야 한다 — 모바일 등 외부 접속을 원하면
+    # --host 0.0.0.0을 명시적으로 넘겨야 하고, 실수로 열려있으면 안 된다.
+    parser = cli.build_parser()
+    args = parser.parse_args(["dashboard"])
+    assert args.host == "127.0.0.1"
+
+
+def test_dashboard_parser_accepts_custom_host():
+    parser = cli.build_parser()
+    args = parser.parse_args(["dashboard", "--host", "0.0.0.0"])
+    assert args.host == "0.0.0.0"
 
 
 def test_run_dashboard_defaults_is_mock_true_when_env_unset(monkeypatch):
@@ -710,7 +817,7 @@ def test_run_dashboard_defaults_is_mock_true_when_env_unset(monkeypatch):
     calls = []
     monkeypatch.setattr(cli, "run_dashboard_server", lambda **kwargs: calls.append(kwargs))
 
-    args = Namespace(port=8765, state_root="state", results_dir="results")
+    args = Namespace(port=8765, host="127.0.0.1", state_root="state", results_dir="results")
     cli._run_dashboard(args)
 
     assert calls[0]["kiwoom_appkey"] == ""

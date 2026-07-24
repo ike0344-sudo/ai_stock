@@ -68,10 +68,18 @@ def _run_job(appkey: str, secretkey: str, is_mock: bool) -> None:
                 continue
             try:
                 order = client.place_order(code, "sell", quantity)
-                results.append({
-                    "code": code, "name": name, "quantity": quantity,
-                    "status": "ok", "message": order.get("return_msg", ""),
-                })
+                # return_code!=0(주문 거부)도 HTTP 200으로 응답에 실려 오므로, 이 체크
+                # 없이는 실제로는 거부된 주문이 "ok"로 기록돼 사용자가 매도된 줄 착각한다.
+                if order.get("return_code") == 0:
+                    results.append({
+                        "code": code, "name": name, "quantity": quantity,
+                        "status": "ok", "message": order.get("return_msg", ""),
+                    })
+                else:
+                    results.append({
+                        "code": code, "name": name, "quantity": quantity,
+                        "status": "error", "message": order.get("return_msg", f"return_code={order.get('return_code')}"),
+                    })
             except Exception as exc:
                 results.append({
                     "code": code, "name": name, "quantity": quantity,

@@ -112,7 +112,40 @@ def test_get_api_signals_returns_json_array(running_server):
 
     assert response.status == 200
     payload = json.loads(body)
-    assert payload == [{"stock_code": "005930", "signal_time": "2026-07-20T09:00:00", "price": 70000.0, "proba": 0.6}]
+    # 여러 전략의 신호를 합쳐서 보여주므로 각 항목에 어느 전략인지(strategy) 태그가 붙는다.
+    assert payload == [{"stock_code": "005930", "signal_time": "2026-07-20T09:00:00", "price": 70000.0, "proba": 0.6, "strategy": "strategy_1"}]
+
+
+def test_get_api_signals_combines_all_strategies_sorted_by_time(tmp_path):
+    from backtesting.dashboard_server import build_dashboard_server
+
+    state_root = str(tmp_path / "state")
+    os.makedirs(os.path.join(state_root, "strategy_1"))
+    os.makedirs(os.path.join(state_root, "strategy_2"))
+    with open(os.path.join(state_root, "strategy_1", "signals.jsonl"), "w", encoding="utf-8") as f:
+        f.write(json.dumps({"stock_code": "005930", "signal_time": "2026-07-20T09:00:00", "price": 70000.0}) + "\n")
+    with open(os.path.join(state_root, "strategy_2", "signals.jsonl"), "w", encoding="utf-8") as f:
+        f.write(json.dumps({"stock_code": "000660", "signal_time": "2026-07-20T10:15:00", "price": 215000.0}) + "\n")
+
+    server = build_dashboard_server(state_root=state_root, results_dir=str(tmp_path / "results"), port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    conn = HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.request("GET", "/api/signals")
+    response = conn.getresponse()
+    body = response.read()
+    conn.close()
+
+    server.shutdown()
+    server.server_close()
+    thread.join(timeout=5)
+
+    payload = json.loads(body)
+    assert [s["stock_code"] for s in payload] == ["000660", "005930"]  # 시각 내림차순
+    assert payload[0]["strategy"] == "strategy_2"
+    assert payload[1]["strategy"] == "strategy_1"
 
 
 def test_get_root_serves_index_html(running_server):
@@ -123,6 +156,16 @@ def test_get_root_serves_index_html(running_server):
     assert response.status == 200
     assert "text/html" in response.getheader("Content-Type")
     assert b"trading-dashboard" in body
+
+
+def test_get_ranking_html_serves_dedicated_ranking_page(running_server):
+    get = running_server.get
+
+    response, body = get("/ranking.html")
+
+    assert response.status == 200
+    assert "text/html" in response.getheader("Content-Type")
+    assert b"trading-value-ranking" in body
 
 
 def test_get_unknown_path_returns_404(running_server):
@@ -386,12 +429,19 @@ def test_get_api_trading_value_ranking_accepts_extended_window(running_server, m
     assert captured["window"] == "extended"
 
 
-def test_get_api_trading_value_ranking_rejects_regular_window(running_server):
-    # 정규장 전용 패널은 삭제됨 — 더는 유효한 window가 아니다.
-    response, body = running_server.get("/api/trading-value-ranking?window=regular")
+def test_get_api_trading_value_ranking_accepts_regular_window(running_server, monkeypatch):
+    from backtesting import dashboard_server
 
-    assert response.status == 400
-    assert "error" in json.loads(body)
+    captured = {}
+    monkeypatch.setattr(
+        dashboard_server, "get_trading_value_ranking",
+        lambda appkey, secretkey, is_mock, window: captured.update(window=window) or {"rows": [], "as_of": None, "active": False},
+    )
+
+    response, _ = running_server.get("/api/trading-value-ranking?window=regular")
+
+    assert response.status == 200
+    assert captured["window"] == "regular"
 
 
 def test_get_api_trading_value_ranking_rejects_unknown_window(running_server):
@@ -492,12 +542,12 @@ def test_get_api_strategy_info_returns_rules_for_known_strategy(running_server):
 
     assert response.status == 200
     payload = json.loads(body)
-    assert set(payload.keys()) == {"entry", "exit", "operation"}
+    assert set(payload.keys()) == {"entry", "exit", "operation", "exchange_basis"}
     assert len(payload["entry"]) > 0
 
 
 def test_get_api_strategy_info_returns_empty_object_for_unknown_strategy(running_server):
-    response, body = running_server.get("/api/strategy-info?strategy=strategy_2")
+    response, body = running_server.get("/api/strategy-info?strategy=strategy_99")
 
     assert response.status == 200
     assert json.loads(body) == {}
@@ -510,7 +560,95 @@ def test_get_api_strategies_lists_subfolders_and_defaults_selection(running_serv
 
     assert response.status == 200
     payload = json.loads(body)
-    assert payload == {"strategies": ["strategy_1"], "selected": "strategy_1"}
+    # heartbeat 파일이 없으니(run-trading을 아직 시작 안 함) running은 False
+    assert payload == {"strategies": ["strategy_1"], "selected": "strategy_1", "running": {"strategy_1": False}}
+
+
+def test_get_api_strategies_reports_running_false_when_stop_requested_even_with_fresh_heartbeat(running_server):
+    # "중지" 버튼을 눌러 루프가 막 종료됐을 때, 마지막 하트비트는 아직 신선한 상태로
+    # 남아있다 — stop_requested.json이 있으면 하트비트 나이와 무관하게 False여야 한다.
+    strategy_dir = os.path.dirname(running_server.risk_state_path)
+    with open(os.path.join(strategy_dir, "heartbeat.json"), "w", encoding="utf-8") as f:
+        json.dump({"updated_at": time.time()}, f)
+    with open(os.path.join(strategy_dir, "stop_requested.json"), "w", encoding="utf-8") as f:
+        f.write("{}")
+
+    response, body = running_server.get("/api/strategies")
+
+    payload = json.loads(body)
+    assert payload["running"] == {"strategy_1": False}
+
+
+def test_get_api_strategies_reports_running_true_with_fresh_heartbeat(running_server):
+    strategy_dir = os.path.dirname(running_server.risk_state_path)
+    with open(os.path.join(strategy_dir, "heartbeat.json"), "w", encoding="utf-8") as f:
+        json.dump({"updated_at": time.time()}, f)
+
+    response, body = running_server.get("/api/strategies")
+
+    payload = json.loads(body)
+    assert payload["running"] == {"strategy_1": True}
+
+
+def test_get_api_strategies_reports_running_false_with_stale_heartbeat(running_server):
+    strategy_dir = os.path.dirname(running_server.risk_state_path)
+    with open(os.path.join(strategy_dir, "config.json"), "w", encoding="utf-8") as f:
+        json.dump({"interval_seconds": 1.0}, f)
+    with open(os.path.join(strategy_dir, "heartbeat.json"), "w", encoding="utf-8") as f:
+        json.dump({"updated_at": time.time() - 120}, f)  # interval_seconds*3=3초보다 훨씬 지남
+
+    response, body = running_server.get("/api/strategies")
+
+    payload = json.loads(body)
+    assert payload["running"] == {"strategy_1": False}
+
+
+def test_get_api_strategies_excludes_nasdaq_drop_monitor_folder(running_server):
+    # nasdaq_drop_monitor는 같은 state/ 루트를 쓰지만 strategy_catalog에 등록된
+    # 매매 전략이 아니다 — 전략 드롭다운/상태 배지에 섞여 나오면 안 된다.
+    nasdaq_dir = os.path.join(running_server.state_root, "nasdaq_drop_monitor")
+    os.makedirs(nasdaq_dir, exist_ok=True)
+    with open(os.path.join(nasdaq_dir, "heartbeat.json"), "w", encoding="utf-8") as f:
+        json.dump({"updated_at": time.time()}, f)
+
+    response, body = running_server.get("/api/strategies")
+
+    payload = json.loads(body)
+    assert payload["strategies"] == ["strategy_1"]
+    assert "nasdaq_drop_monitor" not in payload["running"]
+
+
+# ---- 나스닥 급락 감시 상태 ----
+
+def test_get_nasdaq_drop_monitor_status_returns_false_when_no_heartbeat(running_server):
+    response, body = running_server.get("/api/nasdaq-drop-monitor-status")
+
+    assert response.status == 200
+    assert json.loads(body) == {"running": False}
+
+
+def test_get_nasdaq_drop_monitor_status_returns_true_with_fresh_heartbeat(running_server):
+    nasdaq_dir = os.path.join(running_server.state_root, "nasdaq_drop_monitor")
+    os.makedirs(nasdaq_dir, exist_ok=True)
+    with open(os.path.join(nasdaq_dir, "heartbeat.json"), "w", encoding="utf-8") as f:
+        json.dump({"updated_at": time.time()}, f)
+
+    response, body = running_server.get("/api/nasdaq-drop-monitor-status")
+
+    assert json.loads(body) == {"running": True}
+
+
+def test_get_nasdaq_drop_monitor_status_returns_false_when_stop_requested(running_server):
+    nasdaq_dir = os.path.join(running_server.state_root, "nasdaq_drop_monitor")
+    os.makedirs(nasdaq_dir, exist_ok=True)
+    with open(os.path.join(nasdaq_dir, "heartbeat.json"), "w", encoding="utf-8") as f:
+        json.dump({"updated_at": time.time()}, f)
+    with open(os.path.join(nasdaq_dir, "stop_requested.json"), "w", encoding="utf-8") as f:
+        f.write("{}")
+
+    response, body = running_server.get("/api/nasdaq-drop-monitor-status")
+
+    assert json.loads(body) == {"running": False}
 
 
 def test_get_api_strategies_returns_empty_list_and_fallback_selected_when_no_folders(tmp_path):
@@ -533,7 +671,7 @@ def test_get_api_strategies_returns_empty_list_and_fallback_selected_when_no_fol
 
     assert response.status == 200
     payload = json.loads(body)
-    assert payload == {"strategies": [], "selected": "strategy_1"}
+    assert payload == {"strategies": [], "selected": "strategy_1", "running": {}}
 
 
 def test_get_api_state_scopes_to_requested_strategy(tmp_path):
@@ -569,3 +707,144 @@ def test_get_api_state_scopes_to_requested_strategy(tmp_path):
 
     assert json.loads(body1)["realized_pnl_krw"] == 1000.0
     assert json.loads(body2)["realized_pnl_krw"] == -2000.0
+
+
+# ---- build_strategy_command ----
+
+def test_build_strategy_command_uses_run_trading_for_strategy_1_with_config_flags():
+    from backtesting.dashboard_server import build_strategy_command
+
+    command = build_strategy_command("strategy_1", {"top_n": 35, "interval_seconds": 1.0})
+
+    assert command[1:5] == ["-m", "backtesting.cli", "run-trading", "--strategy"]
+    assert "strategy_1" in command
+    assert "--top-n" in command and "35" in command
+    assert "--interval-seconds" in command and "1.0" in command
+
+
+def test_build_strategy_command_uses_monitor_signals_for_strategy_3():
+    from backtesting.dashboard_server import build_strategy_command
+
+    command = build_strategy_command("strategy_3", {"top_n": 35})
+
+    assert command[1:4] == ["-m", "backtesting.cli", "monitor-signals"]
+
+
+def test_build_strategy_command_uses_monitor_signals_for_strategy_4():
+    from backtesting.dashboard_server import build_strategy_command
+
+    command = build_strategy_command("strategy_4", {"top_n": 10, "interval_seconds": 10.0})
+
+    assert command[1:4] == ["-m", "backtesting.cli", "monitor-signals"]
+    assert "strategy_4" in command
+
+
+def test_build_strategy_command_omits_flags_not_present_in_config():
+    from backtesting.dashboard_server import build_strategy_command
+
+    command = build_strategy_command("strategy_2", {"interval_seconds": 30.0})
+
+    assert "--interval-seconds" in command
+    assert "--top-n" not in command
+    assert "--model-path" not in command
+
+
+# ---- spawn_detached ----
+
+def test_spawn_detached_uses_breakaway_flag_on_windows_when_available(monkeypatch, tmp_path):
+    import backtesting.dashboard_server as dashboard_server_module
+    from backtesting.dashboard_server import spawn_detached
+
+    monkeypatch.setattr(dashboard_server_module.os, "name", "nt")
+    captured = {}
+
+    class _FakePopen:
+        def __init__(self, command, **kwargs):
+            captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(dashboard_server_module.subprocess, "Popen", _FakePopen)
+
+    with open(tmp_path / "log.txt", "w", encoding="utf-8") as log_file:
+        spawn_detached(["python", "-m", "x"], str(tmp_path), log_file)
+
+    expected = dashboard_server_module.subprocess.CREATE_NEW_PROCESS_GROUP | dashboard_server_module.subprocess.CREATE_BREAKAWAY_FROM_JOB
+    assert captured["kwargs"]["creationflags"] == expected
+
+
+def test_spawn_detached_falls_back_without_breakaway_when_job_disallows_it(monkeypatch, tmp_path):
+    # 실측 사고 재현: 대시보드를 관리하는 상위 프로세스의 잡 오브젝트가 breakaway를
+    # 허용하지 않으면 CREATE_BREAKAWAY_FROM_JOB 플래그를 준 Popen 자체가 예외를 던진다
+    # (조용히 무시되지 않음) — 이때 그 플래그 없이 재시도해야 시작 기능 자체가
+    # 죽지 않는다.
+    import backtesting.dashboard_server as dashboard_server_module
+    from backtesting.dashboard_server import spawn_detached
+
+    monkeypatch.setattr(dashboard_server_module.os, "name", "nt")
+    calls = []
+
+    class _FakePopen:
+        def __init__(self, command, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise OSError("job object does not allow breakaway")
+
+    monkeypatch.setattr(dashboard_server_module.subprocess, "Popen", _FakePopen)
+
+    with open(tmp_path / "log.txt", "w", encoding="utf-8") as log_file:
+        spawn_detached(["python", "-m", "x"], str(tmp_path), log_file)
+
+    assert len(calls) == 2  # breakaway 시도 실패 후 재시도
+    assert calls[1]["creationflags"] == dashboard_server_module.subprocess.CREATE_NEW_PROCESS_GROUP
+
+
+# ---- POST /api/strategy/start, /api/strategy/stop ----
+
+def test_post_api_strategy_start_spawns_subprocess_with_config_derived_command(running_server, monkeypatch):
+    strategy_dir = os.path.dirname(running_server.risk_state_path)
+    with open(os.path.join(strategy_dir, "config.json"), "w", encoding="utf-8") as f:
+        json.dump({"top_n": 35, "interval_seconds": 1.0}, f)
+
+    captured = {}
+
+    class _FakePopen:
+        def __init__(self, command, **kwargs):
+            captured["command"] = command
+            captured["kwargs"] = kwargs
+
+    import backtesting.dashboard_server as dashboard_server_module
+    monkeypatch.setattr(dashboard_server_module.subprocess, "Popen", _FakePopen)
+
+    response, body = running_server.post("/api/strategy/start?strategy=strategy_1")
+
+    assert response.status == 200
+    assert json.loads(body) == {"started": True}
+    assert "--interval-seconds" in captured["command"]
+    assert captured["kwargs"]["cwd"] == dashboard_server_module.PROJECT_ROOT
+
+
+def test_post_api_strategy_start_refuses_when_already_running(running_server, monkeypatch):
+    strategy_dir = os.path.dirname(running_server.risk_state_path)
+    with open(os.path.join(strategy_dir, "heartbeat.json"), "w", encoding="utf-8") as f:
+        json.dump({"updated_at": time.time()}, f)
+
+    popen_calls = []
+    import backtesting.dashboard_server as dashboard_server_module
+    monkeypatch.setattr(dashboard_server_module.subprocess, "Popen", lambda *a, **k: popen_calls.append(1))
+
+    response, body = running_server.post("/api/strategy/start?strategy=strategy_1")
+
+    assert response.status == 409
+    assert json.loads(body) == {"started": False, "reason": "이미 실행 중입니다"}
+    assert popen_calls == []
+
+
+def test_post_api_strategy_stop_writes_stop_flag_file(running_server):
+    strategy_dir = os.path.dirname(running_server.risk_state_path)
+    stop_flag_path = os.path.join(strategy_dir, "stop_requested.json")
+    assert not os.path.exists(stop_flag_path)
+
+    response, body = running_server.post("/api/strategy/stop?strategy=strategy_1")
+
+    assert response.status == 200
+    assert json.loads(body) == {"stopped": True}
+    assert os.path.exists(stop_flag_path)

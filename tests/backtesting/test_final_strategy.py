@@ -36,7 +36,7 @@ def _rising_minute(day: str, closes: list[float]) -> pd.DataFrame:
 def test_describe_strategy_1_returns_entry_exit_operation_sections():
     description = describe_strategy_1()
 
-    assert set(description.keys()) == {"entry", "exit", "operation"}
+    assert set(description.keys()) == {"entry", "exit", "operation", "exchange_basis"}
     assert all(isinstance(items, list) and len(items) > 0 for items in description.values())
     assert any(str(TOP_N) in line for line in description["entry"])
     assert any(str(RECOMMENDED_PROBA_THRESHOLD) in line for line in description["operation"])

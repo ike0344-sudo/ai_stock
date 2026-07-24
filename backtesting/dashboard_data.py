@@ -67,6 +67,19 @@ def load_signal_history(signals_path: str, limit: int = 200) -> list[dict]:
     return signals[:limit]
 
 
+def load_all_signal_history(signal_paths: dict[str, str], limit: int = 200) -> list[dict]:
+    """여러 전략의 signals.jsonl을 하나로 합쳐 signal_time 내림차순으로 최대 limit개
+    반환한다. 각 항목에 "strategy" 필드를 추가해 어느 전략(strategy_1/2/3/4)이 포착한
+    신호인지 구분할 수 있게 한다 — 신호 이력 패널은 전략별로 나눠보는 것보다 시간순
+    하나로 모아 보고 싶다는 요청에 따름."""
+    combined = []
+    for strategy, path in signal_paths.items():
+        for signal in _read_jsonl(path):
+            combined.append({**signal, "strategy": strategy})
+    combined.sort(key=lambda s: s.get("signal_time", ""), reverse=True)
+    return combined[:limit]
+
+
 def load_order_history(orders_path: str, limit: int = 200) -> list[dict]:
     """orders.jsonl(trading_loop.py가 씀, Cycle #2)을 읽어 order_time 내림차순으로
     최대 limit개 반환한다 — load_signal_history와 동일한 패턴(Design §12.4)."""

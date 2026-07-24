@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>거래대금 상위 — [0184] 스타일</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    body { padding: 18px; }
+    header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+    header h1 { font-size: 1rem; margin: 0; }
+    header a { color: var(--text-dim); font-size: 0.8rem; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 5px 10px; text-align: right; white-space: nowrap; }
+    th:nth-child(2), td:nth-child(2) { text-align: left; }
+    thead th { position: sticky; top: 0; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+    tbody tr:hover { background: var(--surface-hover); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>[0184] 당일거래대금상위 (통합)</h1>
+    <div>
+      <span class="segmented">
+        <button id="window-regular-button" type="button" class="btn btn-segment">장중</button>
+        <button id="window-extended-button" type="button" class="btn btn-segment toggle-active">전체</button>
+      </span>
+      &nbsp;
+      <span id="as-of">-</span>
+      &nbsp;·&nbsp;
+      <a href="/">← 메인 대시보드</a>
+    </div>
+  </header>
+
+  <table id="ranking-table">
+    <thead>
+      <tr>
+        <th>순위</th><th>종목명</th><th>현재가</th><th>대비</th><th>등락률</th>
+        <th>거래량</th><th>거래대금(억원)</th>
+      </tr>
+    </thead>
+    <tbody id="ranking-tbody"></tbody>
+  </table>
+  <p id="ranking-empty" class="empty hidden">비활성 시간대입니다</p>
+
+  <script>
+    const POLL_INTERVAL_MS = 3000;
+    let currentWindow = "extended";
+
+    function clearChildren(el) {
+      while (el.firstChild) el.removeChild(el.firstChild);
+    }
+
+    function formatChangeRate(value) {
+      const sign = value > 0 ? "+" : "";
+      return `${sign}${value.toFixed(2)}%`;
+    }
+
+    function formatSignedKrw(value) {
+      const sign = value > 0 ? "+" : "";
+      return sign + Math.round(value).toLocaleString("ko-KR");
+    }
+
+    function formatTradingValueEok(value) {
+      return Math.round(value / 100_000_000).toLocaleString("ko-KR") + "억원";
+    }
+
+    const EMPTY_MESSAGES = {
+      regular: "비활성 시간대입니다 (정규장 09:00~15:30에만 갱신)",
+      extended: "비활성 시간대입니다 (확장시간 08:00~20:00에만 갱신)",
+    };
+
+    function setWindow(windowKey) {
+      currentWindow = windowKey;
+      document.getElementById("window-regular-button").classList.toggle("toggle-active", windowKey === "regular");
+      document.getElementById("window-extended-button").classList.toggle("toggle-active", windowKey === "extended");
+      poll();
+    }
+
+    async function poll() {
+      try {
+        const res = await fetch("/api/trading-value-ranking?window=" + currentWindow);
+        if (!res.ok) return;
+        const data = await res.json();
+        const rows = data.rows || [];
+
+        document.getElementById("as-of").textContent = data.as_of ? `${data.as_of} 기준` : "-";
+        document.getElementById("ranking-empty").textContent = EMPTY_MESSAGES[currentWindow];
+        document.getElementById("ranking-empty").classList.toggle("hidden", !(!data.active && rows.length === 0));
+        document.getElementById("ranking-table").classList.toggle("hidden", !data.active && rows.length === 0);
+
+        const tbody = document.getElementById("ranking-tbody");
+        clearChildren(tbody);
+        for (const [index, item] of rows.entries()) {
+          const row = document.createElement("tr");
+          const rateClass = item.change_rate > 0 ? "rate-up" : item.change_rate < 0 ? "rate-down" : "rate-flat";
+
+          const cells = [
+            [index + 1, null],
+            [item.name, null],
+            [Math.round(item.current_price).toLocaleString("ko-KR"), null],
+            [formatSignedKrw(item.change_amount), rateClass],
+            [formatChangeRate(item.change_rate), rateClass],
+            [item.volume.toLocaleString("ko-KR"), null],
+            [formatTradingValueEok(item.trading_value), null],
+          ];
+          for (const [text, cls] of cells) {
+            const td = document.createElement("td");
+            td.textContent = text;
+            if (cls) td.classList.add(cls);
+            row.appendChild(td);
+          }
+          tbody.appendChild(row);
+        }
+      } catch (err) {
+        // 다음 폴링에서 자연히 재시도됨.
+      }
+    }
+
+    document.getElementById("window-regular-button").addEventListener("click", () => setWindow("regular"));
+    document.getElementById("window-extended-button").addEventListener("click", () => setWindow("extended"));
+
+    poll();
+    setInterval(poll, POLL_INTERVAL_MS);
+  </script>
+</body>
+</html>

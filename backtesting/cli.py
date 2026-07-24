@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from datetime import date, datetime, timedelta
 
 import pandas as pd
@@ -33,11 +34,19 @@ from .final_strategy import (
 )
 from .live_monitor import run_monitor_loop
 from .ml_entry_filter import FEATURE_COLUMNS, load_model
-from .orderbook_collector import is_market_open, run_collection_loop
+from .nasdaq_drop_monitor import DROP_THRESHOLD_PCT, WINDOW_SECONDS, run_nasdaq_drop_monitor
+from .orderbook_collector import is_extended_market_open, is_market_open, run_collection_loop
+from .oversold_strategy import STOCK_CODE as OVERSOLD_STOCK_CODE
+from .oversold_trading_loop import run_oversold_trading_loop
 from .screener import top_by_trading_value
 from .strategies.envelope import EnvelopeStrategy
 from .strategies.ma_crossover import MovingAverageCrossover
 from .strategies.rsi_strategy import RsiStrategy
+from .strategy3_scalp import DEFAULT_SIGNAL_LOG_PATH as STRATEGY3_DEFAULT_SIGNAL_LOG_PATH
+from .strategy3_scalp import run_scalp_monitor_loop
+from .strategy4_rank_watch import DEFAULT_SIGNAL_LOG_PATH as STRATEGY4_DEFAULT_SIGNAL_LOG_PATH
+from .strategy4_rank_watch import run_rank_watch_loop
+from .telegram_order_bot import run_telegram_order_bot
 from .trading_loop import run_trading_loop
 from .universe import build_liquid_universe, build_topn_union_universe
 from .updater import update_top35
@@ -451,13 +460,42 @@ def _run_train_entry_model(args) -> None:
 
 
 def _run_monitor_signals(args) -> None:
-    """정규장 동안 오늘의 top-N 종목을 실시간으로 감시해, 확정된 최종 규칙(조건
-    1~7)을 모두 통과한 신호를 로그로만 남긴다. 실제 매수 주문은 내지 않는다 —
-    주문 실행은 별도의 리스크 검토가 필요한 이후 단계다.
-    """
+    """정규장 동안 오늘의 top-N 종목을 실시간으로 감시해 신호를 로그로만 남긴다.
+    실제 매수 주문은 내지 않는다 — 주문 실행은 별도의 리스크 검토가 필요한 이후
+    단계다.
+
+    --strategy strategy_3은 ML 모델/코스피 레짐 없이 3분 거래대금+수익률 조건만
+    보는 테스트 모드 전략(strategy3_scalp.py), --strategy strategy_4는 거래대금
+    순위 4위→3위 승격만 감시하는 전략(strategy4_rank_watch.py)이라 둘 다 완전히
+    다른 실행 경로(텔레그램 알림 포함)로 분기한다 — run-trading의 strategy_2 분기와
+    같은 이유(다른 전략을 strategy_1 경로로 잘못 태우는 버그 방지)."""
     client = _build_client()
-    if not is_market_open(pd.Timestamp.now().to_pydatetime()):
-        print("현재 정규장 시간이 아닙니다(평일 09:00~15:30). 아무 것도 감시하지 않고 종료합니다.")
+    if not is_extended_market_open(pd.Timestamp.now().to_pydatetime()):
+        print("현재 통합장 시간이 아닙니다(평일 08:00~20:00). 아무 것도 감시하지 않고 종료합니다.")
+        return
+
+    strategy = getattr(args, "strategy", "strategy_1")
+    if strategy == "strategy_3":
+        load_dotenv()
+        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+        output_path = args.output if args.output != "signals.jsonl" else STRATEGY3_DEFAULT_SIGNAL_LOG_PATH
+        run_scalp_monitor_loop(
+            client, bot_token, chat_id,
+            output_path=output_path, top_n=args.top_n, poll_interval_seconds=args.interval_seconds,
+        )
+        print("통합장 종료로 감시를 마쳤습니다.")
+        return
+    if strategy == "strategy_4":
+        load_dotenv()
+        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+        output_path = args.output if args.output != "signals.jsonl" else STRATEGY4_DEFAULT_SIGNAL_LOG_PATH
+        run_rank_watch_loop(
+            client, bot_token, chat_id,
+            output_path=output_path, top_n=args.top_n, poll_interval_seconds=args.interval_seconds,
+        )
+        print("통합장 종료로 감시를 마쳤습니다.")
         return
 
     print(f"모델 로드 중: {args.model_path}")
@@ -470,7 +508,7 @@ def _run_monitor_signals(args) -> None:
         top_n=args.top_n, proba_threshold=args.proba_threshold,
         poll_interval_seconds=args.interval_seconds,
     )
-    print("정규장 종료로 감시를 마쳤습니다.")
+    print("통합장 종료로 감시를 마쳤습니다.")
 
 
 def _run_trading(args) -> None:
@@ -497,8 +535,8 @@ def _run_trading(args) -> None:
         return
 
     client = _build_client()
-    if not is_market_open(pd.Timestamp.now().to_pydatetime()):
-        print("현재 정규장 시간이 아닙니다(평일 09:00~15:30). 실주문을 시작하지 않고 종료합니다.")
+    if not is_extended_market_open(pd.Timestamp.now().to_pydatetime()):
+        print("현재 통합장 시간이 아닙니다(평일 08:00~20:00). 실주문을 시작하지 않고 종료합니다.")
         return
 
     is_mock = os.environ.get("KIWOOM_IS_MOCK", "true").lower() == "true"
@@ -506,7 +544,6 @@ def _run_trading(args) -> None:
 
     strategy = getattr(args, "strategy", "strategy_1")
     defaults = _strategy_state_defaults(strategy)
-    model_path = args.model_path or defaults["model_path"]
     risk_state_path = args.risk_state_path or defaults["risk_state_path"]
     order_log_path = args.order_log_path or defaults["order_log_path"]
     pnl_history_path = args.pnl_history_path or defaults["pnl_history_path"]
@@ -514,31 +551,55 @@ def _run_trading(args) -> None:
 
     print(f"[{mode_label}][{strategy}] 실주문 매매를 시작합니다 — 일일손실한도 {float(max_daily_loss_raw):,.0f}원. 중단하려면 Ctrl+C.")
 
-    print(f"모델 로드 중: {model_path}")
-    trained = load_model(model_path)
+    # strategy 문자열로 실제 실행 로직을 분기한다 — 예전엔 이 분기가 없어서
+    # --strategy strategy_2로 실행해도 상태 폴더 이름만 다를 뿐 strategy_1의 ML
+    # 진입 로직이 그대로 실행되는 버그가 있었다. strategy_2(과대낙폭 분할매수)는
+    # top_n/proba_threshold/max_concurrent_positions/model_path가 아예 적용되지
+    # 않는 완전히 다른 전략이라 별도 실행 경로(run_oversold_trading_loop)로 보낸다.
+    if strategy == "strategy_2":
+        _write_strategy_config(risk_state_path, {
+            "strategy": strategy,
+            "stock_code": OVERSOLD_STOCK_CODE,
+            "total_capital_krw": args.total_capital,
+            "interval_seconds": args.interval_seconds,
+            "max_daily_loss_krw": float(max_daily_loss_raw),
+            "is_mock": is_mock,
+            "started_at": datetime.now().isoformat(timespec="seconds"),
+        })
 
-    _write_strategy_config(risk_state_path, {
-        "strategy": strategy,
-        "model_path": model_path,
-        "top_n": args.top_n,
-        "proba_threshold": args.proba_threshold,
-        "max_concurrent_positions": args.max_concurrent_positions,
-        "total_capital_krw": args.total_capital,
-        "interval_seconds": args.interval_seconds,
-        "max_daily_loss_krw": float(max_daily_loss_raw),
-        "is_mock": is_mock,
-        "started_at": datetime.now().isoformat(timespec="seconds"),
-    })
+        run_oversold_trading_loop(
+            client, bot_token, chat_id, float(max_daily_loss_raw),
+            risk_state_path=risk_state_path, total_capital_krw=args.total_capital,
+            poll_interval_seconds=args.interval_seconds, order_log_path=order_log_path,
+            pnl_history_path=pnl_history_path, kill_switch_override_path=kill_switch_override_path,
+        )
+    else:
+        model_path = args.model_path or defaults["model_path"]
+        print(f"모델 로드 중: {model_path}")
+        trained = load_model(model_path)
 
-    run_trading_loop(
-        client, trained, bot_token, chat_id, float(max_daily_loss_raw),
-        risk_state_path=risk_state_path, data_dir=args.data_dir, top_n=args.top_n,
-        proba_threshold=args.proba_threshold, max_concurrent_positions=args.max_concurrent_positions,
-        total_capital_krw=args.total_capital, poll_interval_seconds=args.interval_seconds,
-        order_log_path=order_log_path, pnl_history_path=pnl_history_path,
-        kill_switch_override_path=kill_switch_override_path,
-    )
-    print("정규장 종료로 실주문 매매를 마쳤습니다.")
+        _write_strategy_config(risk_state_path, {
+            "strategy": strategy,
+            "model_path": model_path,
+            "top_n": args.top_n,
+            "proba_threshold": args.proba_threshold,
+            "max_concurrent_positions": args.max_concurrent_positions,
+            "total_capital_krw": args.total_capital,
+            "interval_seconds": args.interval_seconds,
+            "max_daily_loss_krw": float(max_daily_loss_raw),
+            "is_mock": is_mock,
+            "started_at": datetime.now().isoformat(timespec="seconds"),
+        })
+
+        run_trading_loop(
+            client, trained, bot_token, chat_id, float(max_daily_loss_raw),
+            risk_state_path=risk_state_path, data_dir=args.data_dir, top_n=args.top_n,
+            proba_threshold=args.proba_threshold, max_concurrent_positions=args.max_concurrent_positions,
+            total_capital_krw=args.total_capital, poll_interval_seconds=args.interval_seconds,
+            order_log_path=order_log_path, pnl_history_path=pnl_history_path,
+            kill_switch_override_path=kill_switch_override_path, strategy=strategy,
+        )
+    print("통합장 종료로 실주문 매매를 마쳤습니다.")
 
 
 def _run_dashboard(args) -> None:
@@ -560,7 +621,57 @@ def _run_dashboard(args) -> None:
         kiwoom_secretkey=os.environ.get("KIWOOM_SECRETKEY", ""),
         kiwoom_is_mock=os.environ.get("KIWOOM_IS_MOCK", "true").lower() == "true",
         port=args.port,
+        host=args.host,
     )
+
+
+def _run_telegram_bot(args) -> None:
+    """텔레그램 /buy, /sell 명령을 받아 Kiwoom API로 시장가 주문을 내는 봇을
+    기동한다(블로킹). run-trading/dashboard와 마찬가지로 별도 프로세스로 띄운다."""
+    load_dotenv()
+    run_telegram_order_bot(
+        bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+        chat_id=os.environ.get("TELEGRAM_CHAT_ID", ""),
+        appkey=os.environ.get("KIWOOM_APPKEY", ""),
+        secretkey=os.environ.get("KIWOOM_SECRETKEY", ""),
+        is_mock=os.environ.get("KIWOOM_IS_MOCK", "true").lower() == "true",
+    )
+
+
+RESTART_DELAY_SECONDS = 10.0  # 예상 못 한 종료 후 재시작 전 대기 — 즉시 재시작 무한루프로 API를 몰아치지 않도록
+
+
+def _run_monitor_nasdaq_drop(args) -> None:
+    """나스닥100 선물(NQ=F)이 짧은 시간 안에 급락하면 관련 뉴스 헤드라인과 함께
+    텔레그램으로 알린다(주문 없음). 한국 주식 전략들과 달리 정규장/통합장 시간
+    제한이 없다 — CME 선물은 평일 거의 24시간 거래된다."""
+    load_dotenv()
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if not bot_token or not chat_id:
+        print("TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID가 .env에 설정되어 있지 않습니다. 알림 없이는 감시를 시작하지 않습니다.")
+        return
+
+    print(
+        f"나스닥100 선물 급락 감시 시작 — {args.window_seconds:.0f}초 내 {args.threshold_pct:+.1f}% 이하 하락 시 "
+        f"관련 뉴스와 함께 알림(폴링간격 {args.interval_seconds}초). 중단하려면 Ctrl+C.",
+        flush=True,
+    )
+    # 상시 감시라 run_nasdaq_drop_monitor가 사이클 안에서 못 막은 예외로 죽더라도
+    # (내부 try/except 밖의 write_heartbeat 등) 프로세스 자체는 계속 살아 있어야
+    # 한다 — Ctrl+C(KeyboardInterrupt)는 그대로 통과시켜 의도된 종료는 막지 않는다.
+    while True:
+        try:
+            run_nasdaq_drop_monitor(
+                bot_token, chat_id,
+                poll_interval_seconds=args.interval_seconds,
+                window_seconds=args.window_seconds,
+                threshold_pct=args.threshold_pct,
+            )
+            break  # 정상 종료(stop 요청) — 재시작하지 않음
+        except Exception as exc:
+            print(f"나스닥 급락 감시가 예상치 못하게 종료됨 — {RESTART_DELAY_SECONDS}초 후 자동 재시작: {exc}", flush=True)
+            time.sleep(RESTART_DELAY_SECONDS)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -699,14 +810,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     monitor_parser = sub.add_parser(
         "monitor-signals",
-        help="정규장 동안 오늘 top-N 종목을 실시간 감시해 전략 1번(조건1~8) 통과 신호를 로그로만 기록 (매수 주문 없음)",
+        help="정규장 동안 오늘 top-N 종목을 실시간 감시해 통과 신호를 로그로만 기록 (매수 주문 없음). "
+        "--strategy strategy_3은 3분거래대금+수익률 조건만 보는 테스트 모드(텔레그램 알림 포함)",
     )
-    monitor_parser.add_argument("--model-path", default="models/strategy_1/entry_filter_model.joblib", help="train-entry-model로 저장한 모델 경로")
+    monitor_parser.add_argument("--strategy", default="strategy_1", help="strategy_1(기본, 조건1~8+ML), strategy_3(3분 거래대금+수익률만, ML/레짐 없음), strategy_4(거래대금 순위 4위→3위 승격 감시) — strategy_3/4 모두 텔레그램 알림 포함")
+    monitor_parser.add_argument("--model-path", default="models/strategy_1/entry_filter_model.joblib", help="train-entry-model로 저장한 모델 경로 (strategy_1 전용)")
     monitor_parser.add_argument("--top-n", type=int, default=35)
-    monitor_parser.add_argument("--proba-threshold", type=float, default=RECOMMENDED_PROBA_THRESHOLD, help="ML 예측 성공확률 임계값")
+    monitor_parser.add_argument("--proba-threshold", type=float, default=RECOMMENDED_PROBA_THRESHOLD, help="ML 예측 성공확률 임계값 (strategy_1 전용)")
     monitor_parser.add_argument("--interval-seconds", type=float, default=30.0, help="watchlist 한 바퀴 폴링 후 대기 시간(초)")
-    monitor_parser.add_argument("--data-dir", default="data", help="일봉 참조용 로컬 데이터 위치")
-    monitor_parser.add_argument("--output", default="signals.jsonl", help="신호 기록 파일 경로")
+    monitor_parser.add_argument("--data-dir", default="data", help="일봉 참조용 로컬 데이터 위치 (strategy_1 전용)")
+    monitor_parser.add_argument("--output", default="signals.jsonl", help="신호 기록 파일 경로 (strategy_3/4는 미지정 시 각각 state/strategy_3/, state/strategy_4/ 밑 signals.jsonl)")
     monitor_parser.set_defaults(func=_run_monitor_signals)
 
     trading_parser = sub.add_parser(
@@ -732,9 +845,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="state/{strategy}/ 밑 전략별 상태와 signals.jsonl을 읽기 전용으로 서빙하는 로컬 대시보드 서버 실행 (실주문 로직과 완전히 분리, Kiwoom API 호출 없음)",
     )
     dashboard_parser.add_argument("--port", type=int, default=8765)
+    dashboard_parser.add_argument(
+        "--host", default="127.0.0.1",
+        help="바인딩할 인터페이스. 기본 127.0.0.1(이 PC에서만 접속 가능). 휴대폰 등 다른 기기에서 "
+        "접속하려면 0.0.0.0으로 지정 — 인증이 없는 서버라 신뢰할 수 있는 사설망(가정용 와이파이, "
+        "Tailscale 등 개인 VPN)에서만 쓸 것, 공인 IP에 노출하지 말 것",
+    )
     dashboard_parser.add_argument("--state-root", default="state", help="run-trading --strategy가 기록하는 전략별 상태 폴더(state/{strategy}/)의 상위 경로 — 서브폴더를 스캔해 대시보드 전략 선택지로 노출한다")
     dashboard_parser.add_argument("--results-dir", default="results", help="rule/ml/compare가 자동 저장하는 백테스트 결과 위치")
     dashboard_parser.set_defaults(func=_run_dashboard)
+
+    telegram_bot_parser = sub.add_parser(
+        "telegram-bot",
+        help="텔레그램 /buy, /sell 명령으로 시장가 주문을 내는 봇 실행 (.env의 TELEGRAM_CHAT_ID만 허용, 대시보드/run-trading과 분리된 프로세스)",
+    )
+    telegram_bot_parser.set_defaults(func=_run_telegram_bot)
+
+    nasdaq_drop_parser = sub.add_parser(
+        "monitor-nasdaq-drop",
+        help="나스닥100 선물(NQ=F)이 짧은 시간 안에 급락하면 관련 뉴스 헤드라인과 함께 텔레그램 알림 (주문 없음, 시간 제한 없음)",
+    )
+    nasdaq_drop_parser.add_argument("--interval-seconds", type=float, default=15.0, help="가격 폴링 간격(초)")
+    nasdaq_drop_parser.add_argument("--window-seconds", type=float, default=WINDOW_SECONDS, help="급락 판단 기준 시간창(초), 기본 3분")
+    nasdaq_drop_parser.add_argument("--threshold-pct", type=float, default=DROP_THRESHOLD_PCT, help="이 값(%%) 이하로 떨어지면 알림, 기본 -1.0")
+    nasdaq_drop_parser.set_defaults(func=_run_monitor_nasdaq_drop)
 
     return parser
 

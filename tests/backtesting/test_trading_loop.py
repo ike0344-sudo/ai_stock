@@ -1,9 +1,13 @@
 import json
+from datetime import date, timedelta
 from types import SimpleNamespace
 
+import numpy as np
+import pandas as pd
 import pytest
 
-from backtesting import trading_loop
+from backtesting import live_monitor, trading_loop
+from backtesting.ml_entry_filter import TrainedEntryFilterModel
 from backtesting.risk_manager import RiskState, can_open_new_position, record_position_opened
 from backtesting.trading_loop import (
     ExitTrackingState,
@@ -18,6 +22,41 @@ from backtesting.trading_loop import (
 
 TIERS = (0.025, 0.04, 0.055, 0.07)
 STOP_LOSS = 0.025
+
+# check_candidate 내부가 date.today()로 "오늘"을 계산하므로, 픽스처도 실제 오늘 날짜를
+# 써야 top35_ok 등 날짜 매칭이 실제 코드와 어긋나지 않는다 (test_live_monitor.py와 동일 패턴).
+TODAY_STR = date.today().isoformat()
+PREV_STR = (date.today() - timedelta(days=3)).isoformat()
+
+
+def _daily(dates: list[str], closes: list[float]) -> pd.DataFrame:
+    index = pd.to_datetime(dates)
+    return pd.DataFrame(
+        {"open": closes, "high": closes, "low": closes, "close": closes, "volume": [1000] * len(closes)}, index=index
+    )
+
+
+def _rising_minute(day: str, closes: list[float]) -> pd.DataFrame:
+    index = pd.date_range(f"{day} 09:00", periods=len(closes), freq="1min")
+    return pd.DataFrame(
+        {"open": closes, "high": closes, "low": closes, "close": closes, "volume": [20_000_000] * len(closes)},
+        index=index,
+    )
+
+
+class _StubProbaModel:
+    def __init__(self, proba: float):
+        self._proba = proba
+
+    def predict_proba(self, X):
+        return np.array([[1 - self._proba, self._proba]] * len(X))
+
+
+def _write_daily_csv(tmp_path, code: str, dates: list[str], closes: list[float]) -> str:
+    daily_dir = tmp_path / "stocks" / "daily"
+    daily_dir.mkdir(parents=True, exist_ok=True)
+    _daily(dates, closes).to_csv(daily_dir / f"{code}.csv")
+    return str(tmp_path)
 
 
 @pytest.fixture(autouse=True)
@@ -137,15 +176,18 @@ def test_compute_sell_quantity_final_leg_sells_exact_remainder_avoiding_rounding
 # ---- process_entries_once ----
 
 class _StubOrderClient:
-    def __init__(self, raise_on_order=False):
+    def __init__(self, raise_on_order=False, reject_order=False):
         self.orders = []
         self.raise_on_order = raise_on_order
+        self.reject_order = reject_order
 
     def place_order(self, stock_code, side, quantity, **kwargs):
         if self.raise_on_order:
             raise RuntimeError("주문 실패")
         self.orders.append({"code": stock_code, "side": side, "quantity": quantity})
-        return {"ord_no": "1"}
+        if self.reject_order:
+            return {"ord_no": "", "return_code": 20, "return_msg": "주문 거부"}
+        return {"ord_no": "1", "return_code": 0}
 
 
 def test_process_entries_once_places_buy_order_and_updates_risk_state(monkeypatch):
@@ -188,8 +230,119 @@ def test_process_entries_once_skips_when_no_free_slot(monkeypatch):
     assert client.orders == []
 
 
+def test_process_entries_once_sends_capture_notification_when_regime_bullish(tmp_path, monkeypatch):
+    """scan_watchlist_once를 목으로 대체하지 않고 실제 check_candidate/detect_final_entries
+    경로를 그대로 태워, "레짐이 상승으로 바뀌면 포착 알림이 오는지"를 end-to-end로 검증."""
+    rising = _rising_minute(TODAY_STR, [100.5, 102, 105, 108, 111])
+    monkeypatch.setattr(live_monitor, "load_history", lambda *a, **k: rising)
+    data_dir = _write_daily_csv(tmp_path, "000001", [PREV_STR, TODAY_STR], [100, 999])
+    trained = TrainedEntryFilterModel(model=_StubProbaModel(0.9))
+    client = _StubOrderClient()
+    detected = []
+    monkeypatch.setattr(trading_loop, "notify_signal_detected", lambda *a, **k: detected.append(a))
+    risk_state = RiskState(trading_date="2026-07-20")
+
+    executed = process_entries_once(
+        client, trained=trained, today_top35={"000001"}, regime_ok=True, risk_state=risk_state,
+        exit_tracking={}, data_dir=data_dir, proba_threshold=0.6, max_concurrent_positions=5,
+        position_capital_krw=2_000_000, bot_token="TOKEN", chat_id="CHAT", seen_signals=set(),
+    )
+
+    assert len(detected) == 1
+    assert detected[0][1] == "000001"
+    assert len(executed) == 1  # 레짐 상승 + 조건 충족이면 실제 매수까지 이어짐
+
+
+def test_process_entries_once_sends_no_capture_notification_when_regime_bearish(tmp_path, monkeypatch):
+    """지금 실서비스 상황(코스피 레짐=하락)과 동일한 조건 재현 — 다른 진입조건은 전부
+    충족해도 레짐 필터 하나 때문에 포착 알림이 아예 안 오는 게 맞는 동작임을 확인."""
+    rising = _rising_minute(TODAY_STR, [100.5, 102, 105, 108, 111])
+    monkeypatch.setattr(live_monitor, "load_history", lambda *a, **k: rising)
+    data_dir = _write_daily_csv(tmp_path, "000001", [PREV_STR, TODAY_STR], [100, 999])
+    trained = TrainedEntryFilterModel(model=_StubProbaModel(0.9))
+    client = _StubOrderClient()
+    detected = []
+    monkeypatch.setattr(trading_loop, "notify_signal_detected", lambda *a, **k: detected.append(a))
+    risk_state = RiskState(trading_date="2026-07-20")
+
+    executed = process_entries_once(
+        client, trained=trained, today_top35={"000001"}, regime_ok=False, risk_state=risk_state,
+        exit_tracking={}, data_dir=data_dir, proba_threshold=0.6, max_concurrent_positions=5,
+        position_capital_krw=2_000_000, bot_token="TOKEN", chat_id="CHAT", seen_signals=set(),
+    )
+
+    assert detected == []
+    assert executed == []
+
+
+def test_process_entries_once_notifies_signal_detected_even_without_free_slot(monkeypatch):
+    client = _StubOrderClient()
+    monkeypatch.setattr(
+        trading_loop, "scan_watchlist_once",
+        lambda *a, **k: [{"stock_code": "005930", "signal_time": "t1", "price": 70000, "proba": 0.7}],
+    )
+    detected = []
+    monkeypatch.setattr(trading_loop, "notify_signal_detected", lambda *a, **k: detected.append(a))
+    risk_state = RiskState(trading_date="2026-07-20")
+    for i in range(5):
+        record_position_opened(risk_state, f"00000{i}", "t0", 2_000_000, 100.0)
+
+    executed = process_entries_once(
+        client, trained=None, today_top35={"005930"}, regime_ok=True, risk_state=risk_state,
+        exit_tracking={}, data_dir="data", proba_threshold=0.5, max_concurrent_positions=5,
+        position_capital_krw=2_000_000, bot_token="", chat_id="", seen_signals=set(),
+    )
+
+    assert executed == []
+    assert detected == [("strategy_1", "005930", "", 70000, 0.7, "", "")]
+
+
+def test_process_entries_once_includes_stock_name_from_code_to_name_in_notification(monkeypatch):
+    client = _StubOrderClient()
+    monkeypatch.setattr(
+        trading_loop, "scan_watchlist_once",
+        lambda *a, **k: [{"stock_code": "005930", "signal_time": "t1", "price": 70000, "proba": 0.7}],
+    )
+    detected = []
+    monkeypatch.setattr(trading_loop, "notify_signal_detected", lambda *a, **k: detected.append(a))
+    risk_state = RiskState(trading_date="2026-07-20")
+
+    process_entries_once(
+        client, trained=None, today_top35={"005930"}, regime_ok=True, risk_state=risk_state,
+        exit_tracking={}, data_dir="data", proba_threshold=0.5, max_concurrent_positions=5,
+        position_capital_krw=2_000_000, bot_token="", chat_id="", seen_signals=set(),
+        code_to_name={"005930": "삼성전자"},
+    )
+
+    assert detected == [("strategy_1", "005930", "삼성전자", 70000, 0.7, "", "")]
+
+
 def test_process_entries_once_notifies_and_continues_on_order_failure(monkeypatch):
     client = _StubOrderClient(raise_on_order=True)
+    monkeypatch.setattr(
+        trading_loop, "scan_watchlist_once",
+        lambda *a, **k: [{"stock_code": "005930", "signal_time": "t1", "price": 70000, "proba": 0.7}],
+    )
+    notified = []
+    monkeypatch.setattr(trading_loop, "notify_error", lambda *a, **k: notified.append(a))
+    risk_state = RiskState(trading_date="2026-07-20")
+
+    executed = process_entries_once(
+        client, trained=None, today_top35={"005930"}, regime_ok=True, risk_state=risk_state,
+        exit_tracking={}, data_dir="data", proba_threshold=0.5, max_concurrent_positions=5,
+        position_capital_krw=2_000_000, bot_token="", chat_id="", seen_signals=set(),
+    )
+
+    assert executed == []
+    assert len(notified) == 1
+    assert risk_state.open_positions == []
+
+
+def test_process_entries_once_notifies_and_continues_on_order_rejected(monkeypatch):
+    # request_tr()은 HTTP 레벨 오류만 예외로 던지고, 주문 거부는 HTTP 200 +
+    # return_code!=0으로 온다 — 이 케이스에서도 예외와 마찬가지로 포지션을 기록하면
+    # 안 된다(phantom position).
+    client = _StubOrderClient(reject_order=True)
     monkeypatch.setattr(
         trading_loop, "scan_watchlist_once",
         lambda *a, **k: [{"stock_code": "005930", "signal_time": "t1", "price": 70000, "proba": 0.7}],
@@ -212,11 +365,12 @@ def test_process_entries_once_notifies_and_continues_on_order_failure(monkeypatc
 # ---- process_exits_once ----
 
 class _StubQuoteClient:
-    def __init__(self, price, raise_on_quote=False, raise_on_order=False):
+    def __init__(self, price, raise_on_quote=False, raise_on_order=False, reject_order=False):
         self.price = price
         self.orders = []
         self.raise_on_quote = raise_on_quote
         self.raise_on_order = raise_on_order
+        self.reject_order = reject_order
 
     def get_stock_quote(self, stock_code):
         if self.raise_on_quote:
@@ -228,7 +382,9 @@ class _StubQuoteClient:
         if self.raise_on_order:
             raise RuntimeError("주문 실패")
         self.orders.append({"code": stock_code, "side": side, "quantity": quantity})
-        return {"ord_no": "1"}
+        if self.reject_order:
+            return {"ord_no": "", "return_code": 20, "return_msg": "주문 거부"}
+        return {"ord_no": "1", "return_code": 0}
 
 
 def test_process_exits_once_sells_all_on_stop_loss(monkeypatch):
@@ -284,6 +440,20 @@ def test_process_exits_once_notifies_and_skips_on_quote_failure(monkeypatch):
     assert len(risk_state.open_positions) == 1  # 상태 변화 없음
 
 
+def test_process_exits_once_notifies_and_skips_on_order_rejected(monkeypatch):
+    client = _StubQuoteClient(price=97.5, reject_order=True)  # 손절 조건 충족 -> 매도 시도하지만 거부됨
+    notified = []
+    monkeypatch.setattr(trading_loop, "notify_error", lambda *a, **k: notified.append(a))
+    risk_state = RiskState(trading_date="2026-07-20")
+    record_position_opened(risk_state, "005930", "t1", 2_000_000, 100.0, total_quantity=20)
+
+    executed = process_exits_once(client, risk_state, exit_tracking={}, max_daily_loss_krw=1_000_000, bot_token="", chat_id="")
+
+    assert executed == []
+    assert len(notified) == 1
+    assert len(risk_state.open_positions) == 1  # 거부된 주문은 청산 처리되면 안 됨
+
+
 def test_process_exits_once_notifies_kill_switch_when_triggered(monkeypatch):
     client = _StubQuoteClient(price=90.0)  # entry=100 -> -10%, 큰 손절
     notified_kill = []
@@ -306,7 +476,7 @@ def test_run_trading_loop_polls_until_market_closes_and_saves_state(monkeypatch,
     monkeypatch.setattr(trading_loop, "top_by_trading_value", lambda client, top_n: watchlist)
     monkeypatch.setattr(trading_loop, "fetch_today_regime", lambda client, data_dir: True)
     open_flags = iter([True, True, False])
-    monkeypatch.setattr(trading_loop, "is_market_open", lambda now: next(open_flags))
+    monkeypatch.setattr(trading_loop, "is_extended_market_open", lambda now: next(open_flags))
     monkeypatch.setattr(trading_loop.time, "sleep", lambda s: None)
 
     exit_calls, entry_calls = [], []
@@ -322,6 +492,155 @@ def test_run_trading_loop_polls_until_market_closes_and_saves_state(monkeypatch,
     assert len(exit_calls) == 2
     assert len(entry_calls) == 2
     assert __import__("os").path.exists(state_path)
+
+
+def test_run_trading_loop_refreshes_watchlist_each_cycle_and_picks_up_new_entrant(monkeypatch, tmp_path):
+    # strategy3_scalp에서 실측된 것과 같은 문제(장중 새로 top_n 진입한 종목이 재시작
+    # 전까진 영영 감시 대상이 아니었던 것) — 전략1도 같은 구조라 동일하게 겪는다.
+    import pandas as pd
+
+    watchlists = iter([
+        pd.DataFrame([{"stock_code": "005930", "name": "A"}]),  # 시작 시 최초 조회
+        pd.DataFrame([{"stock_code": "005930", "name": "A"}]),  # 1사이클 갱신: 신규종목 아직 없음
+        pd.DataFrame([{"stock_code": "005930", "name": "A"}, {"stock_code": "000660", "name": "B"}]),  # 2사이클 갱신: 신규종목 진입
+    ])
+    monkeypatch.setattr(trading_loop, "top_by_trading_value", lambda client, top_n: next(watchlists))
+    monkeypatch.setattr(trading_loop, "fetch_today_regime", lambda client, data_dir: True)
+    open_flags = iter([True, True, False])
+    monkeypatch.setattr(trading_loop, "is_extended_market_open", lambda now: next(open_flags))
+    monkeypatch.setattr(trading_loop.time, "sleep", lambda s: None)
+    monkeypatch.setattr(trading_loop, "process_exits_once", lambda *a, **k: [])
+
+    seen_watchlists = []
+    monkeypatch.setattr(
+        trading_loop, "process_entries_once",
+        lambda client, trained, today_top35, *a, **k: seen_watchlists.append(set(today_top35)) or [],
+    )
+
+    state_path = str(tmp_path / "risk_state.json")
+    run_trading_loop(
+        object(), trained=None, bot_token="", chat_id="", max_daily_loss_krw=500_000,
+        risk_state_path=state_path, poll_interval_seconds=1.0, use_realtime_feed=False,
+    )
+
+    assert seen_watchlists == [{"005930"}, {"005930", "000660"}]
+
+
+def test_run_trading_loop_keeps_previous_watchlist_when_refresh_fails(monkeypatch, tmp_path):
+    import pandas as pd
+
+    calls_state = {"n": 0}
+
+    def fake_fetch(client, top_n):
+        calls_state["n"] += 1
+        if calls_state["n"] == 1:
+            return pd.DataFrame([{"stock_code": "005930", "name": "A"}])
+        raise RuntimeError("일시적 API 오류")
+
+    monkeypatch.setattr(trading_loop, "top_by_trading_value", fake_fetch)
+    monkeypatch.setattr(trading_loop, "fetch_today_regime", lambda client, data_dir: True)
+    open_flags = iter([True, True, False])
+    monkeypatch.setattr(trading_loop, "is_extended_market_open", lambda now: next(open_flags))
+    monkeypatch.setattr(trading_loop.time, "sleep", lambda s: None)
+    monkeypatch.setattr(trading_loop, "process_exits_once", lambda *a, **k: [])
+
+    seen_watchlists = []
+    monkeypatch.setattr(
+        trading_loop, "process_entries_once",
+        lambda client, trained, today_top35, *a, **k: seen_watchlists.append(set(today_top35)) or [],
+    )
+
+    state_path = str(tmp_path / "risk_state.json")
+    run_trading_loop(
+        object(), trained=None, bot_token="", chat_id="", max_daily_loss_krw=500_000,
+        risk_state_path=state_path, poll_interval_seconds=1.0, use_realtime_feed=False,
+    )
+
+    assert seen_watchlists == [{"005930"}, {"005930"}]  # 갱신 실패 시 기존 목록 유지
+
+
+def test_run_trading_loop_writes_heartbeat_before_backfill_completes(monkeypatch, tmp_path):
+    """35종목 백필(최대 40초 가까이)이 끝나기 전에도 대시보드가 "실행 중"으로 볼 수
+    있어야 한다 — 그렇지 않으면 그 사이 오래된 하트비트가 만료돼 "중지됨"으로 잘못
+    보이는 틈에 대시보드 "시작" 버튼이 똑같은 전략을 중복 실행시킬 수 있다(실측 사고)."""
+    import pandas as pd
+
+    from backtesting.heartbeat import read_heartbeat_age_seconds
+
+    watchlist = pd.DataFrame([{"stock_code": "005930", "name": "A"}])
+    monkeypatch.setattr(trading_loop, "top_by_trading_value", lambda client, top_n: watchlist)
+    monkeypatch.setattr(trading_loop, "fetch_today_regime", lambda client, data_dir: True)
+    monkeypatch.setattr(trading_loop, "is_extended_market_open", lambda now: False)  # 루프 진입 전 확인이 목적, 사이클은 0번이어도 됨
+
+    state_path = str(tmp_path / "risk_state.json")
+    run_trading_loop(
+        object(), trained=None, bot_token="", chat_id="", max_daily_loss_krw=500_000,
+        risk_state_path=state_path, poll_interval_seconds=1.0, use_realtime_feed=False,
+    )
+
+    age = read_heartbeat_age_seconds(str(tmp_path))
+    assert age is not None and age < 5
+
+
+def test_run_trading_loop_stops_when_stop_flag_requested_mid_run(monkeypatch, tmp_path):
+    import pandas as pd
+
+    from backtesting.stop_control import request_stop
+
+    watchlist = pd.DataFrame([{"stock_code": "005930", "name": "A"}])
+    monkeypatch.setattr(trading_loop, "top_by_trading_value", lambda client, top_n: watchlist)
+    monkeypatch.setattr(trading_loop, "fetch_today_regime", lambda client, data_dir: True)
+    monkeypatch.setattr(trading_loop, "is_extended_market_open", lambda now: True)  # 장은 계속 열려 있다고 가정
+    monkeypatch.setattr(trading_loop.time, "sleep", lambda s: None)
+    monkeypatch.setattr(trading_loop, "process_exits_once", lambda *a, **k: [])
+
+    state_path = str(tmp_path / "risk_state.json")
+    stop_flag_path = str(tmp_path / "stop_requested.json")
+    entry_calls = []
+
+    def fake_process_entries_once(*a, **k):
+        entry_calls.append(1)
+        if len(entry_calls) == 2:
+            request_stop(stop_flag_path)  # 두 번째 사이클 도중 대시보드에서 중지 요청이 온 상황 재현
+        return []
+
+    monkeypatch.setattr(trading_loop, "process_entries_once", fake_process_entries_once)
+
+    run_trading_loop(
+        object(), trained=None, bot_token="", chat_id="", max_daily_loss_krw=500_000,
+        risk_state_path=state_path, poll_interval_seconds=1.0, use_realtime_feed=False,
+        stop_flag_path=stop_flag_path,
+    )
+
+    assert len(entry_calls) == 2  # 세 번째 사이클로 안 넘어가고 그 자리에서 멈춤 (market_open은 계속 True인데도)
+
+
+def test_run_trading_loop_clears_stale_stop_flag_from_previous_run_at_startup(monkeypatch, tmp_path):
+    import pandas as pd
+
+    from backtesting.stop_control import request_stop
+
+    watchlist = pd.DataFrame([{"stock_code": "005930", "name": "A"}])
+    monkeypatch.setattr(trading_loop, "top_by_trading_value", lambda client, top_n: watchlist)
+    monkeypatch.setattr(trading_loop, "fetch_today_regime", lambda client, data_dir: True)
+    open_flags = iter([True, False])
+    monkeypatch.setattr(trading_loop, "is_extended_market_open", lambda now: next(open_flags))
+    monkeypatch.setattr(trading_loop.time, "sleep", lambda s: None)
+    monkeypatch.setattr(trading_loop, "process_exits_once", lambda *a, **k: [])
+    entry_calls = []
+    monkeypatch.setattr(trading_loop, "process_entries_once", lambda *a, **k: entry_calls.append(1) or [])
+
+    state_path = str(tmp_path / "risk_state.json")
+    stop_flag_path = str(tmp_path / "stop_requested.json")
+    request_stop(stop_flag_path)  # 이전 실행이 남긴 정지 요청 시뮬레이션
+
+    run_trading_loop(
+        object(), trained=None, bot_token="", chat_id="", max_daily_loss_krw=500_000,
+        risk_state_path=state_path, poll_interval_seconds=1.0, use_realtime_feed=False,
+        stop_flag_path=stop_flag_path,
+    )
+
+    assert len(entry_calls) == 1  # 과거 정지 요청 때문에 즉시 끝나지 않고 정상적으로 한 사이클 돎
 
 
 # ---- _log_order ----
@@ -433,7 +752,7 @@ def test_run_trading_loop_activates_kill_switch_when_override_requested(monkeypa
     monkeypatch.setattr(trading_loop, "top_by_trading_value", lambda client, top_n: watchlist)
     monkeypatch.setattr(trading_loop, "fetch_today_regime", lambda client, data_dir: True)
     open_flags = iter([True, False])
-    monkeypatch.setattr(trading_loop, "is_market_open", lambda now: next(open_flags))
+    monkeypatch.setattr(trading_loop, "is_extended_market_open", lambda now: next(open_flags))
     monkeypatch.setattr(trading_loop.time, "sleep", lambda s: None)
     monkeypatch.setattr(trading_loop, "process_exits_once", lambda *a, **k: [])
     entry_calls = []
@@ -461,7 +780,7 @@ def test_run_trading_loop_does_not_activate_kill_switch_when_not_requested(monke
     monkeypatch.setattr(trading_loop, "top_by_trading_value", lambda client, top_n: watchlist)
     monkeypatch.setattr(trading_loop, "fetch_today_regime", lambda client, data_dir: True)
     open_flags = iter([True, False])
-    monkeypatch.setattr(trading_loop, "is_market_open", lambda now: next(open_flags))
+    monkeypatch.setattr(trading_loop, "is_extended_market_open", lambda now: next(open_flags))
     monkeypatch.setattr(trading_loop.time, "sleep", lambda s: None)
     monkeypatch.setattr(trading_loop, "process_exits_once", lambda *a, **k: [])
     entry_calls = []
@@ -488,7 +807,7 @@ def test_run_trading_loop_appends_pnl_history_on_day_rollover(monkeypatch, tmp_p
     monkeypatch.setattr(trading_loop, "top_by_trading_value", lambda client, top_n: watchlist)
     monkeypatch.setattr(trading_loop, "fetch_today_regime", lambda client, data_dir: True)
     open_flags = iter([False])  # 루프 진입 즉시 종료 -> 초기 load 시점의 롤오버만 확인
-    monkeypatch.setattr(trading_loop, "is_market_open", lambda now: next(open_flags))
+    monkeypatch.setattr(trading_loop, "is_extended_market_open", lambda now: next(open_flags))
     monkeypatch.setattr(trading_loop, "is_kill_switch_requested", lambda path: False)
 
     state_path = str(tmp_path / "risk_state.json")
@@ -539,13 +858,13 @@ def test_run_trading_loop_builds_and_starts_realtime_feed_by_default(monkeypatch
 
     _FakeRealtimeFeed.instances = []
     monkeypatch.setattr(trading_loop, "RealtimeFeed", _FakeRealtimeFeed)
-    monkeypatch.setattr(trading_loop, "fetch_today_candles", lambda client, code: pd.DataFrame())
+    monkeypatch.setattr(trading_loop, "fetch_today_candles", lambda client, code, **k: pd.DataFrame())
 
     watchlist = pd.DataFrame([{"stock_code": "005930", "name": "A"}])
     monkeypatch.setattr(trading_loop, "top_by_trading_value", lambda client, top_n: watchlist)
     monkeypatch.setattr(trading_loop, "fetch_today_regime", lambda client, data_dir: True)
     open_flags = iter([True, False])
-    monkeypatch.setattr(trading_loop, "is_market_open", lambda now: next(open_flags))
+    monkeypatch.setattr(trading_loop, "is_extended_market_open", lambda now: next(open_flags))
     monkeypatch.setattr(trading_loop.time, "sleep", lambda s: None)
 
     entry_feed_kwargs, exit_feed_kwargs = [], []
@@ -576,12 +895,12 @@ def test_run_trading_loop_stops_feed_even_if_loop_raises(monkeypatch, tmp_path):
 
     _FakeRealtimeFeed.instances = []
     monkeypatch.setattr(trading_loop, "RealtimeFeed", _FakeRealtimeFeed)
-    monkeypatch.setattr(trading_loop, "fetch_today_candles", lambda client, code: pd.DataFrame())
+    monkeypatch.setattr(trading_loop, "fetch_today_candles", lambda client, code, **k: pd.DataFrame())
 
     watchlist = pd.DataFrame([{"stock_code": "005930", "name": "A"}])
     monkeypatch.setattr(trading_loop, "top_by_trading_value", lambda client, top_n: watchlist)
     monkeypatch.setattr(trading_loop, "fetch_today_regime", lambda client, data_dir: True)
-    monkeypatch.setattr(trading_loop, "is_market_open", lambda now: True)
+    monkeypatch.setattr(trading_loop, "is_extended_market_open", lambda now: True)
 
     def boom(*a, **k):
         raise RuntimeError("의도된 테스트 예외")

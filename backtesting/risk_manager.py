@@ -119,6 +119,32 @@ def record_position_opened(
     return state
 
 
+def record_position_added_to(
+    state: RiskState, code: str, additional_capital: float, fill_price: float, additional_quantity: int,
+) -> RiskState:
+    """이미 열려있는 포지션에 분할매수로 추가 체결됐을 때 호출 — 진입가를 수량가중
+    평균으로 갱신하고 배정자금/수량을 누적한다(과대낙폭 3분할매수처럼 한 종목을
+    여러 번에 걸쳐 매수하는 전략용).
+
+    record_partial_exit/record_position_closed는 code로 포지션을 하나만 찾아 그
+    하나를 청산하는데, 같은 code로 OpenPosition을 여러 개 만들면 청산 시 첫 번째
+    것만 청산되고 나머지는 손익 반영 없이 그냥 목록에서 사라진다(제거 조건이
+    "코드가 일치하는 전부"라서). 그래서 같은 종목은 항상 이 함수로 기존 포지션
+    하나를 갱신해야지, record_position_opened로 새 포지션을 추가로 만들면 안 된다.
+    """
+    position = next((p for p in state.open_positions if p.code == code), None)
+    if position is None:
+        raise ValueError(f"열려있는 포지션이 아닙니다: {code}")
+
+    new_quantity = position.total_quantity + additional_quantity
+    position.entry_price = (
+        (position.entry_price * position.total_quantity) + (fill_price * additional_quantity)
+    ) / new_quantity
+    position.total_quantity = new_quantity
+    position.allocated_capital += additional_capital
+    return state
+
+
 def record_partial_exit(
     state: RiskState, code: str, exit_price: float, sold_fraction: float, max_daily_loss_krw: float
 ) -> RiskState:

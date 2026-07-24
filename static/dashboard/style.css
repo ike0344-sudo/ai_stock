@@ -1,29 +1,29 @@
 :root {
-  --bg: #0a0c10;
-  --surface: #14171f;
-  --surface-2: #191d27;
-  --surface-hover: #1e2330;
-  --inset: #0e1015;
-  --border: #242835;
-  --border-soft: #1c2029;
-  --text: #e8e9ee;
-  --text-dim: #9297a6;
-  --text-faint: #5c6070;
-  --accent: #7c9cff;
-  --accent-soft: #1b2440;
-  --up: #e76e6e;
-  --up-soft: #3a1f24;
-  --down: #6eb8e7;
-  --down-soft: #1c2f3d;
-  --ok: #4fd08a;
-  --ok-soft: #133226;
-  --danger: #ef6a6a;
-  --danger-soft: #3a1a1a;
-  --warn: #f0b862;
-  --warn-soft: #3a2c14;
-  --radius: 10px;
-  --radius-sm: 6px;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -12px rgba(0, 0, 0, 0.55);
+  --bg: #000000;
+  --surface: #060606;
+  --surface-2: #0d0d0d;
+  --surface-hover: #161514;
+  --inset: #000000;
+  --border: #3a3020;
+  --border-soft: #23201a;
+  --text: #e8e6e0;
+  --text-dim: #9a9587;
+  --text-faint: #5c584e;
+  --accent: #ff9f1c;
+  --accent-soft: #2a1e0a;
+  --up: #ff4d4d;
+  --up-soft: #2e1010;
+  --down: #29b6ff;
+  --down-soft: #0a2230;
+  --ok: #4be07f;
+  --ok-soft: #0e2417;
+  --danger: #ff5c5c;
+  --danger-soft: #2e1010;
+  --warn: #ffcc4d;
+  --warn-soft: #2e2408;
+  --radius: 2px;
+  --radius-sm: 2px;
+  --shadow: none;
 }
 
 * {
@@ -31,38 +31,35 @@
 }
 
 body {
-  font-family: "Pretendard", "Segoe UI", "Malgun Gothic", -apple-system, sans-serif;
+  font-family: "SF Mono", "Consolas", "IBM Plex Mono", "Roboto Mono", "Malgun Gothic", monospace;
   margin: 0;
-  padding: 0 24px 40px;
-  background:
-    radial-gradient(1200px 600px at 15% -10%, #131826 0%, transparent 60%),
-    var(--bg);
+  padding: 0 18px 32px;
+  background: var(--bg);
   color: var(--text);
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 12.5px;
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
 }
 
 ::selection {
   background: var(--accent-soft);
-  color: var(--text);
+  color: var(--accent);
 }
 
 /* scrollbars */
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 9px;
+  height: 9px;
 }
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--surface);
 }
 ::-webkit-scrollbar-thumb {
   background: var(--border);
-  border-radius: 999px;
-  border: 2px solid var(--surface);
+  border-radius: 0;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #2e3341;
+  background: var(--accent-soft);
 }
 
 /* ---- header ---- */
@@ -76,11 +73,10 @@ header {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 16px;
-  margin: 0 -24px 28px;
-  padding: 14px 24px;
-  background: rgba(10, 12, 16, 0.85);
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid var(--border-soft);
+  margin: 0 -18px 20px;
+  padding: 10px 18px;
+  background: var(--bg);
+  border-bottom: 2px solid var(--accent);
 }
 
 .header-brand {
@@ -90,51 +86,61 @@ header {
 }
 
 h1 {
-  font-size: 1.05rem;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
   margin: 0;
   display: flex;
   align-items: center;
   gap: 8px;
   white-space: nowrap;
+  color: var(--accent);
 }
 
 .brand-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
+  width: 7px;
+  height: 7px;
+  border-radius: 0;
   background: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .header-controls {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
 }
 
 .strategy-picker {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: var(--surface);
+  background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 5px 10px 5px 12px;
+  padding: 4px 10px 4px 10px;
 }
 
 .strategy-picker label {
-  font-size: 0.78rem;
-  color: var(--text-dim);
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.strategy-status-list {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 select {
   background: transparent;
   color: var(--text);
   border: none;
-  font-size: 0.85rem;
+  font-size: 0.78rem;
   font-family: inherit;
   padding: 2px 4px;
 }
@@ -145,25 +151,27 @@ select:focus {
 
 #market-ticker {
   display: flex;
-  gap: 14px;
-  font-size: 0.8rem;
+  gap: 10px;
+  font-size: 0.76rem;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }
 
 #last-updated {
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   color: var(--text-faint);
   white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 /* ---- badges / status ---- */
 
 .badge {
-  padding: 5px 12px;
-  border-radius: 999px;
-  font-weight: 600;
-  font-size: 0.8rem;
+  padding: 3px 9px;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  font-size: 0.74rem;
   background: var(--surface-2);
   border: 1px solid var(--border);
   color: var(--text-dim);
@@ -182,6 +190,10 @@ select:focus {
   border-color: transparent;
 }
 
+/* badge-positive/negative: 손익 부호(당일손익 배지 전용) — 이익=파랑/손실=빨강.
+   badge-up/down: 가격 등락 방향(지수 티커 등) — 상승=빨강/하락=파랑. 서로 다른
+   축이라 이름이 겹치지 않게 분리해뒀다(둘 다 손익 배지에 그대로 쓰면 등락 방향과
+   뒤바뀌어 보이는 버그가 났었다). */
 .badge-negative {
   background: var(--up-soft);
   color: var(--up);
@@ -194,18 +206,30 @@ select:focus {
   border-color: transparent;
 }
 
+.badge-up {
+  background: var(--up-soft);
+  color: var(--up);
+  border-color: transparent;
+}
+
+.badge-down {
+  background: var(--down-soft);
+  color: var(--down);
+  border-color: transparent;
+}
+
 .warning {
   background: var(--warn-soft);
   color: var(--warn);
-  padding: 5px 12px;
-  border-radius: 999px;
-  font-size: 0.8rem;
-  font-weight: 500;
+  padding: 3px 9px;
+  border-radius: var(--radius-sm);
+  font-size: 0.74rem;
+  font-weight: 700;
 }
 
 #kill-switch-override-status {
   color: var(--warn);
-  font-size: 0.8rem;
+  font-size: 0.74rem;
 }
 
 .hidden {
@@ -220,17 +244,19 @@ select:focus {
   background: var(--surface-2);
   color: var(--text);
   border-radius: var(--radius-sm);
-  padding: 7px 14px;
-  font-size: 0.82rem;
-  font-weight: 500;
+  padding: 5px 12px;
+  font-size: 0.72rem;
+  font-weight: 700;
   font-family: inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
   cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease, transform 0.05s ease;
+  transition: background 0.08s ease, border-color 0.08s ease;
 }
 
 .btn:hover {
   background: var(--surface-hover);
-  border-color: #313644;
+  border-color: var(--accent);
 }
 
 .btn:active {
@@ -247,11 +273,21 @@ select:focus {
 .btn-primary {
   background: var(--accent-soft);
   color: var(--accent);
-  border-color: transparent;
+  border-color: var(--accent);
 }
 
 .btn-primary:hover {
-  background: #24305c;
+  background: #3a2a0d;
+}
+
+.header-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.header-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 .btn-danger {
@@ -261,7 +297,7 @@ select:focus {
 }
 
 .btn-danger:hover {
-  background: #4a2222;
+  background: #4a1818;
 }
 
 .btn-ok {
@@ -271,13 +307,13 @@ select:focus {
 }
 
 .btn-ok:hover {
-  background: #164231;
+  background: #143a24;
 }
 
 .segmented {
   display: inline-flex;
-  gap: 2px;
-  background: var(--inset);
+  gap: 1px;
+  background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 2px;
@@ -286,8 +322,8 @@ select:focus {
 .btn-segment {
   background: transparent;
   border: none;
-  border-radius: 4px;
-  padding: 5px 12px;
+  border-radius: 0;
+  padding: 4px 10px;
   color: var(--text-dim);
 }
 
@@ -304,25 +340,26 @@ select:focus {
 .sell-one-button {
   background: var(--danger-soft);
   color: var(--danger);
-  border: none;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  padding: 4px 10px;
-  font-size: 0.76rem;
-  font-weight: 500;
+  padding: 3px 9px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
   cursor: pointer;
-  transition: background 0.12s ease;
+  transition: background 0.08s ease;
 }
 
 .sell-one-button:hover {
-  background: #4a2222;
+  background: #4a1818;
 }
 
 /* ---- layout / cards ---- */
 
 main {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
-  gap: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: 6px;
   align-items: start;
 }
 
@@ -331,8 +368,8 @@ section {
   background: var(--surface);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 18px 20px;
+  box-shadow: none;
+  padding: 12px 14px;
   margin: 0;
 }
 
@@ -340,32 +377,46 @@ section.card-compact {
   grid-column: span 1;
 }
 
+/* 계좌 잔고 + 실행 조건을 세로로 묶어 그리드의 1칸을 차지하게 하는 래퍼 — 옆에
+   놓인 거래대금 카드가 훨씬 길어도, 그리드 행 높이가 옆 카드에 맞춰지면서 이
+   둘 사이에 큰 빈 공간이 생기는 걸 막는다(둘 다 main의 grid item이면 같은 행
+   트랙 높이를 공유해서 벌어짐 — flex로 감싸 자기 콘텐츠 높이만큼만 차지하게 함). */
+.compact-stack {
+  grid-column: span 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 h2 {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: var(--text);
-  margin: 0 0 14px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--accent);
+  margin: 0 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-soft);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  letter-spacing: -0.005em;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 h3 {
-  font-size: 0.78rem;
-  color: var(--text-dim);
-  font-weight: 600;
-  margin: 0 0 8px;
+  font-size: 0.7rem;
+  color: var(--text-faint);
+  font-weight: 700;
+  margin: 0 0 6px;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
 }
 
 .empty {
   color: var(--text-faint);
   font-style: normal;
-  font-size: 0.85rem;
-  padding: 10px 2px;
+  font-size: 0.78rem;
+  padding: 8px 2px;
 }
 
 /* ---- tables ---- */
@@ -378,23 +429,24 @@ table {
 
 th, td {
   text-align: left;
-  padding: 9px 10px;
+  padding: 5px 8px;
   border-bottom: 1px solid var(--border-soft);
-  font-size: 0.85rem;
+  font-size: 0.76rem;
 }
 
 th {
   color: var(--text-faint);
-  font-weight: 500;
-  font-size: 0.72rem;
+  font-weight: 700;
+  font-size: 0.66rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   padding-top: 2px;
-  padding-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
 }
 
 tbody tr {
-  transition: background 0.1s ease;
+  transition: background 0.08s ease;
 }
 
 tbody tr:hover {
@@ -409,17 +461,18 @@ tbody tr:last-child td {
 #deposit-table td,
 #config-table td {
   text-align: right;
-  color: var(--text-dim);
+  color: var(--text);
   font-weight: 500;
 }
 #deposit-table th,
 #config-table th {
   text-transform: none;
-  font-size: 0.85rem;
+  font-size: 0.76rem;
   color: var(--text-dim);
+  letter-spacing: normal;
 }
 
-/* numeric column right-alignment, per table's known layout */
+/* numeric column center-alignment, per table's known layout */
 #holdings-table td:nth-child(n+3):nth-child(-n+7),
 #sell-all-result-table td:nth-child(3),
 #positions-table td:nth-child(n+3):nth-child(-n+5),
@@ -428,22 +481,39 @@ tbody tr:last-child td {
 #ranking-extended-table td:nth-child(1),
 #ranking-extended-table td:nth-child(2),
 #ranking-extended-table td:nth-child(4) {
-  text-align: right;
+  text-align: center;
   font-weight: 500;
+}
+
+/* 위 규칙과 같은 열의 th도 가운데 정렬해야 한다 — th는 기본 text-align:left라서
+   헤더 라벨("현재가" 등)은 왼쪽, 그 아래 숫자는 가운데로 어긋나 보였다.
+   font-weight는 th 기본값(700)을 그대로 두기 위해 td 규칙과 분리해뒀다. */
+#holdings-table th:nth-child(n+3):nth-child(-n+7),
+#sell-all-result-table th:nth-child(3),
+#positions-table th:nth-child(n+3):nth-child(-n+5),
+#signals-table th:nth-child(n+3):nth-child(-n+4),
+#orders-table th:nth-child(n+3):nth-child(-n+4),
+#ranking-extended-table th:nth-child(1),
+#ranking-extended-table th:nth-child(2),
+#ranking-extended-table th:nth-child(4) {
+  text-align: center;
 }
 
 .top35-row-fail td {
   color: var(--up);
 }
 
-.holding-row-positive td:last-child {
-  color: var(--down);
-  font-weight: 600;
+/* 평가손익(7번째 열)만 색칠 — td:last-child로 잡으면 실제 마지막 열인 매도
+   버튼 셀이 걸려서 평가손익 텍스트에는 색이 전혀 적용되지 않았다. 국내 주식
+   표기 관행대로 수익=빨강/손실=파랑(badge-up/down과 동일 축, 손익 배지와는 반대). */
+.holding-row-positive td:nth-child(7) {
+  color: var(--up);
+  font-weight: 700;
 }
 
-.holding-row-negative td:last-child {
-  color: var(--up);
-  font-weight: 600;
+.holding-row-negative td:nth-child(7) {
+  color: var(--down);
+  font-weight: 700;
 }
 
 .sell-all-row-error td {
@@ -452,12 +522,12 @@ tbody tr:last-child td {
 
 .rate-up {
   color: var(--up);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .rate-down {
   color: var(--down);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .rate-flat {
@@ -468,7 +538,7 @@ tbody tr:last-child td {
 
 #trading-value-ranking {
   display: grid;
-  gap: 16px;
+  gap: 12px;
 }
 
 #trading-value-ranking table {
@@ -508,8 +578,8 @@ tbody tr:last-child td {
 
 #trading-value-ranking th,
 #trading-value-ranking td {
-  padding: 6px 8px;
-  font-size: 0.78rem;
+  padding: 4px 7px;
+  font-size: 0.72rem;
 }
 
 #trading-value-ranking thead {
@@ -524,14 +594,14 @@ tbody tr:last-child td {
 #strategy-info {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 16px;
+  gap: 14px;
 }
 
 #strategy-info ul {
   margin: 0;
-  padding-left: 18px;
-  font-size: 0.85rem;
-  line-height: 1.7;
+  padding-left: 16px;
+  font-size: 0.78rem;
+  line-height: 1.6;
   color: var(--text-dim);
 }
 
@@ -549,24 +619,24 @@ tbody tr:last-child td {
 
 #top35-progress {
   color: var(--accent);
-  font-size: 0.85rem;
+  font-size: 0.78rem;
 }
 
 #top35-summary {
   color: var(--ok);
-  font-size: 0.85rem;
+  font-size: 0.78rem;
 }
 
 #sell-all-progress {
   color: var(--warn);
-  font-size: 0.85rem;
+  font-size: 0.78rem;
 }
 
 #top35-results-table,
 #sell-all-result-table {
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 
 #result-detail-table {
-  margin-top: 16px;
+  margin-top: 14px;
 }

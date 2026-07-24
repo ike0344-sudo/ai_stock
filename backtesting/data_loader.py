@@ -148,8 +148,13 @@ def load_history(
     max_retries: int = 3,
     use_local_data: bool = False,
     data_dir: str = "data",
+    exchange: str | None = None,
 ) -> pd.DataFrame:
     """stock_code의 [start, end] 구간 OHLCV를 반환.
+
+    exchange: 분봉 조회(interval이 "day"가 아닐 때)에만 적용 — kiwoom_client.
+    get_minute_chart_pages와 같은 의미("1"=KRX, "3"=통합, 미지정 시 필드 자체를 안
+    보내 KRX와 사실상 동일하게 동작). 일봉 조회(interval="day")에는 적용되지 않는다.
 
     interval="day" 또는 분 단위 문자열(예: "15"). 일봉/분봉 모두 1회 호출로는 제한된
     기간만 반환되는 것을 실제 API로 확인해(일봉 ≈ 2.4년/페이지, 분봉 ≈ 12거래일/페이지),
@@ -177,7 +182,7 @@ def load_history(
     is_minute = interval != "day"
     if is_minute:
         max_pages = _minute_pages_needed(interval, start, end)
-        fetch = lambda: client.get_minute_chart_pages(stock_code, tic_scope=interval, max_pages=max_pages)
+        fetch = lambda: client.get_minute_chart_pages(stock_code, tic_scope=interval, max_pages=max_pages, exchange=exchange)
     else:
         max_pages = _daily_pages_needed(start, end)
         fetch = lambda: client.get_daily_chart_pages(stock_code, base_date=end.strftime("%Y%m%d"), max_pages=max_pages)

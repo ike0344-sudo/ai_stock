@@ -187,7 +187,7 @@ def test_scan_watchlist_once_passes_feed_through_to_check_candidate(tmp_path, mo
 
 
 def test_scan_watchlist_once_continues_after_per_stock_error(tmp_path, monkeypatch):
-    def flaky_load_history(client, code, start, end, interval, use_cache):
+    def flaky_load_history(client, code, start, end, interval, use_cache, exchange=None):
         if code == "000001":
             raise RuntimeError("API error")
         return _rising_minute(TODAY_STR, [100.5, 102, 105, 108, 111])
@@ -221,7 +221,7 @@ def test_run_monitor_loop_polls_until_market_closes(monkeypatch):
     monkeypatch.setattr(live_monitor, "top_by_trading_value", lambda client, top_n: watchlist)
     monkeypatch.setattr(live_monitor, "fetch_today_regime", lambda client, data_dir: True)
     open_flags = iter([True, True, False])
-    monkeypatch.setattr(live_monitor, "is_market_open", lambda now: next(open_flags))
+    monkeypatch.setattr(live_monitor, "is_extended_market_open", lambda now: next(open_flags))
     sleeps = []
     monkeypatch.setattr(live_monitor.time, "sleep", lambda s: sleeps.append(s))
     scan_calls = []
@@ -236,10 +236,12 @@ def test_run_monitor_loop_polls_until_market_closes(monkeypatch):
     assert scan_calls[0] == {"000001"}
 
 
-def test_fetch_today_regime_combines_local_and_live_data(tmp_path, monkeypatch):
+def test_fetch_today_regime_combines_local_gap_and_live_data(tmp_path, monkeypatch):
     # 실제 60기간 이평선 계산(compute_index_regime_by_day)은 entry_filters 쪽에서
-    # 이미 검증됐으므로, 여기서는 "로컬+실시간 데이터를 올바르게 합치는지"만 확인
-    # 하기 위해 그 함수를 스텁으로 대체한다.
+    # 이미 검증됐으므로, 여기서는 "로컬+갭+실시간 데이터를 올바르게 합치는지"만
+    # 확인하기 위해 그 함수를 스텁으로 대체한다. PREV_STR(오늘-3일)이 로컬의
+    # 마지막 날짜라 오늘 사이에 이틀치 갭이 생기고, load_index_history가 그 갭을
+    # 메우는 별도 호출로 오는지를 start 인자로 구분해서 검증한다.
     index_dir = tmp_path / "index" / "minute"
     index_dir.mkdir(parents=True)
     local_index = pd.date_range(f"{PREV_STR} 09:00", periods=3, freq="1min")
@@ -248,12 +250,23 @@ def test_fetch_today_regime_combines_local_and_live_data(tmp_path, monkeypatch):
         index=local_index,
     ).to_csv(index_dir / "001.csv")
 
+    gap_index = pd.date_range(f"{TODAY_STR} 08:00", periods=1, freq="1min")  # 갭 구간(전일 이전) 대용 타임스탬프
+    gap_df = pd.DataFrame(
+        {"open": [150], "high": [150], "low": [150], "close": [150], "volume": [1000]}, index=gap_index
+    )
     live_index = pd.date_range(f"{TODAY_STR} 09:00", periods=2, freq="1min")
     live_df = pd.DataFrame(
         {"open": [200] * 2, "high": [200] * 2, "low": [200] * 2, "close": [200] * 2, "volume": [1000] * 2},
         index=live_index,
     )
-    monkeypatch.setattr(live_monitor, "load_index_history", lambda *a, **k: live_df)
+
+    calls = []
+
+    def fake_load_index_history(client, code, start, end, interval, use_cache):
+        calls.append((start, end))
+        return live_df if start == date.today() else gap_df
+
+    monkeypatch.setattr(live_monitor, "load_index_history", fake_load_index_history)
 
     captured = {}
 
@@ -267,8 +280,37 @@ def test_fetch_today_regime_combines_local_and_live_data(tmp_path, monkeypatch):
     result = fetch_today_regime(object(), data_dir=str(tmp_path))
 
     assert result is True
-    assert captured["n_rows"] == 5  # 로컬 3 + 실시간 2 결합
-    assert captured["n_dates"] == 2  # 전일(로컬)/당일(실시간) 두 날짜 다 포함
+    assert len(calls) == 2  # 갭 구간 조회 1회 + 당일 조회 1회
+    assert captured["n_rows"] == 6  # 로컬 3 + 갭 1 + 실시간 2 결합
+    assert captured["n_dates"] == 2  # 전일(로컬)/당일(갭+실시간) 두 날짜 다 포함
+
+    persisted = pd.read_csv(index_dir / "001.csv", index_col=0, parse_dates=True)
+    assert len(persisted) == 4  # 로컬 3 + 갭 1 이 파일에도 병합 저장됨(다음 실행부터 갭 재발 방지)
+
+
+def test_fetch_today_regime_skips_gap_fetch_when_local_already_current(tmp_path, monkeypatch):
+    index_dir = tmp_path / "index" / "minute"
+    index_dir.mkdir(parents=True)
+    local_index = pd.date_range(f"{TODAY_STR} 09:00", periods=1, freq="1min")  # 로컬이 이미 오늘자
+    pd.DataFrame(
+        {"open": [100], "high": [100], "low": [100], "close": [100], "volume": [1000]}, index=local_index
+    ).to_csv(index_dir / "001.csv")
+
+    calls = []
+    live_df = pd.DataFrame(
+        {"open": [200], "high": [200], "low": [200], "close": [200], "volume": [1000]},
+        index=pd.date_range(f"{TODAY_STR} 09:01", periods=1, freq="1min"),
+    )
+    monkeypatch.setattr(
+        live_monitor, "load_index_history",
+        lambda client, code, start, end, interval, use_cache: calls.append((start, end)) or live_df,
+    )
+    monkeypatch.setattr(live_monitor, "compute_index_regime_by_day", lambda *a, **k: {pd.Timestamp(date.today()): True})
+
+    result = fetch_today_regime(object(), data_dir=str(tmp_path))
+
+    assert result is True
+    assert len(calls) == 1  # 갭이 없으니 당일 조회 1회만
 
 
 def test_fetch_today_regime_false_when_no_data_at_all(tmp_path, monkeypatch):

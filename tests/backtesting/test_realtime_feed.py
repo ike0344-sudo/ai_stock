@@ -225,6 +225,23 @@ def test_get_latest_bid_returns_none_for_unknown_code(feed):
     assert feed.get_latest_bid("999999") is None
 
 
+def test_on_message_data_push_updates_latest_price(feed):
+    ws = _FakeWs()
+    feed._on_message(ws, json.dumps({
+        "data": [{"item": "005930", "values": {"10": "+70000", "13": "100", "20": "093015", "28": "+69900"}}],
+    }))
+
+    assert feed.get_latest_price("005930") == 70000.0
+
+
+def test_get_latest_price_returns_none_before_any_tick(feed):
+    assert feed.get_latest_price("005930") is None
+
+
+def test_get_latest_price_returns_none_for_unknown_code(feed):
+    assert feed.get_latest_price("999999") is None
+
+
 # ---- RealtimeFeed.seed_from_dataframe ----
 
 def test_seed_from_dataframe_populates_minute_df(feed):

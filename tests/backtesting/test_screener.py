@@ -1,3 +1,5 @@
+import pytest
+
 from backtesting.screener import STEX_TP_COMBINED, TRADE_VALUE_UNIT_WON, _is_excluded_instrument, top_by_trading_value
 
 
@@ -39,13 +41,20 @@ class _StubRankingClient:
         return page
 
 
-def _item(code: str, name: str, rank: int, trade_value: int, change_rate: float = 0.0) -> dict:
+def _item(
+    code: str, name: str, rank: int, trade_value: int, change_rate: float = 0.0,
+    cur_prc: float = 10000.0, change_amount: float = 0.0, volume: int = 1000, prev_day_volume: int = 1000,
+) -> dict:
     return {
         "stk_cd": code,
         "stk_nm": name,
         "now_rank": str(rank),
         "trde_prica": str(trade_value),
         "flu_rt": f"{change_rate:+.2f}",
+        "cur_prc": f"{cur_prc:+.0f}",  # 부호는 실제 가격의 부호가 아니라 방향 표시(키움 API 관례)
+        "pred_pre": f"{change_amount:+.0f}",
+        "now_trde_qty": str(volume),
+        "pred_trde_qty": str(prev_day_volume),
     }
 
 
@@ -136,6 +145,58 @@ def test_top_by_trading_value_strips_al_suffix_from_combined_response():
     df = top_by_trading_value(client, top_n=1)
 
     assert df.iloc[0]["stock_code"] == "000660"
+
+
+def test_top_by_trading_value_extracts_current_price_stripping_direction_sign():
+    # cur_prc의 부호는 전일종가 대비 방향 표시일 뿐 실제 가격의 부호가 아니다 —
+    # 하락 종목(-)이어도 현재가는 항상 양수여야 한다.
+    page1 = {
+        "trde_prica_upper": [
+            _item("000660", "SK하이닉스", 1, 1000, cur_prc=1_900_000.0),
+            _item("005930", "삼성전자", 2, 900, cur_prc=-70_000.0),
+        ]
+    }
+    client = _StubRankingClient([page1])
+
+    df = top_by_trading_value(client, top_n=2)
+
+    assert df.iloc[0]["current_price"] == 1_900_000.0
+    assert df.iloc[1]["current_price"] == 70_000.0  # 하락이어도 양수
+
+
+def test_top_by_trading_value_extracts_signed_change_amount():
+    page1 = {
+        "trde_prica_upper": [
+            _item("000660", "SK하이닉스", 1, 1000, change_amount=70_000.0),
+            _item("005930", "삼성전자", 2, 900, change_amount=-3_500.0),
+        ]
+    }
+    client = _StubRankingClient([page1])
+
+    df = top_by_trading_value(client, top_n=2)
+
+    assert df.iloc[0]["change_amount"] == 70_000.0
+    assert df.iloc[1]["change_amount"] == -3_500.0
+
+
+def test_top_by_trading_value_extracts_volume_and_prev_day_volume():
+    page1 = {"trde_prica_upper": [_item("000660", "SK하이닉스", 1, 1000, volume=3_505_849, prev_day_volume=2_500_000)]}
+    client = _StubRankingClient([page1])
+
+    df = top_by_trading_value(client, top_n=1)
+
+    assert df.iloc[0]["volume"] == 3_505_849
+    assert df.iloc[0]["prev_day_volume"] == 2_500_000
+    assert df.iloc[0]["volume_vs_prev_day_pct"] == pytest.approx(3_505_849 / 2_500_000 * 100)
+
+
+def test_top_by_trading_value_volume_vs_prev_day_pct_is_none_when_prev_day_volume_zero():
+    page1 = {"trde_prica_upper": [_item("000660", "SK하이닉스", 1, 1000, volume=100, prev_day_volume=0)]}
+    client = _StubRankingClient([page1])
+
+    df = top_by_trading_value(client, top_n=1)
+
+    assert df.iloc[0]["volume_vs_prev_day_pct"] is None
 
 
 def test_top_by_trading_value_extracts_change_rate():

@@ -1,6 +1,7 @@
 import json
 
 from backtesting.dashboard_data import (
+    load_all_signal_history,
     load_dashboard_state,
     load_order_history,
     load_pnl_history,
@@ -142,6 +143,57 @@ def test_load_signal_history_respects_limit(tmp_path):
     assert len(signals) == 3
     # 최신순(signal_time 내림차순) 상위 3개
     assert [s["stock_code"] for s in signals] == ["000009", "000008", "000007"]
+
+
+# ---- load_all_signal_history ----
+
+def test_load_all_signal_history_tags_each_signal_with_its_strategy(tmp_path):
+    path1 = tmp_path / "strategy_1_signals.jsonl"
+    path2 = tmp_path / "strategy_3_signals.jsonl"
+    path1.write_text(json.dumps({"stock_code": "005930", "signal_time": "2026-07-20T09:00:00", "price": 70000.0, "proba": 0.55}), encoding="utf-8")
+    path2.write_text(json.dumps({"stock_code": "000660", "signal_time": "2026-07-20T10:15:00", "price": 215000.0}), encoding="utf-8")
+
+    signals = load_all_signal_history({"strategy_1": str(path1), "strategy_3": str(path2)})
+
+    by_code = {s["stock_code"]: s["strategy"] for s in signals}
+    assert by_code == {"005930": "strategy_1", "000660": "strategy_3"}
+
+
+def test_load_all_signal_history_sorts_across_strategies_by_signal_time_descending(tmp_path):
+    path1 = tmp_path / "strategy_1_signals.jsonl"
+    path2 = tmp_path / "strategy_2_signals.jsonl"
+    path1.write_text(json.dumps({"stock_code": "005930", "signal_time": "2026-07-20T09:00:00", "price": 70000.0}), encoding="utf-8")
+    path2.write_text(json.dumps({"stock_code": "000660", "signal_time": "2026-07-20T10:15:00", "price": 215000.0}), encoding="utf-8")
+
+    signals = load_all_signal_history({"strategy_1": str(path1), "strategy_2": str(path2)})
+
+    assert [s["stock_code"] for s in signals] == ["000660", "005930"]
+
+
+def test_load_all_signal_history_handles_missing_strategy_file(tmp_path):
+    path1 = tmp_path / "strategy_1_signals.jsonl"
+    path1.write_text(json.dumps({"stock_code": "005930", "signal_time": "2026-07-20T09:00:00", "price": 70000.0}), encoding="utf-8")
+
+    signals = load_all_signal_history({"strategy_1": str(path1), "strategy_2": str(tmp_path / "missing.jsonl")})
+
+    assert len(signals) == 1
+    assert signals[0]["strategy"] == "strategy_1"
+
+
+def test_load_all_signal_history_respects_limit_across_strategies(tmp_path):
+    path1 = tmp_path / "strategy_1_signals.jsonl"
+    path2 = tmp_path / "strategy_2_signals.jsonl"
+    path1.write_text("\n".join(
+        json.dumps({"stock_code": f"A{i}", "signal_time": f"2026-07-20T09:{i:02d}:00", "price": 1000.0}) for i in range(5)
+    ), encoding="utf-8")
+    path2.write_text("\n".join(
+        json.dumps({"stock_code": f"B{i}", "signal_time": f"2026-07-20T10:{i:02d}:00", "price": 1000.0}) for i in range(5)
+    ), encoding="utf-8")
+
+    signals = load_all_signal_history({"strategy_1": str(path1), "strategy_2": str(path2)}, limit=3)
+
+    assert len(signals) == 3
+    assert all(s["stock_code"].startswith("B") for s in signals)  # strategy_2 시각이 더 최신
 
 
 # ---- load_order_history ----

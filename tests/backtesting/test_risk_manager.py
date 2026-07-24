@@ -8,6 +8,7 @@ from backtesting.risk_manager import (
     can_open_new_position,
     load_state,
     record_partial_exit,
+    record_position_added_to,
     record_position_closed,
     record_position_opened,
     roll_to_new_day_if_needed,
@@ -49,6 +50,43 @@ def test_record_position_opened_appends_position():
 
     assert len(state.open_positions) == 1
     assert state.open_positions[0].code == "005930"
+
+
+def test_record_position_added_to_averages_entry_price_and_accumulates_quantity():
+    state = RiskState(trading_date="2026-07-20")
+    record_position_opened(
+        state, "000660", "2026-07-20T09:05", allocated_capital=1_000_000, entry_price=100.0, total_quantity=10,
+    )
+
+    record_position_added_to(state, "000660", additional_capital=1_000_000, fill_price=88.0, additional_quantity=12)
+
+    position = state.open_positions[0]
+    assert position.total_quantity == 22
+    assert position.allocated_capital == 2_000_000
+    # (100*10 + 88*12) / 22
+    assert position.entry_price == pytest.approx((100.0 * 10 + 88.0 * 12) / 22)
+
+
+def test_record_position_added_to_raises_when_no_open_position():
+    state = RiskState(trading_date="2026-07-20")
+
+    with pytest.raises(ValueError):
+        record_position_added_to(state, "000660", additional_capital=1_000_000, fill_price=88.0, additional_quantity=12)
+
+
+def test_record_position_added_to_keeps_single_position_closeable_by_code():
+    # 같은 code로 여러 OpenPosition을 만들지 않고 이 함수로 갱신하면, record_position_closed가
+    # 평단가 전체를 한 번에 정확히 청산할 수 있다(반대로 여러 개를 만들면 첫 번째만
+    # 청산되고 나머지는 손익 반영 없이 사라진다 — 이 함수가 막으려는 상황).
+    state = RiskState(trading_date="2026-07-20")
+    record_position_opened(
+        state, "000660", "2026-07-20T09:05", allocated_capital=1_000_000, entry_price=100.0, total_quantity=10,
+    )
+    record_position_added_to(state, "000660", additional_capital=1_000_000, fill_price=88.0, additional_quantity=12)
+
+    assert len(state.open_positions) == 1  # 포지션이 여전히 하나 — 청산 시 전량 정확히 처리됨
+    record_position_closed(state, "000660", exit_price=95.0, max_daily_loss_krw=10_000_000)
+    assert state.open_positions == []
 
 
 def test_record_position_closed_updates_realized_pnl_and_removes_position():

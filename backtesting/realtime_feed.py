@@ -212,6 +212,15 @@ class RealtimeFeed:
             entry = self._latest.get(code)
             return entry["bid"] if entry else None
 
+    def get_latest_price(self, code: str) -> float | None:
+        """최근 체결가(field 10) — 호가가 아니라 실제 마지막 거래가. 매수 트리거처럼
+        "지금 가격이 특정 밴드를 건드렸는가"를 판단할 땐 매수호가보다 이 값이 더
+        직접적이다. 아직 틱을 못 받았으면 None(호출부가 REST로 폴백해야 함을 알리는
+        신호 — get_latest_bid와 동일한 규약)."""
+        with self._lock:
+            entry = self._latest.get(code)
+            return entry["price"] if entry else None
+
     def seed_from_dataframe(self, code: str, df: pd.DataFrame) -> None:
         """REST로 백필한 오늘자 분봉을 실시간 조립 버퍼에 미리 채워 넣는다 — 이렇게 안
         하면 피드가 구독을 시작한 시점 이후 캔들만 남아서, 장 시작부터 필요한 조건

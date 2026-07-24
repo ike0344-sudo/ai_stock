@@ -120,6 +120,24 @@ def test_job_records_ok_and_error_results_per_stock(monkeypatch):
     assert "주문 거부" in results[1]["message"]
 
 
+def test_job_records_error_status_when_order_rejected_without_exception(monkeypatch):
+    # place_order가 예외 없이 return_code!=0으로 응답하는 경우(HTTP 200 + 거부) —
+    # 이 체크가 없으면 실제로는 거부된 주문이 "ok"로 기록돼 매도된 것처럼 착각하게 된다.
+    fake_client = _FakeClient(
+        holdings=[_holding("005930", "삼성전자", 1)],
+        order_results={"005930": {"return_code": 20, "return_msg": "모의투자에서는 해당업무가 제공되지 않습니다"}},
+    )
+    monkeypatch.setattr(sell_all_job, "KiwoomClient", lambda appkey, secretkey, is_mock: fake_client)
+
+    start_job("key", "secret", True)
+
+    assert _wait_until(lambda: get_status()["status"] == "done")
+    results = get_status()["results"]
+    assert results[0]["code"] == "005930"
+    assert results[0]["status"] == "error"
+    assert "모의투자에서는" in results[0]["message"]
+
+
 def test_job_records_error_status_when_evaluation_fails(monkeypatch):
     fake_client = _FakeClient(evaluation_error=RuntimeError("계좌 조회 실패"))
     monkeypatch.setattr(sell_all_job, "KiwoomClient", lambda appkey, secretkey, is_mock: fake_client)

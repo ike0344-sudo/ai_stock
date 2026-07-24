@@ -4,7 +4,9 @@ from backtesting import notifier
 from backtesting.notifier import (
     notify_error,
     notify_kill_switch,
+    notify_nasdaq_drop,
     notify_order_filled,
+    notify_signal_detected,
     send_telegram,
 )
 
@@ -65,8 +67,9 @@ def test_notify_order_filled_formats_buy_message(monkeypatch):
     captured = {}
     monkeypatch.setattr(notifier, "send_telegram", lambda message, bot_token, chat_id: captured.setdefault("message", message) or True)
 
-    notify_order_filled("buy", "005930", 10, 70000, "TOKEN", "CHAT")
+    notify_order_filled("strategy_1", "buy", "005930", 10, 70000, "TOKEN", "CHAT")
 
+    assert "[strategy_1]" in captured["message"]
     assert "매수" in captured["message"]
     assert "005930" in captured["message"]
     assert "10" in captured["message"]
@@ -76,7 +79,7 @@ def test_notify_order_filled_formats_sell_message(monkeypatch):
     captured = {}
     monkeypatch.setattr(notifier, "send_telegram", lambda message, bot_token, chat_id: captured.setdefault("message", message) or True)
 
-    notify_order_filled("sell", "005930", 10, 71000, "TOKEN", "CHAT")
+    notify_order_filled("strategy_1", "sell", "005930", 10, 71000, "TOKEN", "CHAT")
 
     assert "매도" in captured["message"]
 
@@ -85,17 +88,78 @@ def test_notify_error_includes_context_and_exception_message(monkeypatch):
     captured = {}
     monkeypatch.setattr(notifier, "send_telegram", lambda message, bot_token, chat_id: captured.setdefault("message", message) or True)
 
-    notify_error("주문 실행 실패", ValueError("잔고 부족"), "TOKEN", "CHAT")
+    notify_error("strategy_1", "주문 실행 실패", ValueError("잔고 부족"), "TOKEN", "CHAT")
 
+    assert "[strategy_1]" in captured["message"]
     assert "주문 실행 실패" in captured["message"]
     assert "잔고 부족" in captured["message"]
 
 
-def test_notify_kill_switch_includes_pnl_and_threshold(monkeypatch):
+def test_notify_signal_detected_includes_strategy_name_code_price_and_proba(monkeypatch):
     captured = {}
     monkeypatch.setattr(notifier, "send_telegram", lambda message, bot_token, chat_id: captured.setdefault("message", message) or True)
 
-    notify_kill_switch(-550_000, 500_000, "TOKEN", "CHAT")
+    notify_signal_detected("strategy_1", "005930", "삼성전자", 70000, 0.732, "TOKEN", "CHAT")
 
+    assert "[strategy_1]" in captured["message"]
+    assert "삼성전자" in captured["message"]
+    assert "005930" in captured["message"]
+    assert "70,000" in captured["message"]
+    assert "73%" in captured["message"]
+
+
+def test_notify_signal_detected_falls_back_to_code_only_when_name_unknown(monkeypatch):
+    # watchlist에 없던 코드 등 이름을 못 찾은 경우 — 이름 조회 실패로 알림 자체가
+    # 막히면 안 되므로 코드만이라도 표시한다.
+    captured = {}
+    monkeypatch.setattr(notifier, "send_telegram", lambda message, bot_token, chat_id: captured.setdefault("message", message) or True)
+
+    notify_signal_detected("strategy_1", "005930", "", 70000, 0.732, "TOKEN", "CHAT")
+
+    assert "005930" in captured["message"]
+    assert "()" not in captured["message"]
+
+
+def test_notify_signal_detected_omits_proba_clause_when_none(monkeypatch):
+    # strategy3_scalp처럼 ML 게이트가 없는 전략은 진입확률 개념이 없어 proba=None을
+    # 넘긴다 — 이때 메시지에 "진입확률" 문구 자체가 없어야 한다.
+    captured = {}
+    monkeypatch.setattr(notifier, "send_telegram", lambda message, bot_token, chat_id: captured.setdefault("message", message) or True)
+
+    notify_signal_detected("strategy_3", "005930", "삼성전자", 70000, None, "TOKEN", "CHAT")
+
+    assert "005930" in captured["message"]
+    assert "70,000" in captured["message"]
+    assert "진입확률" not in captured["message"]
+
+
+def test_notify_kill_switch_includes_strategy_pnl_and_threshold(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(notifier, "send_telegram", lambda message, bot_token, chat_id: captured.setdefault("message", message) or True)
+
+    notify_kill_switch("strategy_1", -550_000, 500_000, "TOKEN", "CHAT")
+
+    assert "[strategy_1]" in captured["message"]
     assert "550,000" in captured["message"] or "-550000" in captured["message"].replace(",", "")
     assert "500,000" in captured["message"] or "500000" in captured["message"].replace(",", "")
+
+
+def test_notify_nasdaq_drop_includes_change_pct_price_and_headlines(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(notifier, "send_telegram", lambda message, bot_token, chat_id: captured.setdefault("message", message) or True)
+
+    notify_nasdaq_drop(-1.23, 18000.5, ["Fed 발언 관련 헤드라인", "지정학 리스크 헤드라인"], "TOKEN", "CHAT")
+
+    assert "-1.23" in captured["message"]
+    assert "18,000.5" in captured["message"] or "18000.5" in captured["message"]
+    assert "Fed 발언 관련 헤드라인" in captured["message"]
+    assert "지정학 리스크 헤드라인" in captured["message"]
+
+
+def test_notify_nasdaq_drop_handles_empty_headlines(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(notifier, "send_telegram", lambda message, bot_token, chat_id: captured.setdefault("message", message) or True)
+
+    notify_nasdaq_drop(-1.5, 17800.0, [], "TOKEN", "CHAT")
+
+    assert "가져오지 못했습니다" in captured["message"]

@@ -1,3 +1,6 @@
+import threading
+import time as time_module
+
 from kiwoom_client import KiwoomClient
 
 
@@ -14,7 +17,10 @@ def test_throttle_does_not_sleep_on_first_call(monkeypatch):
 
 def test_throttle_sleeps_when_called_too_soon(monkeypatch):
     sleeps = []
-    times = iter([100.0, 100.1])  # 두 번째 호출이 0.1초 뒤 -> 0.4초 대기해야 함
+    # 두 번째 호출이 0.1초 뒤 -> 0.4초 대기해야 함. 대기 후 now를 다시 재므로
+    # (실제 요청 직전 시각을 기록하기 위해) 세 번째 값은 "대기 후" 시각 — 정확히
+    # 목표 시각(100.5)에 깼다고 가정.
+    times = iter([100.0, 100.1, 100.5])
     monkeypatch.setattr("kiwoom_client.time.sleep", lambda s: sleeps.append(s))
     monkeypatch.setattr("kiwoom_client.time.monotonic", lambda: next(times))
 
@@ -24,6 +30,7 @@ def test_throttle_sleeps_when_called_too_soon(monkeypatch):
 
     assert len(sleeps) == 1
     assert sleeps[0] == 100.5 - 100.1
+    assert client._last_request_at == 100.5  # 대기 전(100.1)이 아니라 대기 후 시각으로 갱신돼야 함
 
 
 def test_throttle_does_not_sleep_when_enough_time_passed(monkeypatch):
@@ -37,6 +44,45 @@ def test_throttle_does_not_sleep_when_enough_time_passed(monkeypatch):
     client._throttle()
 
     assert sleeps == []
+
+
+def test_request_tr_serializes_concurrent_calls_from_same_instance(monkeypatch):
+    # 대시보드처럼 여러 스레드(ThreadingHTTPServer)가 같은 KiwoomClient 인스턴스를
+    # 공유할 때, _request_lock이 없으면 두 스레드가 거의 동시에 _throttle()의
+    # "확인 후 대기" 검사를 통과해 실제 요청을 겹쳐 쏠 수 있었다(실측: 토큰 발급
+    # 엔드포인트 자체가 429). 여러 스레드가 동시에 request_tr을 불러도 실제 "요청
+    # 전송" 시각 사이 간격은 항상 min_request_interval 이상이어야 한다.
+    client = KiwoomClient("key", "secret", min_request_interval=0.2)
+    client.token = "existing-token"  # 토큰 발급 경로는 이 테스트의 관심사가 아님
+    call_times: list[float] = []
+    record_lock = threading.Lock()
+
+    class _FakeResponse:
+        headers: dict = {}
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {}
+
+    def fake_post(url, headers=None, json=None, timeout=10):
+        with record_lock:
+            call_times.append(time_module.monotonic())
+        return _FakeResponse()
+
+    monkeypatch.setattr("kiwoom_client.requests.post", fake_post)
+
+    threads = [threading.Thread(target=lambda: client.request_tr("ka10001", {})) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    call_times.sort()
+    gaps = [b - a for a, b in zip(call_times, call_times[1:])]
+    assert len(call_times) == 4
+    assert all(gap >= client.min_request_interval * 0.9 for gap in gaps)
 
 
 def _client_with_stub_request(monkeypatch, pages_by_call: list[dict], cont_yns: list[str]):
@@ -98,6 +144,28 @@ def test_get_stock_list_returns_list_field(monkeypatch):
     assert result == [{"code": "005930"}]
 
 
+def test_get_minute_chart_pages_omits_stex_tp_by_default(monkeypatch):
+    # exchange 미지정 시 stex_tp 필드 자체를 안 보낸다 — 라이브 확인 결과 이게 KRX와
+    # 사실상 동일하게 동작한다(통합 넘겼을 때만 NXT 체결까지 섞여 값이 달라짐).
+    client = KiwoomClient("key", "secret")
+    captured = {}
+    monkeypatch.setattr(client, "_paginate", lambda api_id, body, path, max_pages: captured.update(body=body) or [])
+
+    client.get_minute_chart_pages("000660", tic_scope="1")
+
+    assert captured["body"] == {"stk_cd": "000660", "tic_scope": "1", "upd_stkpc_tp": "1"}
+
+
+def test_get_minute_chart_pages_sends_explicit_exchange_when_given(monkeypatch):
+    client = KiwoomClient("key", "secret")
+    captured = {}
+    monkeypatch.setattr(client, "_paginate", lambda api_id, body, path, max_pages: captured.update(body=body) or [])
+
+    client.get_minute_chart_pages("000660", tic_scope="1", exchange="1")
+
+    assert captured["body"]["stex_tp"] == "1"
+
+
 def test_get_index_daily_chart_uses_inds_cd(monkeypatch):
     client = KiwoomClient("key", "secret")
     captured = {}
@@ -129,9 +197,29 @@ def test_get_stock_quote_uses_ka10004_and_mrkcond_path(monkeypatch):
     result = client.get_stock_quote("005930")
 
     assert captured["api_id"] == "ka10004"
-    assert captured["body"] == {"stk_cd": "005930"}
+    assert captured["body"] == {"stk_cd": "005930", "stex_tp": "1"}  # 모의투자 기본값(KRX)
     assert captured["path"] == "/api/dostk/mrkcond"
     assert result == {"sel_fpr_bid": "-70100", "buy_fpr_bid": "-70000"}
+
+
+def test_get_stock_quote_defaults_to_combined_exchange_for_real_account(monkeypatch):
+    client = KiwoomClient("key", "secret", is_mock=False)
+    captured = {}
+    monkeypatch.setattr(client, "request_tr", lambda api_id, body, path="", cont_yn="N", next_key="": captured.update(body=body) or {})
+
+    client.get_stock_quote("005930")
+
+    assert captured["body"]["stex_tp"] == "3"  # 실전 기본값(통합) — place_order와 같은 규칙
+
+
+def test_get_stock_quote_respects_explicit_exchange_override(monkeypatch):
+    client = KiwoomClient("key", "secret", is_mock=False)
+    captured = {}
+    monkeypatch.setattr(client, "request_tr", lambda api_id, body, path="", cont_yn="N", next_key="": captured.update(body=body) or {})
+
+    client.get_stock_quote("005930", exchange="1")
+
+    assert captured["body"]["stex_tp"] == "1"
 
 
 def test_get_index_minute_chart_pages_uses_ka20005(monkeypatch):
@@ -167,6 +255,15 @@ def test_place_order_buy_uses_kt10000_and_ordr_path(monkeypatch):
         "ord_uv": "", "trde_tp": "3", "cond_uv": "",
     }
     assert result["ord_no"] == "0000123"
+
+
+def test_place_order_real_account_defaults_to_sor(monkeypatch):
+    client = KiwoomClient("key", "secret", is_mock=False)
+    captured = _capture_request_tr(client, monkeypatch, {"ord_no": "0000123", "return_code": 0})
+
+    client.place_order("005930", side="buy", quantity=10)
+
+    assert captured["body"]["dmst_stex_tp"] == "SOR"
 
 
 def test_place_order_sell_uses_kt10001(monkeypatch):
