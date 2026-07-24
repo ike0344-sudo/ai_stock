@@ -57,12 +57,37 @@ class _FakeResponse:
         return self._json_data
 
 
-def _yahoo_payload(price: float, closes: list[float] | None = None) -> dict:
-    """실제 Yahoo 차트 API 응답 형태 — meta.regularMarketPrice(최신가) +
-    indicators.quote[0].close(일별 종가 배열, 오래된 순). 전일종가는 배열의 뒤에서
-    두 번째 값(closes[-2])을 쓴다 — meta.chartPreviousClose는 NQ=F(선물) 조회에서
-    신뢰할 수 없는 것으로 확인돼(실측: 조회 범위 첫날 종가를 가리킴) 쓰지 않는다."""
-    return {"chart": {"result": [{"meta": {"regularMarketPrice": price}, "indicators": {"quote": [{"close": closes or []}]}}]}}
+BASE_TS = 1_800_000_000  # 임의의 고정 기준시각(초) — 테스트끼리 겹치지만 무관
+
+
+def _yahoo_payload(
+    price: float, closes: list[float] | None = None, timestamps: list[int] | None = None, latest_ts: int | None = None
+) -> dict:
+    """실제 Yahoo 차트 API(15분봉) 응답 형태 — meta.regularMarketPrice(최신가) +
+    meta.regularMarketTime(기준시각) + timestamp/indicators.quote[0].close(봉별
+    시각·종가, 오래된 순). timestamps를 안 주면 closes를
+    ROLLING_CHANGE_WINDOW_SECONDS(하루) 간격으로 오래된 순 등간격 배치한다 —
+    이러면 closes[-2]가 정확히 "24시간 전" 자리에 와서, 그 값을 전일가로 기대하는
+    단순 케이스들이 그대로 성립한다. 24시간 전 근방에 여러 봉을 촘촘히 배치하는
+    시나리오(예: 특정 봉이 비는 경우)는 timestamps를 직접 넘겨 제어한다."""
+    closes = closes or []
+    if latest_ts is None:
+        latest_ts = BASE_TS
+    if timestamps is None:
+        n = len(closes)
+        window = market_snapshot.ROLLING_CHANGE_WINDOW_SECONDS
+        timestamps = [latest_ts - (n - 1 - i) * window for i in range(n)]
+    return {
+        "chart": {
+            "result": [
+                {
+                    "meta": {"regularMarketPrice": price, "regularMarketTime": latest_ts},
+                    "timestamp": timestamps,
+                    "indicators": {"quote": [{"close": closes}]},
+                }
+            ]
+        }
+    }
 
 
 # ---- _kiwoom_index_snapshot ----
@@ -95,7 +120,7 @@ def test_kiwoom_index_snapshot_returns_none_when_client_raises():
 
 # ---- _nasdaq_snapshot ----
 
-def test_nasdaq_snapshot_computes_change_pct_from_second_to_last_close(monkeypatch):
+def test_nasdaq_snapshot_computes_change_pct_from_nearest_24h_ago_bar(monkeypatch):
     monkeypatch.setattr(
         market_snapshot.requests, "get",
         lambda url, headers=None, timeout=10: _FakeResponse(_yahoo_payload(18200.0, closes=[17500.0, 18000.0, 18200.0])),
@@ -107,10 +132,11 @@ def test_nasdaq_snapshot_computes_change_pct_from_second_to_last_close(monkeypat
     assert snapshot["change_pct"] == pytest.approx((18200.0 - 18000.0) / 18000.0 * 100)
 
 
-def test_nasdaq_snapshot_ignores_stale_first_bar_in_range(monkeypatch):
-    # 실측 버그 재현: NQ=F 5일 조회에서 close 배열의 마지막 값이 오늘(regularMarketPrice와
-    # 일치), 뒤에서 두 번째가 진짜 전일종가다. 배열 맨 앞(4세션 전) 값을 잘못 전일종가로
-    # 쓰면 실제로는 하락인데 상승(+1.5%)으로 표시되는 문제가 있었다.
+def test_nasdaq_snapshot_ignores_bars_further_than_24h_ago(monkeypatch):
+    # 조회 범위(5일치)에 24시간 전보다 훨씬 오래된 봉들이 섞여 있어도, "24시간 전에
+    # 가장 가까운" 봉(여기서는 뒤에서 두 번째, 29316.0)만 골라 써야 한다 — 더 먼
+    # 과거 봉(28773.25 등)을 잘못 쓰면 실제로는 하락인데 상승으로 잘못 표시되는
+    # 문제가 예전에 있었다.
     monkeypatch.setattr(
         market_snapshot.requests, "get",
         lambda url, headers=None, timeout=10: _FakeResponse(
@@ -125,25 +151,36 @@ def test_nasdaq_snapshot_ignores_stale_first_bar_in_range(monkeypatch):
     assert snapshot["change_pct"] < 0  # 실제로는 하락 중이어야 함
 
 
-def test_nasdaq_snapshot_skips_null_gap_in_close_array(monkeypatch):
-    # 실측 버그 재현: close 배열 중간에 None이 섞여 나오는 날이 있다
-    # (예: [28773.25, 28778.75, 29316.0, None, 29105.75]) — 그대로 뒤에서 두 번째를
-    # 쓰면 None이 걸려 change_pct가 null이 돼버린다. None을 걸러낸 뒤 다시 뒤에서
-    # 두 번째를 골라야 한다.
+def test_nasdaq_snapshot_falls_back_to_adjacent_bar_when_24h_ago_bar_is_missing(monkeypatch):
+    # 실측 버그 재현: 일봉 기준으로는 "어제 종가" 자리가 통째로 None인 세션이 있어서,
+    # None을 걸러내고 그다음(2세션 전)을 대신 쓰면 며칠치 변동이 하루치 등락률에 섞여
+    # 실제(-0.04%~+0.07%, investing.com/Yahoo 웹페이지 실측 대조)와 동떨어진 큰
+    # 값(-1.8%대)이 나왔다. 15분봉은 표본이 촘촘해서(하루 ~96개) 정확히 24시간 전
+    # 봉 하나가 비어도 바로 옆(15분 오차) 봉을 대신 쓰면 되므로 오차가 미미하다.
+    latest_ts = BASE_TS
+    window = market_snapshot.ROLLING_CHANGE_WINDOW_SECONDS
     monkeypatch.setattr(
         market_snapshot.requests, "get",
         lambda url, headers=None, timeout=10: _FakeResponse(
-            _yahoo_payload(29105.75, closes=[28773.25, 28778.75, 29316.0, None, 29105.75])
+            _yahoo_payload(
+                100.0,
+                closes=[99.0, None, 100.0],
+                timestamps=[latest_ts - window - 900, latest_ts - window, latest_ts],
+                latest_ts=latest_ts,
+            )
         ),
     )
 
     snapshot = _nasdaq_snapshot()
 
-    assert snapshot["value"] == 29105.75
-    assert snapshot["change_pct"] == pytest.approx((29105.75 - 29316.0) / 29316.0 * 100)
+    assert snapshot["value"] == 100.0
+    assert snapshot["change_pct"] == pytest.approx((100.0 - 99.0) / 99.0 * 100)
 
 
-def test_nasdaq_snapshot_returns_none_change_pct_with_insufficient_history(monkeypatch):
+def test_nasdaq_snapshot_returns_none_change_pct_when_no_bar_near_24h_ago(monkeypatch):
+    # 조회 범위 안에 24시간 전 근방(±12시간) 봉이 아예 없으면(예: 응답에 딱 최신
+    # 봉 하나만 온 경우) 억지로 먼 과거/거의 지금 시각 봉을 전일가로 쓰지 않고
+    # change_pct를 None으로 반환해야 한다.
     monkeypatch.setattr(
         market_snapshot.requests, "get",
         lambda url, headers=None, timeout=10: _FakeResponse(_yahoo_payload(18200.0, closes=[18200.0])),

@@ -40,8 +40,9 @@ from .kiwoom_session import get_client
 KOSPI_INDEX_CODE = "001"
 KOSDAQ_INDEX_CODE = "101"
 CACHE_TTL_SECONDS = 1.0
-NASDAQ_YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/NQ=F?interval=1d&range=5d"
+NASDAQ_YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/NQ=F?interval=15m&range=5d"
 NASDAQ_REQUEST_HEADERS = {"User-Agent": "Mozilla/5.0"}
+ROLLING_CHANGE_WINDOW_SECONDS = 24 * 60 * 60
 
 _lock = threading.Lock()
 _cached_snapshot: dict | None = None
@@ -76,24 +77,34 @@ def _nasdaq_snapshot() -> dict | None:
     형식 변경 등) 조용히 None을 반환한다 — 나스닥 하나 실패했다고 코스피/코스닥까지
     못 보여줄 이유는 없다.
 
-    전일종가는 meta.chartPreviousClose가 아니라 indicators.quote[0].close 배열의
-    뒤에서 두 번째 값을 쓴다 — NQ=F(선물) 5일 범위 조회에서 chartPreviousClose가
-    "어제 종가"가 아니라 조회 범위 첫날(4세션 전) 종가를 가리키는 걸 실측으로
-    확인했다(예: close=[...,28773.25(4세션 전), 28778.75, 29316.0(어제), 29209.75(오늘)]
-    인데 chartPreviousClose가 29316.0이 아니라 28773.25 — 그래서 실제로는 하락 중인데
-    등락률이 +1.5%로 잘못 표시됐다).
+    전일종가는 일봉 종가 배열이 아니라 15분봉으로 "지금으로부터 정확히 24시간 전에
+    가장 가까운" 시점의 가격을 쓴다. 예전엔 일봉 배열의 뒤에서 두 번째 값을 썼는데,
+    NQ=F(선물)는 그 자리가 통째로 비어(None) 나오는 세션이 실측으로 확인됐고, 그럴 때
+    None을 걸러내고 그다음(2세션 전) 값을 대신 쓰면 며칠치 변동이 하루치 등락률에
+    섞여 실제(-0.04%~+0.07%, investing.com/Yahoo 웹페이지 실측 대조)와 동떨어진 큰
+    값(-1.8%대)이 나왔다(실측). 15분봉은 하루에 ~96개 표본이 있어 특정 봉 하나가
+    비어도 바로 옆(최대 ±15분 오차) 봉으로 대체되므로 같은 문제가 재발하지 않는다.
 
-    close 배열 자체에 None이 섞여 나오는 날도 있다(실측: [28773.25, 28778.75, 29316.0,
-    None, 29105.75] — 뒤에서 두 번째가 None이라 그대로 쓰면 등락률이 null이 됨). 어느
-    세션이 비어 있는지는 그때그때 달라 위치를 예측할 수 없으므로, None을 걸러낸 뒤
-    "뒤에서 두 번째"를 다시 센다."""
+    meta.regularMarketTime을 "지금" 기준시각으로 쓴다(요청·응답 왕복 시간만큼 실제
+    현재시각과 아주 약간 다를 수 있지만 15분봉 오차 범위 안이라 무시 가능). 24시간
+    전과 12시간 넘게 떨어진 봉은 후보에서 아예 제외한다 — 그래야 조회 범위가
+    짧아 24시간 전 근방 데이터가 하나도 없는 경우(예: 5일치 요청이 실패해 최근
+    몇 개 봉만 온 경우) "지금과 거의 같은 시각" 봉을 엉뚱하게 전일가로 써서
+    등락률이 0%에 가깝게 잘못 나오는 걸 막는다 — 그럴 땐 그냥 None."""
     try:
         res = requests.get(NASDAQ_YAHOO_URL, headers=NASDAQ_REQUEST_HEADERS, timeout=10)
         res.raise_for_status()
         result = res.json()["chart"]["result"][0]
         latest = float(result["meta"]["regularMarketPrice"])
-        closes = [c for c in result["indicators"]["quote"][0]["close"] if c is not None]
-        previous = closes[-2] if len(closes) >= 2 else None
+        latest_ts = result["meta"]["regularMarketTime"]
+        timestamps = result["timestamp"]
+        closes = result["indicators"]["quote"][0]["close"]
+        target_ts = latest_ts - ROLLING_CHANGE_WINDOW_SECONDS
+        candidates = [
+            (abs(ts - target_ts), c) for ts, c in zip(timestamps, closes)
+            if c is not None and abs(ts - target_ts) <= ROLLING_CHANGE_WINDOW_SECONDS / 2
+        ]
+        previous = min(candidates, key=lambda pair: pair[0])[1] if candidates else None
     except Exception:
         return None
     return {"value": latest, "change_pct": _index_change(latest, float(previous) if previous else None)}
