@@ -1,11 +1,12 @@
 import threading
 import time
+from datetime import datetime
 
 import pandas as pd
 import pytest
 
 from backtesting import top35_job
-from backtesting.top35_job import Top35JobState, get_status, start_job
+from backtesting.top35_job import Top35JobState, _finished_successfully_today, _should_run_daily_update, get_status, start_job
 
 
 @pytest.fixture(autouse=True)
@@ -95,8 +96,8 @@ def test_job_records_per_stock_results_on_completion(monkeypatch):
     assert _wait_until(lambda: get_status()["status"] == "done")
     results = get_status()["results"]
     assert results == [
-        {"stock_code": "005930", "name": "삼성전자", "status": "ok"},
-        {"stock_code": "035420", "name": "NAVER", "status": "실패: API error"},
+        {"stock_code": "005930", "name": "삼성전자", "status": "ok", "daily_range": "", "minute_range": ""},
+        {"stock_code": "035420", "name": "NAVER", "status": "실패: API error", "daily_range": "", "minute_range": ""},
     ]
 
 
@@ -140,3 +141,48 @@ def test_progress_callback_updates_state_while_running(monkeypatch):
 
     hold.set()
     assert _wait_until(lambda: get_status()["status"] == "done")
+
+
+def test_should_run_daily_update_true_when_time_passed_and_not_run_today():
+    now = datetime(2026, 7, 25, 15, 40)
+    assert _should_run_daily_update(now, last_success_date=None, hour=15, minute=40) is True
+
+
+def test_should_run_daily_update_false_before_scheduled_time():
+    now = datetime(2026, 7, 25, 15, 39)
+    assert _should_run_daily_update(now, last_success_date=None, hour=15, minute=40) is False
+
+
+def test_should_run_daily_update_false_when_already_run_today():
+    now = datetime(2026, 7, 25, 16, 0)
+    assert _should_run_daily_update(now, last_success_date="2026-07-25", hour=15, minute=40) is False
+
+
+def test_should_run_daily_update_true_on_new_day_even_if_run_yesterday():
+    now = datetime(2026, 7, 26, 15, 40)
+    assert _should_run_daily_update(now, last_success_date="2026-07-25", hour=15, minute=40) is True
+
+
+# ---- _finished_successfully_today: 실패 시 같은 날 재시도가 필요한지 판단의 근거 ----
+
+def test_finished_successfully_today_true_when_done_and_finished_today():
+    status = {"status": "done", "finished_at": "2026-07-25T15:41:00"}
+    assert _finished_successfully_today(status, "2026-07-25") is True
+
+
+def test_finished_successfully_today_false_when_status_is_error():
+    # 실패한 날은 "성공한 적 없음"으로 취급돼야 스케줄러가 같은 날 안에서 재시도한다.
+    status = {"status": "error", "finished_at": "2026-07-25T15:41:00"}
+    assert _finished_successfully_today(status, "2026-07-25") is False
+
+
+def test_finished_successfully_today_false_when_done_status_is_from_a_previous_day():
+    # 모듈 전역 상태라 어제 성공한 "done"이 오늘 아직 갱신 전까지 남아있을 수 있다 —
+    # status만 보고 오늘도 성공한 것으로 착각하면 안 된다.
+    status = {"status": "done", "finished_at": "2026-07-24T15:41:00"}
+    assert _finished_successfully_today(status, "2026-07-25") is False
+
+
+def test_finished_successfully_today_false_when_idle():
+    status = {"status": "idle", "finished_at": None}
+    assert _finished_successfully_today(status, "2026-07-25") is False

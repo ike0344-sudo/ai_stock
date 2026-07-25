@@ -22,13 +22,29 @@ class DataLoadError(RuntimeError):
     pass
 
 
+def _atomic_to_csv(df: pd.DataFrame, path: str) -> None:
+    """to_csv(path)는 그 자리에서 파일을 덮어써, 쓰는 도중 같은 파일을 읽는 다른
+    프로세스(백테스트, 실전매매 루프)가 잘린/손상된 CSV를 받을 수 있다. 임시 파일에
+    쓴 뒤 os.replace로 원자적 교체(같은 볼륨에서 POSIX/Windows 모두 원자적)."""
+    tmp_path = f"{path}.tmp"
+    df.to_csv(tmp_path)
+    os.replace(tmp_path, path)
+
+
 def _cache_path(key: str, interval: str) -> str:
     return os.path.join(CACHE_DIR, f"{key}_{interval}.csv")
 
 
 def _is_cache_valid(cached: pd.DataFrame, start: date, end: date) -> bool:
-    """캐시가 요청 구간 [start, end]를 커버하는지 확인하는 순수 함수 (단위 테스트 대상)."""
+    """캐시가 요청 구간 [start, end]를 커버하는지 확인하는 순수 함수 (단위 테스트 대상).
+
+    캐시의 마지막 봉이 오늘 날짜면 무조건 무효 — 장중에 캐싱된 당일 봉은 아직
+    미완성(장중 값)일 수 있어, 나중에 같은 캐시를 "유효"로 재사용하면 미완성 봉을
+    그대로 쓰게 된다. updater.py는 use_cache=False로 이 경로를 아예 안 타지만,
+    이 함수를 쓰는 범용 load_history/load_index_history는 이 검사가 없으면 노출된다."""
     if cached.empty:
+        return False
+    if cached.index.max().date() >= date.today():
         return False
     return cached.index.min().date() <= start and cached.index.max().date() >= end
 
@@ -192,7 +208,7 @@ def load_history(
 
     if use_cache:
         os.makedirs(CACHE_DIR, exist_ok=True)
-        df.to_csv(cache_path)
+        _atomic_to_csv(df, cache_path)
 
     return df.loc[str(start):str(end)]
 
@@ -222,7 +238,7 @@ def load_full_minute_history(
 
     if use_cache:
         os.makedirs(CACHE_DIR, exist_ok=True)
-        df.to_csv(cache_path)
+        _atomic_to_csv(df, cache_path)
 
     return df
 
@@ -271,7 +287,7 @@ def load_index_history(
 
     if use_cache:
         os.makedirs(CACHE_DIR, exist_ok=True)
-        df.to_csv(cache_path)
+        _atomic_to_csv(df, cache_path)
 
     return df.loc[str(start):str(end)]
 
@@ -295,6 +311,6 @@ def load_full_index_minute_history(
 
     if use_cache:
         os.makedirs(CACHE_DIR, exist_ok=True)
-        df.to_csv(cache_path)
+        _atomic_to_csv(df, cache_path)
 
     return df

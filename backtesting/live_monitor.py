@@ -136,9 +136,13 @@ def check_candidate(
     if proba < proba_threshold:
         return None
 
+    # signal_time은 롤링 윈도우의 끝(지금) 대신 시작 시각으로 남긴다 — strategy3_scalp.
+    # check_candidate와 동일한 이유(조건을 충족시킨 3분 구간의 시작 시각이 사용자 감각과
+    # 더 맞음, 끝 시각 라벨은 2분 뒤로 밀려 보여 혼선이 있었다).
+    window_start = minute_df.index[-1] - timedelta(minutes=WINDOW_MINUTES - 1)
     return {
         "stock_code": stock_code,
-        "signal_time": minute_df.index[-1].isoformat(),
+        "signal_time": window_start.isoformat(),
         "price": float(minute_df["close"].iloc[-1]),
         "proba": float(proba),
     }

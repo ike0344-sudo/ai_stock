@@ -117,6 +117,8 @@ def test_update_top35_writes_per_stock_files_and_returns_summary(tmp_path, monke
     assert set(summary["status"]) == {"ok"}
     assert (tmp_path / "stocks" / "daily" / "000660.csv").exists()
     assert (tmp_path / "stocks" / "minute" / "005930.csv").exists()
+    assert set(summary["daily_range"]) == {"2026-01-01 ~ 2026-01-01"}
+    assert set(summary["minute_range"]) == {"2026-01-01 ~ 2026-01-01"}
 
 
 def test_update_top35_continues_after_per_stock_failure(monkeypatch, tmp_path):
@@ -141,6 +143,10 @@ def test_update_top35_continues_after_per_stock_failure(monkeypatch, tmp_path):
     statuses = dict(zip(summary["stock_code"], summary["status"]))
     assert statuses["000660"] != "ok"
     assert statuses["005930"] == "ok"
+
+    ranges = dict(zip(summary["stock_code"], summary["daily_range"]))
+    assert ranges["000660"] == ""  # 실패한 종목은 범위 없음
+    assert ranges["005930"] == "2026-01-01 ~ 2026-01-01"
 
 
 def test_update_top35_calls_on_progress_after_each_stock_including_failures(monkeypatch, tmp_path):

@@ -18,11 +18,17 @@ from kiwoom_client import KiwoomClient
 
 _lock = threading.Lock()
 _client: KiwoomClient | None = None
+_client_key: tuple[str, str, bool] | None = None
 
 
 def get_client(appkey: str, secretkey: str, is_mock: bool) -> KiwoomClient:
-    global _client
+    """appkey/secretkey/is_mock이 이전 호출과 다르면 새 클라이언트로 교체한다 —
+    그렇지 않으면 목/실전 전환이나 키 교체 후에도 첫 호출 때의 예전 자격증명을
+    가진 클라이언트를 계속 돌려주게 된다."""
+    global _client, _client_key
+    key = (appkey, secretkey, is_mock)
     with _lock:
-        if _client is None:
+        if _client is None or _client_key != key:
             _client = KiwoomClient(appkey, secretkey, is_mock=is_mock)
+            _client_key = key
         return _client

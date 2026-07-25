@@ -12,7 +12,7 @@ from typing import Callable
 import pandas as pd
 
 from kiwoom_client import KiwoomClient
-from .data_loader import load_full_minute_history, load_history
+from .data_loader import _atomic_to_csv, load_full_minute_history, load_history
 from .screener import top_by_trading_value
 
 
@@ -26,7 +26,7 @@ def _merge_dedupe_save(existing: pd.DataFrame, fresh: pd.DataFrame, path: str) -
     """겹치는 시점은 새로 받은(fresh) 값으로 덮어쓴다 (정정된 시세 반영)."""
     merged = pd.concat([existing, fresh]) if not existing.empty else fresh
     merged = merged[~merged.index.duplicated(keep="last")].sort_index()
-    merged.to_csv(path)
+    _atomic_to_csv(merged, path)
     return merged
 
 
@@ -74,6 +74,14 @@ def update_minute(
     return _merge_dedupe_save(existing, fresh, path)
 
 
+def _date_range_str(df: pd.DataFrame) -> str:
+    """대시보드 top35 결과 표의 "실제로 받아온 데이터 범위" 열에 쓰인다 — 빈 데이터는
+    빈 문자열(프론트엔드가 "-"로 표시)."""
+    if df.empty:
+        return ""
+    return f"{df.index.min().strftime('%Y-%m-%d')} ~ {df.index.max().strftime('%Y-%m-%d')}"
+
+
 def update_top35(
     client: KiwoomClient,
     data_dir: str = "data",
@@ -114,6 +122,7 @@ def update_top35(
                 {
                     "stock_code": stock_code, "name": name,
                     "daily_rows": len(daily_df), "minute_rows": len(minute_df), "status": "ok",
+                    "daily_range": _date_range_str(daily_df), "minute_range": _date_range_str(minute_df),
                 }
             )
         except Exception as exc:
@@ -121,6 +130,7 @@ def update_top35(
                 {
                     "stock_code": stock_code, "name": name,
                     "daily_rows": None, "minute_rows": None, "status": f"실패: {exc}",
+                    "daily_range": "", "minute_range": "",
                 }
             )
 
