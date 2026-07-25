@@ -196,6 +196,30 @@ def build_training_dataset(data_dir: str = "data") -> tuple[pd.DataFrame, pd.Ser
     return features_df, pd.Series(all_labels, dtype=int)
 
 
+def generate_signals(
+    df: pd.DataFrame, daily_df: pd.DataFrame, code: str, daily_top35: dict, regime_by_day: dict
+) -> pd.DataFrame:
+    """Strategy 프로토콜 어댑터 — detect_final_entries의 bool Series를 signal 컬럼(1/0)으로
+    매핑만 한다. daily_df/code/daily_top35/regime_by_day는 detect_final_entries가 이미
+    요구하던 추가 컨텍스트로, OHLCV df 하나만으로는 채울 수 없어 그대로 필수 인자로 둔다."""
+    entries = detect_final_entries(df, daily_df, code, daily_top35, regime_by_day)
+    out = df.copy()
+    out["signal"] = entries.astype(int)
+    return out
+
+
+generate_signals.name = "strategy_1"
+generate_signals.params = {
+    "window_minutes": WINDOW_MINUTES,
+    "min_trade_value": MIN_TRADE_VALUE,
+    "min_return_pct": MIN_RETURN_PCT,
+    "day_return_floor": DAY_RETURN_FLOOR,
+    "day_return_ceiling": DAY_RETURN_CEILING,
+    "drawdown_threshold": DRAWDOWN_THRESHOLD,
+    "top_n": TOP_N,
+}
+
+
 def train_and_save_final_model(
     data_dir: str = "data", model_path: str = "models/strategy_1/entry_filter_model.joblib", **model_kwargs
 ):

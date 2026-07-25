@@ -141,7 +141,7 @@ def test_run_compare_merges_rule_and_ml_results(monkeypatch):
 
     args = Namespace(
         stocks="005930", start="2026-01-01", end="2026-03-01", capital=10_000_000,
-        commission_rate=0.0001, slippage_rate=0.0001, csv=None, plot=None,
+        commission_rate=0.0001, slippage_rate=0.0001, tax_rate=0.0023, csv=None, plot=None,
         short_window="5,10", long_window="20,60",
         rsi_period="14", rsi_buy_below="30", rsi_sell_above="70",
         train_days=30, test_days=5, step_days=5, label_horizon_minutes=30,
@@ -169,7 +169,7 @@ def test_run_rule_forwards_local_data_flags_to_grid_search(monkeypatch):
 
     args = Namespace(
         stocks="005930", start="2026-01-01", end="2026-03-01", capital=10_000_000,
-        commission_rate=0.0001, slippage_rate=0.0001, csv=None, plot=None,
+        commission_rate=0.0001, slippage_rate=0.0001, tax_rate=0.0023, csv=None, plot=None,
         strategy="ma_crossover", interval="day", in_sample_ratio=0.7,
         short_window="5,10", long_window="20,60",
         no_local_data=False, data_dir="my_data",
@@ -194,7 +194,7 @@ def test_run_rule_disables_local_data_when_no_local_data_flag_set(monkeypatch):
 
     args = Namespace(
         stocks="005930", start="2026-01-01", end="2026-03-01", capital=10_000_000,
-        commission_rate=0.0001, slippage_rate=0.0001, csv=None, plot=None,
+        commission_rate=0.0001, slippage_rate=0.0001, tax_rate=0.0023, csv=None, plot=None,
         strategy="ma_crossover", interval="day", in_sample_ratio=0.7,
         short_window="5,10", long_window="20,60",
         no_local_data=True, data_dir="data",

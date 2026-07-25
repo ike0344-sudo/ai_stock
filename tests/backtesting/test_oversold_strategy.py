@@ -5,11 +5,13 @@ import pytest
 
 from backtesting.oversold_strategy import (
     HARD_STOP_PCT,
+    MA_WINDOW,
     TIME_EXIT_TRADING_DAYS,
     compute_ma,
     compute_tier_prices,
     count_trading_days,
     describe_strategy_2,
+    generate_signals,
     next_entry_tier,
     should_exit_by_hard_stop,
     should_exit_by_time,
@@ -111,6 +113,24 @@ def test_should_exit_by_time_false_within_window():
     today = date(2026, 7, 20)  # 1거래일째
 
     assert should_exit_by_time(entry, today, trading_days=TIME_EXIT_TRADING_DAYS) is False
+
+
+# ---- generate_signals (Strategy 프로토콜 어댑터) ----
+
+def test_generate_signals_maps_tier_touch_to_entry_and_ma_touch_to_exit():
+    closes = [100.0] * MA_WINDOW + [90.0, 100.0]  # 60선 형성 후 1차 밴드 터치 -> 복귀 시 60선 터치
+    df = pd.DataFrame({"close": closes})
+
+    out = generate_signals(df)
+
+    assert out["signal"].iloc[MA_WINDOW] == 1  # 90 <= 60선*0.91 => 1차 밴드 터치(진입)
+    assert out["signal"].iloc[MA_WINDOW + 1] == -1  # 가격 복귀로 60선 터치(청산)
+    assert (out["signal"].iloc[: MA_WINDOW - 1] == 0).all()  # 60선 미형성 구간(rolling 미충족)은 홀드
+
+
+def test_generate_signals_exposes_name_and_params():
+    assert generate_signals.name == "strategy_2"
+    assert generate_signals.params["ma_window"] == MA_WINDOW
 
 
 def test_should_exit_by_time_true_once_past_window():

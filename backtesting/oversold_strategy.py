@@ -115,3 +115,34 @@ def should_exit_by_time(entry_date: date, today: date, trading_days: int = TIME_
     """최초 진입일(entry_date, 1일째로 산입) 기준 trading_days 거래일이 지나도록
     아직 60선 터치 청산이 안 됐으면 시간청산 대상."""
     return count_trading_days(entry_date, today) > trading_days
+
+
+def generate_signals(df: pd.DataFrame) -> pd.DataFrame:
+    """Strategy 프로토콜 어댑터 — next_entry_tier/should_exit_by_touch를 봉마다 그대로
+    호출해 결과만 signal 컬럼(1=진입, -1=청산, 0=홀드)으로 매핑한다. 실제 매매는 여러
+    번 분할매수(filled_tier_count 누적)하지만, 이 어댑터는 새 계산 로직을 넣지 않기
+    위해 매 봉을 항상 filled_tier_count=0(첫 티어 터치 여부)으로만 확인한다 — 포지션
+    상태 추적(피라미딩 진행도)은 신호 생성이 아니라 백테스트/실행 엔진의 몫이다."""
+    ma = compute_ma(df)
+    out = df.copy()
+    out["signal"] = 0
+    for idx in out.index:
+        ma_value = ma.at[idx]
+        if pd.isna(ma_value):
+            continue
+        price = out.at[idx, "close"]
+        if should_exit_by_touch(price, ma_value):
+            out.at[idx, "signal"] = -1
+        elif next_entry_tier(0, price, ma_value) is not None:
+            out.at[idx, "signal"] = 1
+    return out
+
+
+generate_signals.name = "strategy_2"
+generate_signals.params = {
+    "ma_window": MA_WINDOW,
+    "bar_interval_minutes": BAR_INTERVAL_MINUTES,
+    "tier_band_pcts": TIER_BAND_PCTS,
+    "hard_stop_pct": HARD_STOP_PCT,
+    "time_exit_trading_days": TIME_EXIT_TRADING_DAYS,
+}

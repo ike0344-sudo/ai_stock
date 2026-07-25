@@ -13,8 +13,9 @@
 import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
+import pandas as pd
 from kiwoom_client import KiwoomClient
 
 from .breakout_reversal import detect_entries
@@ -65,11 +66,34 @@ def check_candidate(
     entries = detect_entries(minute_df, WINDOW_MINUTES, MIN_TRADE_VALUE, MIN_RETURN_PCT)
     if not bool(entries.iloc[-1]):
         return None
+    # signal_time은 관례상 롤링 윈도우의 끝(지금) 대신 시작 시각으로 남긴다 — "거래대금/
+    # 수익률 조건을 충족시킨 3분 구간이 언제부터인지"가 사용자에게 더 자연스러운 기준
+    # (실측: 특정 신호를 두고 "거래대금은 18분에 충족됐는데 왜..."처럼 시작 시각으로
+    # 되짚어 확인하는 경우가 있었음 — 끝 시각 라벨과 2분 어긋나 혼선이 있었다).
+    window_start = minute_df.index[-1] - timedelta(minutes=WINDOW_MINUTES - 1)
     return {
         "stock_code": stock_code,
-        "signal_time": minute_df.index[-1].isoformat(),
+        "signal_time": window_start.isoformat(),
         "price": float(minute_df["close"].iloc[-1]),
     }
+
+
+def generate_signals(df: pd.DataFrame) -> pd.DataFrame:
+    """Strategy 프로토콜 어댑터 — check_candidate가 내부에서 쓰는 detect_entries를
+    그대로 재사용해 signal 컬럼(1/0)으로 매핑만 한다(check_candidate 자체는 실시간
+    client 조회가 필요해 df 하나만으로 재현할 수 없음)."""
+    entries = detect_entries(df, WINDOW_MINUTES, MIN_TRADE_VALUE, MIN_RETURN_PCT)
+    out = df.copy()
+    out["signal"] = entries.astype(int)
+    return out
+
+
+generate_signals.name = "strategy_3"
+generate_signals.params = {
+    "window_minutes": WINDOW_MINUTES,
+    "min_trade_value": MIN_TRADE_VALUE,
+    "min_return_pct": MIN_RETURN_PCT,
+}
 
 
 def scan_watchlist_once(

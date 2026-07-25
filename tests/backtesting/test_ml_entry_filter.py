@@ -51,7 +51,9 @@ def test_extract_entry_features_n_day_high_distance_excludes_current_day():
 
 
 def test_build_training_examples_labels_by_final_outcome():
-    winning = _candles("2026-01-01", [100, 102, 104])  # take_profit
+    # 체결시점 보수화(진입/청산 모두 다음 봉 시가 체결)로 인해 익절까지 한 봉 더
+    # 여유가 필요해져, winning 경로에 상승 지속 봉을 추가했다.
+    winning = _candles("2026-01-01", [100, 101, 104, 108, 108])  # take_profit
     losing = _candles("2026-01-02", [100, 101.5, 98])  # stop_loss
 
     win_path = simulate_trade_path(winning, entry_idx=0, take_profit_pct=0.03, stop_loss_pct=0.02)

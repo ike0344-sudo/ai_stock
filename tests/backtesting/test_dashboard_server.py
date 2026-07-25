@@ -65,7 +65,7 @@ def running_server(tmp_path):
         return response, body
 
     yield SimpleNamespace(
-        get=get, post=post, state_root=state_root, risk_state_path=risk_state_path,
+        get=get, post=post, port=port, state_root=state_root, risk_state_path=risk_state_path,
         signals_path=signals_path, results_dir=results_dir, orders_path=orders_path,
         pnl_history_path=pnl_history_path, kill_switch_override_path=kill_switch_override_path,
     )
@@ -537,6 +537,45 @@ def test_post_sell_returns_400_when_quantity_missing(running_server):
     assert json.loads(body)["ok"] is False
 
 
+def test_post_sell_returns_403_and_skips_order_when_risk_manager_rejects(running_server, monkeypatch):
+    from backtesting import dashboard_server, risk_manager
+
+    sell_one_called = []
+    monkeypatch.setattr(
+        dashboard_server, "sell_order",
+        SimpleNamespace(sell_one=lambda *a, **k: sell_one_called.append(1) or {"return_code": 0, "return_msg": "ok"}),
+    )
+    monkeypatch.setattr(
+        dashboard_server.risk_manager, "check_order",
+        lambda order, portfolio, **kwargs: risk_manager.RiskDecision(
+            approved=False, reason="테스트 거부", rule_id="test_rule",
+        ),
+    )
+
+    response, body = running_server.post("/api/sell?code=005930&quantity=3")
+
+    assert response.status == 403
+    assert json.loads(body) == {"ok": False, "message": "테스트 거부"}
+    assert sell_one_called == []
+
+
+def test_post_sell_all_returns_403_and_skips_job_when_risk_manager_rejects(running_server, monkeypatch):
+    from backtesting import dashboard_server, risk_manager
+
+    monkeypatch.setattr(
+        dashboard_server.risk_manager, "check_order",
+        lambda order, portfolio, **kwargs: risk_manager.RiskDecision(
+            approved=False, reason="테스트 거부", rule_id="test_rule",
+        ),
+    )
+
+    response, body = running_server.post("/api/sell-all")
+
+    assert response.status == 403
+    assert json.loads(body) == {"started": False, "reason": "테스트 거부"}
+    assert sell_all_job.get_status()["status"] == "idle"
+
+
 def test_get_api_strategy_info_returns_rules_for_known_strategy(running_server):
     response, body = running_server.get("/api/strategy-info?strategy=strategy_1")
 
@@ -886,12 +925,120 @@ def test_post_api_strategy_start_refuses_when_already_running(running_server, mo
     assert popen_calls == []
 
 
+# ---- CSRF: Origin header check on POST ----
+
+def _post_with_origin(port: int, path: str, origin: str) -> tuple:
+    conn = HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.request("POST", path, headers={"Origin": origin})
+    response = conn.getresponse()
+    body = response.read()
+    conn.close()
+    return response, body
+
+
+def test_post_rejects_cross_origin_request(running_server):
+    response, body = _post_with_origin(
+        running_server.port, "/api/sell-all", "http://evil.example",
+    )
+
+    assert response.status == 403
+    assert json.loads(body)["ok"] is False
+
+
+def test_post_allows_same_origin_request(running_server):
+    response, body = _post_with_origin(
+        running_server.port, "/api/sell-all", f"http://127.0.0.1:{running_server.port}",
+    )
+
+    assert response.status != 403
+
+
 def test_post_api_strategy_stop_writes_stop_flag_file(running_server):
     strategy_dir = os.path.dirname(running_server.risk_state_path)
     stop_flag_path = os.path.join(strategy_dir, "stop_requested.json")
     assert not os.path.exists(stop_flag_path)
 
     response, body = running_server.post("/api/strategy/stop?strategy=strategy_1")
+
+    assert response.status == 200
+    assert json.loads(body) == {"stopped": True}
+    assert os.path.exists(stop_flag_path)
+
+
+# ---- tick collector: 대시보드에서 시작/중지/상태 ----
+
+def test_get_api_strategies_excludes_tick_collector_folder(running_server):
+    tick_dir = os.path.join(running_server.state_root, "tick_collector")
+    os.makedirs(tick_dir, exist_ok=True)
+    with open(os.path.join(tick_dir, "heartbeat.json"), "w", encoding="utf-8") as f:
+        json.dump({"updated_at": time.time()}, f)
+
+    response, body = running_server.get("/api/strategies")
+
+    payload = json.loads(body)
+    assert payload["strategies"] == ["strategy_1"]
+    assert "tick_collector" not in payload["running"]
+
+
+def test_get_tick_collector_status_returns_false_when_no_heartbeat(running_server):
+    response, body = running_server.get("/api/tick-collector-status")
+
+    assert response.status == 200
+    assert json.loads(body) == {"running": False}
+
+
+def test_get_tick_collector_status_returns_true_with_fresh_heartbeat(running_server):
+    tick_dir = os.path.join(running_server.state_root, "tick_collector")
+    os.makedirs(tick_dir, exist_ok=True)
+    with open(os.path.join(tick_dir, "heartbeat.json"), "w", encoding="utf-8") as f:
+        json.dump({"updated_at": time.time()}, f)
+
+    response, body = running_server.get("/api/tick-collector-status")
+
+    assert json.loads(body) == {"running": True}
+
+
+def test_post_tick_collector_start_spawns_collect_ticks_subprocess(running_server, monkeypatch):
+    captured = {}
+
+    class _FakePopen:
+        def __init__(self, command, **kwargs):
+            captured["command"] = command
+            captured["kwargs"] = kwargs
+
+    import backtesting.dashboard_server as dashboard_server_module
+    monkeypatch.setattr(dashboard_server_module.subprocess, "Popen", _FakePopen)
+
+    response, body = running_server.post("/api/tick-collector/start")
+
+    assert response.status == 200
+    assert json.loads(body) == {"started": True}
+    assert "collect-ticks" in captured["command"]
+    assert captured["kwargs"]["cwd"] == dashboard_server_module.PROJECT_ROOT
+
+
+def test_post_tick_collector_start_returns_409_when_already_running(running_server, monkeypatch):
+    tick_dir = os.path.join(running_server.state_root, "tick_collector")
+    os.makedirs(tick_dir, exist_ok=True)
+    with open(os.path.join(tick_dir, "heartbeat.json"), "w", encoding="utf-8") as f:
+        json.dump({"updated_at": time.time()}, f)
+
+    popen_calls = []
+    import backtesting.dashboard_server as dashboard_server_module
+    monkeypatch.setattr(dashboard_server_module.subprocess, "Popen", lambda *a, **k: popen_calls.append(1))
+
+    response, body = running_server.post("/api/tick-collector/start")
+
+    assert response.status == 409
+    assert json.loads(body) == {"started": False, "reason": "이미 실행 중입니다"}
+    assert popen_calls == []
+
+
+def test_post_tick_collector_stop_writes_stop_flag_file(running_server):
+    stop_flag_path = os.path.join(running_server.state_root, "tick_collector", "stop_requested.json")
+    assert not os.path.exists(stop_flag_path)
+
+    response, body = running_server.post("/api/tick-collector/stop")
 
     assert response.status == 200
     assert json.loads(body) == {"stopped": True}

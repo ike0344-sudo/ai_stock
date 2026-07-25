@@ -4,6 +4,7 @@ import time
 import pytest
 
 from backtesting import sell_all_job
+from backtesting.risk_manager import RiskDecision
 from backtesting.sell_all_job import SellAllJobState, get_status, start_job
 
 
@@ -31,6 +32,7 @@ class _FakeClient:
         self._order_errors = order_errors or {}
         self._block = block
         self.orders_placed = []
+        self.order_kwargs = []
 
     def get_account_evaluation(self):
         if self._block:
@@ -39,8 +41,9 @@ class _FakeClient:
             raise self._evaluation_error
         return {"stk_acnt_evlt_prst": self._holdings, "return_code": 0}
 
-    def place_order(self, code, side, quantity):
+    def place_order(self, code, side, quantity, **kwargs):
         self.orders_placed.append((code, side, quantity))
+        self.order_kwargs.append(kwargs)
         if code in self._order_errors:
             raise self._order_errors[code]
         return self._order_results.get(code, {"return_code": 0, "return_msg": "모의투자 매도주문완료"})
@@ -151,3 +154,41 @@ def test_job_records_error_status_when_evaluation_fails(monkeypatch):
 def test_job_results_empty_before_start():
     assert get_status()["results"] == []
     assert get_status()["status"] == "idle"
+
+
+def test_job_places_market_order_explicitly(monkeypatch):
+    # kiwoom_client.place_order 기본값이 지정가로 바뀌었으므로, 이 일괄매도가 원래
+    # 의도한 시장가 청산을 유지하려면 order_type="3"을 명시적으로 넘겨야 한다.
+    fake_client = _FakeClient(holdings=[_holding("005930", "삼성전자", 1)])
+    monkeypatch.setattr(sell_all_job, "KiwoomClient", lambda appkey, secretkey, is_mock: fake_client)
+
+    start_job("key", "secret", True)
+
+    assert _wait_until(lambda: get_status()["status"] == "done")
+    assert fake_client.order_kwargs == [{"order_type": "3"}]
+
+
+def test_job_skips_holding_when_risk_manager_rejects(monkeypatch):
+    fake_client = _FakeClient(holdings=[
+        _holding("005930", "삼성전자", 1),
+        _holding("000660", "SK하이닉스", 2),
+    ])
+    monkeypatch.setattr(sell_all_job, "KiwoomClient", lambda appkey, secretkey, is_mock: fake_client)
+
+    def fake_check_order(order, portfolio):
+        if order.code == "005930":
+            return RiskDecision(approved=False, reason="테스트 거부", rule_id="test_rule")
+        return RiskDecision(approved=True, reason="승인", rule_id="approved")
+
+    monkeypatch.setattr(sell_all_job, "check_order", fake_check_order)
+
+    start_job("key", "secret", True)
+
+    assert _wait_until(lambda: get_status()["status"] == "done")
+    assert fake_client.orders_placed == [("000660", "sell", 2)]
+    results = get_status()["results"]
+    assert results[0]["code"] == "005930"
+    assert results[0]["status"] == "error"
+    assert "테스트 거부" in results[0]["message"]
+    assert results[1]["code"] == "000660"
+    assert results[1]["status"] == "ok"

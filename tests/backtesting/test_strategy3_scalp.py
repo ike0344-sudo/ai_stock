@@ -11,6 +11,7 @@ from backtesting.strategy3_scalp import (
     MIN_TRADE_VALUE,
     check_candidate,
     describe_strategy_3,
+    generate_signals,
     run_scalp_monitor_loop,
     scan_watchlist_once,
 )
@@ -64,6 +65,27 @@ def test_check_candidate_returns_none_when_no_candles(monkeypatch):
     result = check_candidate(object(), "000001")
 
     assert result is None
+
+
+def test_generate_signals_maps_detect_entries_to_signal_column():
+    rising = _rising_minute(TODAY_STR, [100.5, 102, 105, 108, 111])
+
+    out = generate_signals(rising)
+
+    assert list(out["signal"]) == [0, 0, 1, 1, 1]  # check_candidate가 쓰는 detect_entries와 동일 조건
+
+
+def test_generate_signals_all_zero_when_conditions_not_met():
+    flat = _flat_minute(TODAY_STR, 5)
+
+    out = generate_signals(flat)
+
+    assert (out["signal"] == 0).all()
+
+
+def test_generate_signals_exposes_name_and_params():
+    assert generate_signals.name == "strategy_3"
+    assert generate_signals.params["min_return_pct"] == MIN_RETURN_PCT
 
 
 def test_scan_watchlist_once_dedupes_via_seen_signals(monkeypatch):

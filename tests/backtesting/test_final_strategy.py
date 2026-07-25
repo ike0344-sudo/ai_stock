@@ -13,6 +13,7 @@ from backtesting.final_strategy import (
     detect_final_entries,
     evaluate_tiered_exit_from_path,
     evaluate_tiered_exit_from_path_with_exit_idx,
+    generate_signals,
     train_and_save_final_model,
 )
 from backtesting.ml_entry_filter import FEATURE_COLUMNS, load_model, predict_quality_proba
@@ -76,6 +77,25 @@ def test_detect_final_entries_false_when_regime_is_down():
     entries = detect_final_entries(minute, daily, "000001", daily_top35, regime_by_day)
 
     assert not entries.any()
+
+
+# ---- generate_signals (Strategy 프로토콜 어댑터) ----
+
+def test_generate_signals_maps_detect_final_entries_to_signal_column():
+    daily = _daily(["2026-01-01", "2026-01-02"], [100, 999])
+    minute = _rising_minute("2026-01-02", [100.5, 102, 105, 108, 111, 115, 120])
+    daily_top35 = {pd.Timestamp("2026-01-02"): {"000001"}}
+    regime_by_day = {pd.Timestamp("2026-01-02"): True}
+
+    out = generate_signals(minute, daily, "000001", daily_top35, regime_by_day)
+
+    assert list(out["signal"]) == [0, 0, 0, 1, 1, 1, 1]
+    assert list(out["close"]) == list(minute["close"])  # 원본 컬럼은 그대로 보존
+
+
+def test_generate_signals_exposes_name_and_params():
+    assert generate_signals.name == "strategy_1"
+    assert generate_signals.params["top_n"] == TOP_N
 
 
 def test_evaluate_tiered_exit_from_path_all_tiers_hit_gives_positive_pnl():

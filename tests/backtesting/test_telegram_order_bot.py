@@ -46,9 +46,11 @@ class _StubKiwoomClient:
     def __init__(self, result):
         self._result = result
         self.calls = []
+        self.call_kwargs = []
 
-    def place_order(self, code, side, quantity):
+    def place_order(self, code, side, quantity, **kwargs):
         self.calls.append((code, side, quantity))
+        self.call_kwargs.append(kwargs)
         return self._result
 
 
@@ -88,6 +90,19 @@ def test_execute_order_sends_failure_message_and_does_not_invalidate_cache(monke
     assert "invalidated" not in captured
     assert "실패" in captured["message"]
     assert "잔고 부족" in captured["message"]
+
+
+def test_execute_order_places_market_order_explicitly(monkeypatch):
+    # kiwoom_client.place_order 기본값이 지정가로 바뀌었으므로, 텔레그램 명령이 원래
+    # 의도한 시장가 주문을 유지하려면 order_type="3"을 명시적으로 넘겨야 한다.
+    stub_client = _StubKiwoomClient({"return_code": 0})
+    monkeypatch.setattr(telegram_order_bot, "KiwoomClient", lambda appkey, secretkey, is_mock: stub_client)
+    monkeypatch.setattr(telegram_order_bot, "invalidate_cache", lambda: None)
+    monkeypatch.setattr(telegram_order_bot, "send_telegram", lambda *a, **k: True)
+
+    _execute_order("buy", "005930", 10, "APPKEY", "SECRET", True, "TOKEN", "CHAT")
+
+    assert stub_client.call_kwargs == [{"order_type": "3"}]
 
 
 # --- _handle_update (인가 필터링) ---

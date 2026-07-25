@@ -5,3 +5,4 @@ mplfinance
 pytest
 scikit-learn
 websocket-client
+pyyaml

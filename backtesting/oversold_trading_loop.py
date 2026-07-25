@@ -132,7 +132,7 @@ def process_oversold_entry_once(
     order_log_path: str = DEFAULT_ORDER_LOG_PATH,
     now: datetime | None = None,
 ) -> OversoldEpisodeState:
-    """현재가가 다음 미체결 밴드를 건드렸으면 그 티어만큼 시장가로 매수한다."""
+    """현재가가 다음 미체결 밴드를 건드렸으면 그 티어만큼 지정가로 매수한다."""
     now = now or datetime.now()
     tier = next_entry_tier(episode.filled_tier_count, current_price, ma_value)
     if tier is None:
@@ -140,7 +140,9 @@ def process_oversold_entry_once(
 
     quantity = max(1, int(tier_capital_krw // current_price))
     try:
-        order_response = client.place_order(STOCK_CODE, side="buy", quantity=quantity)
+        order_response = client.place_order(
+            STOCK_CODE, side="buy", quantity=quantity, price=current_price, order_type="0",
+        )
     except Exception as exc:
         notify_error(STRATEGY_NAME, f"{STOCK_CODE} {tier}차 매수 주문 실패", exc, bot_token, chat_id)
         return episode
@@ -194,7 +196,9 @@ def process_oversold_exit_once(
 
     quantity = position.total_quantity
     try:
-        order_response = client.place_order(STOCK_CODE, side="sell", quantity=quantity)
+        order_response = client.place_order(
+            STOCK_CODE, side="sell", quantity=quantity, price=current_price, order_type="0",
+        )
     except Exception as exc:
         notify_error(STRATEGY_NAME, f"{STOCK_CODE} 매도 주문 실패({reason})", exc, bot_token, chat_id)
         return episode
@@ -300,11 +304,17 @@ def run_oversold_trading_loop(
                     continue
 
             if ma_value is not None:
+                was_open = episode.filled_tier_count > 0
                 episode = process_oversold_exit_once(
                     client, risk_state, episode, ma_value, current_price, max_daily_loss_krw,
                     bot_token, chat_id, order_log_path=order_log_path, today=today,
                 )
-                if not risk_state.kill_switch_active:
+                just_closed = was_open and episode.filled_tier_count == 0
+                # 하드스톱 발동가(평단*0.8)는 항상 다음 미체결 밴드가(60선*0.91 이상)보다
+                # 낮아, 방금 청산과 같은 current_price로 진입을 확인하면 그 자리에서 곧바로
+                # 재매수(휩쏘)돼버린다 — 이번 폴링에서 막 청산됐으면 진입 확인을 건너뛰고
+                # 다음 폴링(새 가격)부터 다시 신규 진입을 본다.
+                if not risk_state.kill_switch_active and not just_closed:
                     episode = process_oversold_entry_once(
                         client, risk_state, episode, ma_value, current_price, tier_capital_krw,
                         bot_token, chat_id, order_log_path=order_log_path,

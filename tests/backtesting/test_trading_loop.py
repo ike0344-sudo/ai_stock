@@ -178,6 +178,7 @@ def test_compute_sell_quantity_final_leg_sells_exact_remainder_avoiding_rounding
 class _StubOrderClient:
     def __init__(self, raise_on_order=False, reject_order=False):
         self.orders = []
+        self.order_kwargs = []
         self.raise_on_order = raise_on_order
         self.reject_order = reject_order
 
@@ -185,6 +186,7 @@ class _StubOrderClient:
         if self.raise_on_order:
             raise RuntimeError("주문 실패")
         self.orders.append({"code": stock_code, "side": side, "quantity": quantity})
+        self.order_kwargs.append(kwargs)
         if self.reject_order:
             return {"ord_no": "", "return_code": 20, "return_msg": "주문 거부"}
         return {"ord_no": "1", "return_code": 0}
@@ -206,6 +208,7 @@ def test_process_entries_once_places_buy_order_and_updates_risk_state(monkeypatc
 
     assert len(executed) == 1
     assert client.orders == [{"code": "005930", "side": "buy", "quantity": 28}]  # 2,000,000 // 70000
+    assert client.order_kwargs == [{"price": 70000, "order_type": "0"}]  # 지정가(슬리피지 통제)
     assert len(risk_state.open_positions) == 1
     assert risk_state.open_positions[0].total_quantity == 28
 
@@ -368,6 +371,7 @@ class _StubQuoteClient:
     def __init__(self, price, raise_on_quote=False, raise_on_order=False, reject_order=False):
         self.price = price
         self.orders = []
+        self.order_kwargs = []
         self.raise_on_quote = raise_on_quote
         self.raise_on_order = raise_on_order
         self.reject_order = reject_order
@@ -382,6 +386,7 @@ class _StubQuoteClient:
         if self.raise_on_order:
             raise RuntimeError("주문 실패")
         self.orders.append({"code": stock_code, "side": side, "quantity": quantity})
+        self.order_kwargs.append(kwargs)
         if self.reject_order:
             return {"ord_no": "", "return_code": 20, "return_msg": "주문 거부"}
         return {"ord_no": "1", "return_code": 0}
@@ -397,6 +402,7 @@ def test_process_exits_once_sells_all_on_stop_loss(monkeypatch):
     assert len(executed) == 1
     assert executed[0]["reason"] == "stop_loss"
     assert client.orders == [{"code": "005930", "side": "sell", "quantity": 20}]
+    assert client.order_kwargs == [{"price": 97.5, "order_type": "0"}]  # 지정가(슬리피지 통제)
     assert risk_state.open_positions == []  # 전량 청산 -> 슬롯 해제
 
 

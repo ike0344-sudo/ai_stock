@@ -19,8 +19,11 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
+from .types import is_price_limit_locked, prev_day_close_series
+
 DEFAULT_COMMISSION_RATE = 0.00015
 DEFAULT_SLIPPAGE_RATE = 0.001
+DEFAULT_TAX_RATE = 0.0023  # 매도 증권거래세 0.23% (매도 시에만 부과)
 
 
 def detect_entries(
@@ -31,11 +34,15 @@ def detect_entries(
 ) -> pd.Series:
     """day별로 나눠 롤링 거래대금·수익률 조건을 계산 (거래일 경계를 넘어 섞이지 않음).
 
-    거래대금은 분봉에 별도 필드가 없어 close*volume으로 근사한다.
+    거래대금은 candles에 "value"(분봉별 실제 체결가×체결량 누적합) 컬럼이 있으면 그대로
+    쓰고, 없으면 close*volume으로 근사한다 — REST/과거이력 분봉은 체결 단위 내역이 없어
+    근사만 가능하지만, realtime_feed.CandleAggregator가 조립한 분봉은 틱마다 정확한
+    체결대금을 누적해 "value" 컬럼으로 제공한다.
     """
     parts = []
     for _, day_df in candles.groupby(candles.index.normalize()):
-        trade_value = (day_df["close"] * day_df["volume"]).rolling(window_minutes).sum()
+        per_minute_value = day_df["value"] if "value" in day_df.columns else day_df["close"] * day_df["volume"]
+        trade_value = per_minute_value.rolling(window_minutes).sum()
         ret = day_df["close"].pct_change(window_minutes - 1)
         parts.append((trade_value >= min_trade_value) & (ret >= min_return_pct))
     if not parts:
@@ -58,6 +65,18 @@ class TradePath:
     path: list[tuple] = field(default_factory=list)
 
 
+def _next_fillable_bar(candles: pd.DataFrame, from_idx: int, day: pd.Timestamp, prev_close: float) -> int | None:
+    """from_idx부터 같은 거래일 안에서 상하한가 고정이 아닌 첫 봉의 인덱스를 반환.
+    같은 날 안에 그런 봉이 없으면 None."""
+    n = len(candles)
+    j = from_idx
+    while j < n and candles.index[j].normalize() == day:
+        if not is_price_limit_locked(candles["open"].iloc[j], prev_close):
+            return j
+        j += 1
+    return None
+
+
 def simulate_trade_path(
     candles: pd.DataFrame,
     entry_idx: int,
@@ -65,49 +84,79 @@ def simulate_trade_path(
     stop_loss_pct: float = 0.02,
     commission_rate: float = DEFAULT_COMMISSION_RATE,
     slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
+    tax_rate: float = DEFAULT_TAX_RATE,
 ) -> TradePath:
-    """entry_idx에 매수했다고 가정하고, 같은 거래일 안에서 익절/손절/EOD 중 먼저
-    도달하는 지점까지 전진 시뮬레이션. 경로상 매 분의 순수익률을 기록해 ML
+    """entry_idx에서 진입 신호가 확인됐다고 보고, 같은 거래일 안에서 익절/손절/EOD 중
+    먼저 도달하는 지점까지 전진 시뮬레이션. 경로상 매 분의 순수익률을 기록해 ML
     반전분류기의 학습 데이터로 재사용할 수 있게 한다 (본전손절 로직 자체는 여기 없음
     — 이 함수는 "ML 없이 그대로 뒀다면 어떻게 됐을지"의 기준선/라벨 소스).
+
+    체결시점 보수화: 진입/청산 모두 신호가 확인된 봉이 아니라 그 다음 봉의 시가로
+    체결한다. 다음 봉이 상하한가로 고정돼 있으면 같은 날 안에서 처음으로 체결
+    가능한 봉까지 넘어가고, 당일 안에 그런 봉이 전혀 없으면(신호가 당일 마지막
+    봉이거나 이후 계속 고정) 신호봉 자체의 종가로 체결한다(장마감 동시호가 가정).
+    entry_idx 필드는 다른 모듈(ml_entry_filter/ml_reversal)이 이 인덱스로 진입 시점
+    피처를 뽑으므로 신호가 확인된 봉을 그대로 가리킨다. exit_idx는 실제 체결이 일어난
+    봉(익절/손절 체결이 다음 봉으로 이연된 경우 그 봉, EOD면 신호봉 자신)을 가리킨다.
     """
-    entry_price = candles["close"].iloc[entry_idx] * (1 + slippage_rate)
-    entry_time = candles.index[entry_idx]
-    entry_day = entry_time.normalize()
+    entry_day = candles.index[entry_idx].normalize()
+    n = len(candles)
+    prev_close_by_day = prev_day_close_series(candles)
+    prev_close = prev_close_by_day.get(entry_day, float("nan"))
+
+    entry_fill_idx = _next_fillable_bar(candles, entry_idx + 1, entry_day, prev_close)
+    if entry_fill_idx is not None:
+        entry_price = candles["open"].iloc[entry_fill_idx] * (1 + slippage_rate)
+        entry_fill_time = candles.index[entry_fill_idx]
+        walk_start = entry_fill_idx
+    else:
+        entry_price = candles["close"].iloc[entry_idx] * (1 + slippage_rate)
+        entry_fill_time = candles.index[entry_idx]
+        walk_start = entry_idx
 
     two_way_commission = commission_rate * 2
-    n = len(candles)
     path: list[tuple] = []
     peak_pct = 0.0
-    exit_idx = entry_idx
+    trigger_idx = walk_start
     exit_reason = "eod"
 
-    for j in range(entry_idx, n):
+    for j in range(walk_start, n):
         ts = candles.index[j]
         if ts.normalize() != entry_day:
-            exit_idx = j - 1
+            trigger_idx = j - 1
             exit_reason = "eod"
             break
 
         exit_price_if_now = candles["close"].iloc[j] * (1 - slippage_rate)
-        net_pct = (exit_price_if_now - entry_price) / entry_price - two_way_commission
+        net_pct = (exit_price_if_now - entry_price) / entry_price - two_way_commission - tax_rate
         peak_pct = max(peak_pct, net_pct)
         path.append((j, net_pct, peak_pct))
 
         if net_pct >= take_profit_pct:
-            exit_idx, exit_reason = j, "take_profit"
+            trigger_idx, exit_reason = j, "take_profit"
             break
         if net_pct <= -stop_loss_pct:
-            exit_idx, exit_reason = j, "stop_loss"
+            trigger_idx, exit_reason = j, "stop_loss"
             break
     else:
-        exit_idx, exit_reason = n - 1, "eod"
+        trigger_idx, exit_reason = n - 1, "eod"
 
-    exit_price = candles["close"].iloc[exit_idx] * (1 - slippage_rate)
-    net_pnl_pct = (exit_price - entry_price) / entry_price - two_way_commission
+    if exit_reason in ("take_profit", "stop_loss"):
+        exit_fill_idx = _next_fillable_bar(candles, trigger_idx + 1, entry_day, prev_close)
+        if exit_fill_idx is not None:
+            exit_idx = exit_fill_idx
+            exit_price = candles["open"].iloc[exit_fill_idx] * (1 - slippage_rate)
+        else:
+            exit_idx = trigger_idx
+            exit_price = candles["close"].iloc[trigger_idx] * (1 - slippage_rate)
+    else:
+        exit_idx = trigger_idx
+        exit_price = candles["close"].iloc[trigger_idx] * (1 - slippage_rate)
+
+    net_pnl_pct = (exit_price - entry_price) / entry_price - two_way_commission - tax_rate
 
     return TradePath(
-        entry_idx=entry_idx, entry_time=entry_time, entry_price=entry_price,
+        entry_idx=entry_idx, entry_time=entry_fill_time, entry_price=entry_price,
         exit_idx=exit_idx, exit_time=candles.index[exit_idx], exit_price=exit_price,
         exit_reason=exit_reason, net_pnl_pct=net_pnl_pct, peak_pnl_pct=peak_pct, path=path,
     )
@@ -120,11 +169,12 @@ def simulate_all_entries(
     stop_loss_pct: float = 0.02,
     commission_rate: float = DEFAULT_COMMISSION_RATE,
     slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
+    tax_rate: float = DEFAULT_TAX_RATE,
 ) -> list[TradePath]:
     """entries가 True인 모든 시점에 대해 simulate_trade_path를 실행 (고정 규칙 기준선)."""
     entry_positions = [i for i, v in enumerate(entries.to_numpy()) if v]
     return [
-        simulate_trade_path(candles, i, take_profit_pct, stop_loss_pct, commission_rate, slippage_rate)
+        simulate_trade_path(candles, i, take_profit_pct, stop_loss_pct, commission_rate, slippage_rate, tax_rate)
         for i in entry_positions
     ]
 
@@ -153,18 +203,23 @@ def simulate_partial_exit_trade(
     trailing_stop_pct: float = 0.01,
     commission_rate: float = DEFAULT_COMMISSION_RATE,
     slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
+    tax_rate: float = DEFAULT_TAX_RATE,
 ) -> PartialExitTrade:
     """take_profit_pct 도달 시 전량 청산 대신 split_ratio만큼만 매도하고, 나머지는
     고점 대비 trailing_stop_pct(가격 기준) 하락 시 청산하는 트레일링 스탑으로 전환.
 
     take_profit_pct 도달 전에 손절(-stop_loss_pct)이나 EOD가 먼저 오면 분할 자체가
     발동하지 않고(triggered=False) 전량이 그 지점에서 청산된다.
+
+    상하한가로 가격이 고정된 봉(전일 종가 대비 ±30% 근접)에서는 체결 불가로 보고
+    그 봉의 신호는 무시한 채 다음 봉에서 재평가한다.
     """
     entry_price = candles["close"].iloc[entry_idx] * (1 + slippage_rate)
     entry_time = candles.index[entry_idx]
     entry_day = entry_time.normalize()
     two_way_commission = commission_rate * 2
     n = len(candles)
+    prev_close = prev_day_close_series(candles).get(entry_day, float("nan"))
 
     trigger_idx = None
     phase1_exit_idx, phase1_exit_reason = entry_idx, "eod"
@@ -174,8 +229,10 @@ def simulate_partial_exit_trade(
         if ts.normalize() != entry_day:
             phase1_exit_idx, phase1_exit_reason = j - 1, "eod"
             break
+        if is_price_limit_locked(candles["close"].iloc[j], prev_close):
+            continue
         price_now = candles["close"].iloc[j] * (1 - slippage_rate)
-        net_pct = (price_now - entry_price) / entry_price - two_way_commission
+        net_pct = (price_now - entry_price) / entry_price - two_way_commission - tax_rate
         if net_pct >= take_profit_pct:
             trigger_idx = j
             phase1_exit_idx, phase1_exit_reason = j, "take_profit_partial"
@@ -188,7 +245,7 @@ def simulate_partial_exit_trade(
 
     if trigger_idx is None:
         exit_price = candles["close"].iloc[phase1_exit_idx] * (1 - slippage_rate)
-        overall_pct = (exit_price - entry_price) / entry_price - two_way_commission
+        overall_pct = (exit_price - entry_price) / entry_price - two_way_commission - tax_rate
         return PartialExitTrade(
             entry_idx=entry_idx, entry_time=entry_time, entry_price=entry_price,
             triggered=False,
@@ -198,7 +255,7 @@ def simulate_partial_exit_trade(
         )
 
     trigger_price = candles["close"].iloc[trigger_idx] * (1 - slippage_rate)
-    leg1_pct = (trigger_price - entry_price) / entry_price - two_way_commission
+    leg1_pct = (trigger_price - entry_price) / entry_price - two_way_commission - tax_rate
 
     peak_price = candles["close"].iloc[trigger_idx]
     remainder_exit_idx, remainder_exit_reason = trigger_idx, "eod"
@@ -210,6 +267,8 @@ def simulate_partial_exit_trade(
             break
         price_now = candles["close"].iloc[j]
         peak_price = max(peak_price, price_now)
+        if is_price_limit_locked(price_now, prev_close):
+            continue
         drawdown_from_peak = (peak_price - price_now) / peak_price
         if drawdown_from_peak >= trailing_stop_pct:
             remainder_exit_idx, remainder_exit_reason = j, "trailing_stop"
@@ -218,7 +277,7 @@ def simulate_partial_exit_trade(
         remainder_exit_idx, remainder_exit_reason = n - 1, "eod"
 
     remainder_exit_price = candles["close"].iloc[remainder_exit_idx] * (1 - slippage_rate)
-    leg2_pct = (remainder_exit_price - entry_price) / entry_price - two_way_commission
+    leg2_pct = (remainder_exit_price - entry_price) / entry_price - two_way_commission - tax_rate
 
     overall_pct = split_ratio * leg1_pct + (1 - split_ratio) * leg2_pct
 
@@ -250,18 +309,22 @@ def simulate_tiered_exit_trade(
     stop_loss_pct: float = 0.02,
     commission_rate: float = DEFAULT_COMMISSION_RATE,
     slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
+    tax_rate: float = DEFAULT_TAX_RATE,
 ) -> TieredExitTrade:
     """익절 구간(tiers)마다 균등 비율(1/len(tiers))씩 분할매도하고, 한 번이라도 분할매도가
     발동("무장")한 뒤에는 나머지 잔량을 손절 대신 진입가(본전) 재도달 시 청산한다.
 
     무장 전(아직 한 tier도 안 닿음)에는 -stop_loss_pct에서 잔량 전체를 손절한다.
     tiers를 모두 소진하거나 본전청산/손절/EOD 중 하나에 닿으면 종료.
+
+    상하한가로 가격이 고정된 봉에서는 체결 불가로 보고 그 봉의 트리거는 건너뛴다.
     """
     entry_price = candles["close"].iloc[entry_idx] * (1 + slippage_rate)
     entry_time = candles.index[entry_idx]
     entry_day = entry_time.normalize()
     two_way_commission = commission_rate * 2
     n = len(candles)
+    prev_close = prev_day_close_series(candles).get(entry_day, float("nan"))
 
     tier_fraction = 1.0 / len(tiers)
     tiers_remaining = list(tiers)
@@ -270,15 +333,18 @@ def simulate_tiered_exit_trade(
     legs: list[tuple] = []
 
     last_idx_in_day = entry_idx
-    last_net_pct_in_day = -two_way_commission
+    last_net_pct_in_day = -two_way_commission - tax_rate
 
     for j in range(entry_idx, n):
         ts = candles.index[j]
         if ts.normalize() != entry_day:
             break
 
+        if is_price_limit_locked(candles["close"].iloc[j], prev_close):
+            continue
+
         price_now = candles["close"].iloc[j] * (1 - slippage_rate)
-        net_pct = (price_now - entry_price) / entry_price - two_way_commission
+        net_pct = (price_now - entry_price) / entry_price - two_way_commission - tax_rate
         last_idx_in_day, last_net_pct_in_day = j, net_pct
 
         if not armed and net_pct <= -stop_loss_pct:
@@ -320,10 +386,11 @@ def simulate_all_tiered_exits(
     stop_loss_pct: float = 0.02,
     commission_rate: float = DEFAULT_COMMISSION_RATE,
     slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
+    tax_rate: float = DEFAULT_TAX_RATE,
 ) -> list[TieredExitTrade]:
     entry_positions = [i for i, v in enumerate(entries.to_numpy()) if v]
     return [
-        simulate_tiered_exit_trade(candles, i, tiers, stop_loss_pct, commission_rate, slippage_rate)
+        simulate_tiered_exit_trade(candles, i, tiers, stop_loss_pct, commission_rate, slippage_rate, tax_rate)
         for i in entry_positions
     ]
 
@@ -337,12 +404,13 @@ def simulate_all_partial_exits(
     trailing_stop_pct: float = 0.01,
     commission_rate: float = DEFAULT_COMMISSION_RATE,
     slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
+    tax_rate: float = DEFAULT_TAX_RATE,
 ) -> list[PartialExitTrade]:
     entry_positions = [i for i, v in enumerate(entries.to_numpy()) if v]
     return [
         simulate_partial_exit_trade(
             candles, i, take_profit_pct, stop_loss_pct, split_ratio, trailing_stop_pct,
-            commission_rate, slippage_rate,
+            commission_rate, slippage_rate, tax_rate,
         )
         for i in entry_positions
     ]

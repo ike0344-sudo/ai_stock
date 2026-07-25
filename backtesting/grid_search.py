@@ -31,6 +31,7 @@ def run_rule_based(
     initial_capital: float = 10_000_000,
     commission_rate: float = 0.00015,
     slippage_rate: float = 0.001,
+    tax_rate: float = simulator.DEFAULT_TAX_RATE,
     in_sample_ratio: float = 0.7,
     use_local_data: bool = True,
     data_dir: str = "data",
@@ -68,10 +69,12 @@ def run_rule_based(
                 continue  # 잘못된 파라미터 조합 (예: short_window >= long_window)
 
             trades_is = simulator.run(
-                in_sample, signals_is, commission_rate, slippage_rate, initial_capital, stock_code
+                in_sample, signals_is, commission_rate, slippage_rate, initial_capital, stock_code,
+                tax_rate=tax_rate,
             )
             trades_oos = simulator.run(
-                out_of_sample, signals_oos, commission_rate, slippage_rate, initial_capital, stock_code
+                out_of_sample, signals_oos, commission_rate, slippage_rate, initial_capital, stock_code,
+                tax_rate=tax_rate,
             )
 
             results.append(
@@ -100,6 +103,7 @@ def run_ml_walk_forward(
     initial_capital: float = 10_000_000,
     commission_rate: float = 0.00015,
     slippage_rate: float = 0.001,
+    tax_rate: float = simulator.DEFAULT_TAX_RATE,
     train_days: int = 30,
     test_days: int = 5,
     step_days: int = 5,
@@ -160,7 +164,7 @@ def run_ml_walk_forward(
                 train_signals = strategy.evaluate(train_candles, eval_params)
                 train_trades = simulator.run(
                     train_candles, train_signals, commission_rate, slippage_rate,
-                    initial_capital, stock_code, force_eod_close=True,
+                    initial_capital, stock_code, force_eod_close=True, tax_rate=tax_rate,
                 )
                 is_metrics_list.append(metrics.compute(train_trades, train_candles, initial_capital))
                 is_benchmark_list.append(metrics.buy_and_hold_return_pct(train_candles))
@@ -168,7 +172,7 @@ def run_ml_walk_forward(
                 test_signals = strategy.evaluate(test_candles, eval_params)
                 test_trades = simulator.run(
                     test_candles, test_signals, commission_rate, slippage_rate,
-                    initial_capital, stock_code, force_eod_close=True,
+                    initial_capital, stock_code, force_eod_close=True, tax_rate=tax_rate,
                 )
                 oos_metrics_list.append(metrics.compute(test_trades, test_candles, initial_capital))
                 oos_benchmark_list.append(metrics.buy_and_hold_return_pct(test_candles))

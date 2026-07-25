@@ -63,7 +63,7 @@ def _execute_order(
     bot_token: str, chat_id: str,
 ) -> None:
     client = KiwoomClient(appkey, secretkey, is_mock=is_mock)
-    result = client.place_order(code, side, quantity)
+    result = client.place_order(code, side, quantity, order_type="3")
     ok = result.get("return_code") == 0
     if ok:
         invalidate_cache()

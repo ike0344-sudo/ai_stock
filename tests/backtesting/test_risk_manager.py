@@ -4,8 +4,12 @@ import pytest
 
 from backtesting.risk_manager import (
     OpenPosition,
+    OrderRequest,
+    PortfolioState,
     RiskState,
     can_open_new_position,
+    check_order,
+    get_position_size,
     load_state,
     record_partial_exit,
     record_position_added_to,
@@ -14,6 +18,15 @@ from backtesting.risk_manager import (
     roll_to_new_day_if_needed,
     save_state,
 )
+
+BASE_LIMITS = {
+    "max_concurrent_positions": 5,
+    "risk_pct_per_trade": 0.01,
+    "max_symbol_weight_pct": None,
+    "max_order_notional": None,
+    "reentry_cooldown_sec": None,
+    "max_consecutive_losses": None,
+}
 
 
 def _state_with_positions(n: int, trading_date: str = "2026-07-20") -> RiskState:
@@ -266,3 +279,183 @@ def test_roll_to_new_day_appends_multiple_days_across_calls(tmp_path):
     assert len(lines) == 2
     assert json.loads(lines[0]) == {"date": "2026-07-18", "realized_pnl_krw": 10_000.0}
     assert json.loads(lines[1]) == {"date": "2026-07-19", "realized_pnl_krw": -5_000.0}
+
+
+def test_roll_to_new_day_resets_consecutive_losses_and_last_exit():
+    state = RiskState(trading_date="2026-07-19", consecutive_losses=3, last_exit={"005930": {"time": "x", "was_loss": True}})
+
+    rolled = roll_to_new_day_if_needed(state, today="2026-07-20")
+
+    assert rolled.consecutive_losses == 0
+    assert rolled.last_exit == {}
+
+
+def test_record_partial_exit_tracks_consecutive_losses_and_last_exit_only_on_final_leg():
+    state = RiskState(trading_date="2026-07-20")
+    record_position_opened(state, "005930", "t1", allocated_capital=1_000_000, entry_price=100)
+
+    record_partial_exit(state, "005930", exit_price=90, sold_fraction=0.5, max_daily_loss_krw=1_000_000, exit_time="2026-07-20T09:10:00")
+    assert state.consecutive_losses == 0  # 아직 전량청산 아님
+    assert "005930" not in state.last_exit
+
+    record_partial_exit(state, "005930", exit_price=90, sold_fraction=0.5, max_daily_loss_krw=1_000_000, exit_time="2026-07-20T09:11:00")
+    assert state.consecutive_losses == 1
+    assert state.last_exit["005930"] == {"time": "2026-07-20T09:11:00", "was_loss": True}
+
+
+def test_record_position_closed_resets_consecutive_losses_on_win():
+    state = RiskState(trading_date="2026-07-20", consecutive_losses=2)
+    record_position_opened(state, "005930", "t1", allocated_capital=1_000_000, entry_price=100)
+
+    record_position_closed(state, "005930", exit_price=110, max_daily_loss_krw=1_000_000, exit_time="2026-07-20T09:11:00")
+
+    assert state.consecutive_losses == 0
+    assert state.last_exit["005930"]["was_loss"] is False
+
+
+def _portfolio(risk_state=None, total_capital_krw: float = 10_000_000) -> PortfolioState:
+    return PortfolioState(risk_state=risk_state or RiskState(trading_date="2026-07-20"), total_capital_krw=total_capital_krw)
+
+
+def test_check_order_rejects_entry_without_stop():
+    order = OrderRequest(code="005930", side="buy", quantity=10, price=70000, stop=None)
+
+    decision = check_order(order, _portfolio(), limits=BASE_LIMITS)
+
+    assert decision.approved is False
+    assert decision.rule_id == "no_stop_loss"
+    assert decision.reason
+
+
+def test_check_order_approves_valid_entry_with_stop():
+    order = OrderRequest(code="005930", side="buy", quantity=10, price=70000, stop=68000)
+
+    decision = check_order(order, _portfolio(), limits=BASE_LIMITS)
+
+    assert decision.approved is True
+    assert decision.rule_id == "approved"
+
+
+def test_check_order_sell_always_approved_even_without_stop():
+    order = OrderRequest(code="005930", side="sell", quantity=10, price=70000, stop=None)
+
+    decision = check_order(order, _portfolio(), limits=BASE_LIMITS)
+
+    assert decision.approved is True
+    assert decision.rule_id == "sell_always_allowed"
+
+
+def test_check_order_rejects_when_kill_switch_active():
+    risk_state = RiskState(trading_date="2026-07-20", kill_switch_active=True)
+    order = OrderRequest(code="005930", side="buy", quantity=10, price=70000, stop=68000)
+
+    decision = check_order(order, _portfolio(risk_state), limits=BASE_LIMITS)
+
+    assert decision.approved is False
+    assert decision.rule_id == "kill_switch_active"
+
+
+def test_check_order_rejects_when_max_concurrent_positions_reached():
+    risk_state = _state_with_positions(5)
+    order = OrderRequest(code="005930", side="buy", quantity=10, price=70000, stop=68000)
+
+    decision = check_order(order, _portfolio(risk_state), limits=BASE_LIMITS)
+
+    assert decision.approved is False
+    assert decision.rule_id == "max_concurrent_positions"
+
+
+def test_check_order_skips_limits_that_are_none():
+    order = OrderRequest(code="005930", side="buy", quantity=1_000_000, price=70000, stop=68000)
+
+    decision = check_order(order, _portfolio(), limits=BASE_LIMITS)
+
+    assert decision.approved is True  # max_order_notional=None -> 팻핑거 체크 건너뜀
+
+
+def test_check_order_rejects_when_order_notional_exceeds_limit():
+    limits = {**BASE_LIMITS, "max_order_notional": 5_000_000}
+    order = OrderRequest(code="005930", side="buy", quantity=100, price=70000, stop=68000)  # 7,000,000
+
+    decision = check_order(order, _portfolio(), limits=limits)
+
+    assert decision.approved is False
+    assert decision.rule_id == "max_order_notional"
+
+
+def test_check_order_rejects_when_symbol_weight_exceeds_limit():
+    limits = {**BASE_LIMITS, "max_symbol_weight_pct": 0.2}
+    order = OrderRequest(code="005930", side="buy", quantity=100, price=70000, stop=68000)  # 7,000,000 / 10,000,000 = 70%
+
+    decision = check_order(order, _portfolio(), limits=limits)
+
+    assert decision.approved is False
+    assert decision.rule_id == "max_symbol_weight_pct"
+
+
+def test_check_order_rejects_when_consecutive_losses_reach_limit():
+    limits = {**BASE_LIMITS, "max_consecutive_losses": 3}
+    risk_state = RiskState(trading_date="2026-07-20", consecutive_losses=3)
+    order = OrderRequest(code="005930", side="buy", quantity=10, price=70000, stop=68000)
+
+    decision = check_order(order, _portfolio(risk_state), limits=limits)
+
+    assert decision.approved is False
+    assert decision.rule_id == "max_consecutive_losses"
+
+
+def test_check_order_rejects_reentry_within_cooldown_after_loss():
+    limits = {**BASE_LIMITS, "reentry_cooldown_sec": 600}
+    risk_state = RiskState(
+        trading_date="2026-07-20",
+        last_exit={"005930": {"time": "2026-07-20T09:00:00", "was_loss": True}},
+    )
+    order = OrderRequest(code="005930", side="buy", quantity=10, price=70000, stop=68000)
+
+    decision = check_order(order, _portfolio(risk_state), limits=limits, now="2026-07-20T09:05:00")
+
+    assert decision.approved is False
+    assert decision.rule_id == "reentry_cooldown"
+
+
+def test_check_order_allows_reentry_after_cooldown_elapsed():
+    limits = {**BASE_LIMITS, "reentry_cooldown_sec": 600}
+    risk_state = RiskState(
+        trading_date="2026-07-20",
+        last_exit={"005930": {"time": "2026-07-20T09:00:00", "was_loss": True}},
+    )
+    order = OrderRequest(code="005930", side="buy", quantity=10, price=70000, stop=68000)
+
+    decision = check_order(order, _portfolio(risk_state), limits=limits, now="2026-07-20T09:15:00")
+
+    assert decision.approved is True
+
+
+def test_check_order_allows_reentry_after_a_win_regardless_of_cooldown():
+    limits = {**BASE_LIMITS, "reentry_cooldown_sec": 600}
+    risk_state = RiskState(
+        trading_date="2026-07-20",
+        last_exit={"005930": {"time": "2026-07-20T09:00:00", "was_loss": False}},
+    )
+    order = OrderRequest(code="005930", side="buy", quantity=10, price=70000, stop=68000)
+
+    decision = check_order(order, _portfolio(risk_state), limits=limits, now="2026-07-20T09:00:01")
+
+    assert decision.approved is True
+
+
+def test_get_position_size_uses_fixed_risk_amount():
+    portfolio = _portfolio(total_capital_krw=10_000_000)
+    limits = {**BASE_LIMITS, "risk_pct_per_trade": 0.01}  # 리스크금액 100,000
+
+    quantity = get_position_size("005930", entry=70000, stop=68000, portfolio=portfolio, limits=limits)
+
+    assert quantity == 50  # 100,000 / 2,000
+
+
+def test_get_position_size_returns_zero_when_stop_equals_entry():
+    portfolio = _portfolio(total_capital_krw=10_000_000)
+
+    quantity = get_position_size("005930", entry=70000, stop=70000, portfolio=portfolio, limits=BASE_LIMITS)
+
+    assert quantity == 0

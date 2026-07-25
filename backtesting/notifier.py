@@ -9,30 +9,84 @@ send_telegram과 같은 형태의 send_email을 추가하고 notify_* 함수들�
 보낸 건지 구분이 안 되는 문제가 있었다 — 모든 notify_* 함수가 strategy(예: "strategy_1")를
 필수로 받아 메시지 맨 앞에 `[strategy_1]`처럼 붙인다(cli.py의 시작 로그 `[{mode_label}]
 [{strategy}]`와 같은 표기 방식).
+
+알림 등급(monitoring-agent.md §알림 등급): CRITICAL/WARNING/INFO 3단계. notify_* 함수마다
+이벤트 성격에 맞는 등급을 고정으로 넘긴다(호출부가 등급을 매번 고를 필요 없음).
+CRITICAL은 놓치면 안 되므로 send_telegram이 같은 호출 안에서 CRITICAL_REPEAT_COUNT회
+반복 발송한다(재시도 스케줄러 등은 과설계이므로 두지 않음). send_telegram 실패는
+호출부에서 조용히 삼키지 않도록 매 실패마다 FAILURE_LOG_PATH에 구조화 로그(JSON
+lines)를 남긴다.
 """
+import json
+import os
+from datetime import datetime
+
 import requests
 
 TELEGRAM_API_BASE = "https://api.telegram.org"
 REQUEST_TIMEOUT_SECONDS = 10
 
+CRITICAL = "critical"
+WARNING = "warning"
+INFO = "info"
 
-def send_telegram(message: str, bot_token: str, chat_id: str) -> bool:
-    """텔레그램 Bot API로 메시지 1건 전송. 실패해도 예외를 올리지 않는다."""
+CRITICAL_REPEAT_COUNT = 3
+
+FAILURE_LOG_PATH = "state/notifier_failures.jsonl"
+
+
+def _log_send_failure(level: str, message: str, detail: str, path: str) -> None:
+    """send_telegram 실패를 조용히 삼키지 않고 구조화 로그로 남긴다(monitoring-agent.md
+    §금지사항 — 알림 실패를 조용히 삼키는 코드 금지). 로그 기록 자체가 실패해도(디스크
+    문제 등) 더 할 수 있는 게 없으므로 조용히 무시한다 — 여기서 예외가 나면 알림 발송
+    흐름까지 막힌다."""
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "agent": "monitoring-agent",
+        "level": level,
+        "event": "telegram_send_failed",
+        "detail": detail,
+        "message": message,
+    }
+    try:
+        directory = os.path.dirname(path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def send_telegram(
+    message: str, bot_token: str, chat_id: str, level: str = INFO, failure_log_path: str = FAILURE_LOG_PATH,
+) -> bool:
+    """텔레그램 Bot API로 메시지 전송. 실패해도 예외를 올리지 않는다(대신 로그를 남김).
+
+    level=CRITICAL이면 CRITICAL_REPEAT_COUNT회 반복 발송한다 — 알림 폭주를 막기 위한
+    동일 이벤트 묶음 처리는 호출 빈도가 높은 상위 감시 루프(healthcheck 등)의 책임이고,
+    여기서는 "한 번의 중요 이벤트를 놓치지 않는다"만 담당한다. repeat 중 한 번이라도
+    성공하면 True(반복은 중복 확인용 안전장치일 뿐, 성공 판정은 1회 성공으로 충분)."""
+    repeat = CRITICAL_REPEAT_COUNT if level == CRITICAL else 1
     if not bot_token or not chat_id:
+        _log_send_failure(level, message, "bot_token/chat_id 미설정", failure_log_path)
         return False
     url = f"{TELEGRAM_API_BASE}/bot{bot_token}/sendMessage"
-    try:
-        res = requests.post(url, json={"chat_id": chat_id, "text": message}, timeout=REQUEST_TIMEOUT_SECONDS)
-        res.raise_for_status()
-        return True
-    except Exception:
-        return False
+    any_ok = False
+    for _ in range(repeat):
+        try:
+            res = requests.post(url, json={"chat_id": chat_id, "text": message}, timeout=REQUEST_TIMEOUT_SECONDS)
+            res.raise_for_status()
+            any_ok = True
+        except Exception as exc:
+            _log_send_failure(level, message, str(exc), failure_log_path)
+    return any_ok
 
 
 def notify_order_filled(strategy: str, side: str, code: str, quantity: int, price: float, bot_token: str, chat_id: str) -> bool:
     label = "매수" if side == "buy" else "매도"
     message = f"[{strategy}] [체결] {label} {code} {quantity}주 @ {price:,.0f}원"
-    return send_telegram(message, bot_token, chat_id)
+    return send_telegram(message, bot_token, chat_id, level=INFO)
 
 
 def notify_signal_detected(strategy: str, code: str, name: str, price: float, proba: float | None, bot_token: str, chat_id: str) -> bool:
@@ -48,12 +102,12 @@ def notify_signal_detected(strategy: str, code: str, name: str, price: float, pr
     label = f"{name}({code})" if name else code
     proba_part = f" (진입확률 {proba:.0%})" if proba is not None else ""
     message = f"[{strategy}] [포착] {label} @ {price:,.0f}원{proba_part}"
-    return send_telegram(message, bot_token, chat_id)
+    return send_telegram(message, bot_token, chat_id, level=INFO)
 
 
 def notify_error(strategy: str, context: str, exc: Exception, bot_token: str, chat_id: str) -> bool:
     message = f"[{strategy}] [오류] {context}: {exc}"
-    return send_telegram(message, bot_token, chat_id)
+    return send_telegram(message, bot_token, chat_id, level=WARNING)
 
 
 def notify_nasdaq_drop(change_pct: float, price: float, headlines: list[str], bot_token: str, chat_id: str) -> bool:
@@ -66,20 +120,20 @@ def notify_nasdaq_drop(change_pct: float, price: float, headlines: list[str], bo
         lines.extend(f"- {h}" for h in headlines)
     else:
         lines.append("관련 뉴스를 가져오지 못했습니다.")
-    return send_telegram("\n".join(lines), bot_token, chat_id)
+    return send_telegram("\n".join(lines), bot_token, chat_id, level=WARNING)
 
 
 def notify_dashboard_down(reason: str, bot_token: str, chat_id: str) -> bool:
     """대시보드 서버(dashboard_server.py)가 응답하지 않을 때 통지 — dashboard_monitor.py가
     호출한다. 원인(연결 실패/타임아웃/HTTP 5xx 등)을 그대로 붙여 어떤 종류의 장애인지
     바로 구분할 수 있게 한다."""
-    return send_telegram(f"[대시보드] 응답 없음: {reason}", bot_token, chat_id)
+    return send_telegram(f"[대시보드] 응답 없음: {reason}", bot_token, chat_id, level=WARNING)
 
 
 def notify_dashboard_recovered(bot_token: str, chat_id: str) -> bool:
     """다운으로 판단된 이후 다시 응답이 돌아왔을 때 통지 — 직접 대시보드를 열어보지
     않아도 복구를 알 수 있게 한다."""
-    return send_telegram("[대시보드] 복구됨", bot_token, chat_id)
+    return send_telegram("[대시보드] 복구됨", bot_token, chat_id, level=INFO)
 
 
 def notify_kill_switch(strategy: str, realized_pnl_krw: float, threshold_krw: float, bot_token: str, chat_id: str) -> bool:
@@ -87,4 +141,4 @@ def notify_kill_switch(strategy: str, realized_pnl_krw: float, threshold_krw: fl
         f"[{strategy}] [KILL SWITCH 발동] 당일 실현손익 {realized_pnl_krw:,.0f}원 "
         f"(한도 -{threshold_krw:,.0f}원) — 신규 진입 중단"
     )
-    return send_telegram(message, bot_token, chat_id)
+    return send_telegram(message, bot_token, chat_id, level=CRITICAL)

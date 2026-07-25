@@ -28,6 +28,7 @@ def stub_log_order(monkeypatch):
 class _StubClient:
     def __init__(self, raise_on_order=False, quote_price=None, raise_on_quote=False, reject_order=False):
         self.orders = []
+        self.order_kwargs = []
         self.raise_on_order = raise_on_order
         self.quote_price = quote_price
         self.raise_on_quote = raise_on_quote
@@ -38,6 +39,7 @@ class _StubClient:
         if self.raise_on_order:
             raise RuntimeError("주문 실패")
         self.orders.append({"code": stock_code, "side": side, "quantity": quantity})
+        self.order_kwargs.append(kwargs)
         if self.reject_order:
             return {"ord_no": "", "return_code": 20, "return_msg": "주문 거부"}
         return {"ord_no": "1", "return_code": 0}
@@ -163,6 +165,7 @@ def test_entry_fires_tier_1_when_price_touches_first_band():
     assert len(risk_state.open_positions) == 1
     assert risk_state.open_positions[0].entry_price == 90.0
     assert client.orders == [{"code": "000660", "side": "buy", "quantity": 10_000}]
+    assert client.order_kwargs == [{"price": 90.0, "order_type": "0"}]  # 지정가(슬리피지 통제)
 
 
 def test_entry_does_not_fire_when_price_above_first_band():
@@ -257,6 +260,7 @@ def test_exit_fires_on_touch_and_resets_episode():
     assert risk_state.open_positions == []
     assert episode == OversoldEpisodeState()  # 다음 에피소드를 위해 리셋됨
     assert client.orders == [{"code": "000660", "side": "sell", "quantity": 9890}]
+    assert client.order_kwargs == [{"price": 100.0, "order_type": "0"}]  # 지정가(슬리피지 통제)
 
 
 def test_exit_fires_on_hard_stop():
@@ -417,6 +421,51 @@ def test_run_oversold_trading_loop_polls_until_market_closes_and_saves_state(mon
     assert len(entry_calls) == 2
     assert __import__("os").path.exists(state_path)
     assert __import__("os").path.exists(str(tmp_path / "strategy_2" / "oversold_episode.json"))
+
+
+def test_run_oversold_trading_loop_skips_entry_in_the_same_cycle_a_position_just_closed(monkeypatch, tmp_path):
+    # 회귀 테스트 — 하드스톱 발동가는 항상 다음 미체결 밴드가보다 낮으므로, 청산확인
+    # 직후 같은 current_price로 진입확인까지 하면 청산 즉시 재매수(휩쏘)가 벌어졌다.
+    # 이번 사이클에 막 청산됐으면(같은 current_price) 진입확인을 건너뛰어야 한다.
+    monkeypatch.setattr(oversold_trading_loop, "load_history", _empty_history)
+    open_flags = iter([True, True, False])
+    monkeypatch.setattr(oversold_trading_loop, "is_extended_market_open", lambda now: next(open_flags))
+    monkeypatch.setattr(oversold_trading_loop, "is_kill_switch_requested", lambda path: False)
+    monkeypatch.setattr(oversold_trading_loop.time, "sleep", lambda s: None)
+    monkeypatch.setattr(oversold_trading_loop, "compute_current_ma", lambda *a, **k: 100.0)
+
+    exit_calls, entry_calls = [], []
+
+    def fake_exit(*a, **k):
+        exit_calls.append(1)
+        if len(exit_calls) == 1:
+            return OversoldEpisodeState()  # 첫 사이클에 포지션을 막 청산했다고 가정
+        return a[2]
+
+    monkeypatch.setattr(oversold_trading_loop, "process_oversold_exit_once", fake_exit)
+    monkeypatch.setattr(
+        oversold_trading_loop, "process_oversold_entry_once",
+        lambda *a, **k: entry_calls.append(1) or a[2],
+    )
+    _FakeRealtimeFeed.instances = []
+    monkeypatch.setattr(oversold_trading_loop, "RealtimeFeed", _FakeRealtimeFeed)
+
+    state_path = str(tmp_path / "strategy_2" / "risk_state.json")
+    from backtesting.risk_manager import save_state
+
+    risk_state = RiskState(trading_date=date.today().isoformat())
+    record_position_opened(risk_state, "000660", "2026-01-01T10:00", 900_000, 100.0, total_quantity=9000)
+    save_state(risk_state, state_path)
+    save_episode_state(OversoldEpisodeState(filled_tier_count=1, entry_date="2026-01-01"), state_path)
+
+    run_oversold_trading_loop(
+        _StubClient(), bot_token="", chat_id="", max_daily_loss_krw=500_000,
+        risk_state_path=state_path, poll_interval_seconds=1.0,
+        kill_switch_override_path=str(tmp_path / "kill_switch_override.json"),
+    )
+
+    assert len(exit_calls) == 2
+    assert len(entry_calls) == 1  # 첫 사이클(막 청산)은 건너뛰고, 두 번째 사이클만 진입확인
 
 
 def test_run_oversold_trading_loop_writes_heartbeat_before_first_cycle(monkeypatch, tmp_path):

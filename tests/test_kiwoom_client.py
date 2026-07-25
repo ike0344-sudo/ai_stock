@@ -246,15 +246,24 @@ def test_place_order_buy_uses_kt10000_and_ordr_path(monkeypatch):
     client = KiwoomClient("key", "secret")
     captured = _capture_request_tr(client, monkeypatch, {"ord_no": "0000123", "return_code": 0})
 
-    result = client.place_order("005930", side="buy", quantity=10)
+    result = client.place_order("005930", side="buy", quantity=10, price=70000)
 
     assert captured["api_id"] == "kt10000"
     assert captured["path"] == "/api/dostk/ordr"
     assert captured["body"] == {
         "dmst_stex_tp": "KRX", "stk_cd": "005930", "ord_qty": "10",
-        "ord_uv": "", "trde_tp": "3", "cond_uv": "",
+        "ord_uv": "70000", "trde_tp": "0", "cond_uv": "",
     }
     assert result["ord_no"] == "0000123"
+
+
+def test_place_order_defaults_to_limit_order_type(monkeypatch):
+    client = KiwoomClient("key", "secret")
+    captured = _capture_request_tr(client, monkeypatch)
+
+    client.place_order("005930", side="buy", quantity=10, price=70000)
+
+    assert captured["body"]["trde_tp"] == "0"  # 지정가 기본값(슬리피지 통제)
 
 
 def test_place_order_real_account_defaults_to_sor(monkeypatch):
@@ -292,6 +301,39 @@ def test_place_order_market_order_ignores_price(monkeypatch):
     client.place_order("005930", side="buy", quantity=1, price=70000, order_type="3")
 
     assert captured["body"]["ord_uv"] == ""
+
+
+def test_place_order_same_client_order_id_is_not_resubmitted(monkeypatch):
+    client = KiwoomClient("key", "secret")
+    call_count = {"n": 0}
+
+    def fake_request_tr(api_id, body, path="/api/dostk/ordr", cont_yn="N", next_key=""):
+        call_count["n"] += 1
+        return {"ord_no": str(call_count["n"]), "return_code": 0}
+
+    monkeypatch.setattr(client, "request_tr", fake_request_tr)
+
+    first = client.place_order("005930", side="buy", quantity=1, price=70000, client_order_id="retry-1")
+    second = client.place_order("005930", side="buy", quantity=1, price=70000, client_order_id="retry-1")
+
+    assert call_count["n"] == 1
+    assert first == second == {"ord_no": "1", "return_code": 0}
+
+
+def test_place_order_different_client_order_id_submits_again(monkeypatch):
+    client = KiwoomClient("key", "secret")
+    call_count = {"n": 0}
+
+    def fake_request_tr(api_id, body, path="/api/dostk/ordr", cont_yn="N", next_key=""):
+        call_count["n"] += 1
+        return {"ord_no": str(call_count["n"]), "return_code": 0}
+
+    monkeypatch.setattr(client, "request_tr", fake_request_tr)
+
+    client.place_order("005930", side="buy", quantity=1, price=70000, client_order_id="order-1")
+    client.place_order("005930", side="buy", quantity=1, price=70000, client_order_id="order-2")
+
+    assert call_count["n"] == 2
 
 
 def test_cancel_order_uses_kt10003(monkeypatch):

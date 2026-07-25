@@ -6,6 +6,28 @@ from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
 
+import pandas as pd
+
+PRICE_LIMIT_PCT = 0.30  # 코스피/코스닥 상하한가 기준 (전일 종가 대비 ±30%)
+PRICE_LIMIT_TOLERANCE_PCT = 0.005  # 호가단위 반올림 오차를 흡수하기 위한 여유폭
+
+
+def prev_day_close_series(candles: pd.DataFrame) -> pd.Series:
+    """일자(정규화)별 전일 종가 Series. candles 안에 그 이전 거래일 데이터가 없으면
+    (예: 시뮬레이션 대상 구간의 첫날) 해당 일자는 NaN — 상하한가 판정 불가로
+    체결 가능 취급한다(알 수 없는 값으로 거래를 막지 않는 쪽을 선택)."""
+    daily_close = candles.groupby(candles.index.normalize())["close"].last()
+    return daily_close.shift(1)
+
+
+def is_price_limit_locked(price: float, prev_close: float) -> bool:
+    """전일 종가 대비 ±PRICE_LIMIT_PCT 근처면 상하한가 고정으로 보고 체결 불가 처리."""
+    if pd.isna(prev_close):
+        return False
+    upper = prev_close * (1 + PRICE_LIMIT_PCT)
+    lower = prev_close * (1 - PRICE_LIMIT_PCT)
+    return price >= upper * (1 - PRICE_LIMIT_TOLERANCE_PCT) or price <= lower * (1 + PRICE_LIMIT_TOLERANCE_PCT)
+
 
 class Signal(Enum):
     BUY = "buy"

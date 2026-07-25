@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from kiwoom_client import KiwoomClient
-from .final_strategy import RECOMMENDED_MAX_CONCURRENT_POSITIONS, RECOMMENDED_PROBA_THRESHOLD, STOP_LOSS_PCT, TIERS
+from .final_strategy import RECOMMENDED_PROBA_THRESHOLD
 from .heartbeat import write_heartbeat
 from .kill_switch_control import DEFAULT_OVERRIDE_PATH as DEFAULT_KILL_SWITCH_OVERRIDE_PATH
 from .kill_switch_control import is_kill_switch_requested
@@ -23,6 +23,9 @@ from .notifier import notify_error, notify_kill_switch, notify_order_filled, not
 from .orderbook_collector import is_extended_market_open
 from .realtime_feed import RealtimeFeed
 from .risk_manager import (
+    RECOMMENDED_MAX_CONCURRENT_POSITIONS,
+    STOP_LOSS_PCT,
+    TIERS,
     RiskState,
     can_open_new_position,
     load_state,
@@ -169,7 +172,7 @@ def process_entries_once(
 
         quantity = max(1, int(position_capital_krw // signal["price"]))
         try:
-            order_response = client.place_order(code, side="buy", quantity=quantity)
+            order_response = client.place_order(code, side="buy", quantity=quantity, price=signal["price"], order_type="0")
         except Exception as exc:
             notify_error(strategy, f"{code} 매수 주문 실패", exc, bot_token, chat_id)
             continue
@@ -247,7 +250,9 @@ def process_exits_once(
             continue
 
         try:
-            order_response = client.place_order(position.code, side="sell", quantity=quantity_to_sell)
+            order_response = client.place_order(
+                position.code, side="sell", quantity=quantity_to_sell, price=current_price, order_type="0",
+            )
         except Exception as exc:
             notify_error(strategy, f"{position.code} 매도 주문 실패({exit_reason})", exc, bot_token, chat_id)
             continue

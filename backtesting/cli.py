@@ -23,22 +23,20 @@ from .bracket_scan import scan_bracket_zones, summarize_zones
 from .dashboard_monitor import run_dashboard_monitor_loop
 from .dashboard_server import run_dashboard_server
 from .data_loader import (
+    _atomic_to_csv,
     load_full_index_minute_history,
     load_full_minute_history,
     load_history,
     load_index_history,
 )
-from .final_strategy import (
-    RECOMMENDED_MAX_CONCURRENT_POSITIONS,
-    RECOMMENDED_PROBA_THRESHOLD,
-    train_and_save_final_model,
-)
+from .final_strategy import RECOMMENDED_PROBA_THRESHOLD, train_and_save_final_model
 from .live_monitor import run_monitor_loop
 from .ml_entry_filter import FEATURE_COLUMNS, load_model
 from .nasdaq_drop_monitor import DROP_THRESHOLD_PCT, WINDOW_SECONDS, run_nasdaq_drop_monitor
 from .orderbook_collector import is_market_open, run_collection_loop, wait_until_extended_market_open
 from .oversold_strategy import STOCK_CODE as OVERSOLD_STOCK_CODE
 from .oversold_trading_loop import run_oversold_trading_loop
+from .risk_manager import RECOMMENDED_MAX_CONCURRENT_POSITIONS
 from .screener import top_by_trading_value
 from .strategies.envelope import EnvelopeStrategy
 from .strategies.ma_crossover import MovingAverageCrossover
@@ -48,6 +46,7 @@ from .strategy3_scalp import run_scalp_monitor_loop
 from .strategy4_rank_watch import DEFAULT_SIGNAL_LOG_PATH as STRATEGY4_DEFAULT_SIGNAL_LOG_PATH
 from .strategy4_rank_watch import run_rank_watch_loop
 from .telegram_order_bot import run_telegram_order_bot
+from .tick_collector import run_tick_collector_loop
 from .trading_loop import run_trading_loop
 from .universe import build_liquid_universe, build_topn_union_universe
 from .updater import update_top35
@@ -179,6 +178,7 @@ def _run_rule(args) -> None:
         initial_capital=args.capital,
         commission_rate=args.commission_rate,
         slippage_rate=args.slippage_rate,
+        tax_rate=args.tax_rate,
         in_sample_ratio=args.in_sample_ratio,
         use_local_data=not args.no_local_data,
         data_dir=args.data_dir,
@@ -200,6 +200,7 @@ def _run_ml(args) -> None:
         initial_capital=args.capital,
         commission_rate=args.commission_rate,
         slippage_rate=args.slippage_rate,
+        tax_rate=args.tax_rate,
         train_days=args.train_days,
         test_days=args.test_days,
         step_days=args.step_days,
@@ -228,21 +229,21 @@ def _run_compare(args) -> None:
         client, stock_codes, MovingAverageCrossover(), _ma_param_grid(args),
         start=start, end=end, interval=args.rule_interval,
         initial_capital=args.capital, commission_rate=args.commission_rate,
-        slippage_rate=args.slippage_rate, in_sample_ratio=args.in_sample_ratio,
+        slippage_rate=args.slippage_rate, tax_rate=args.tax_rate, in_sample_ratio=args.in_sample_ratio,
         use_local_data=use_local_data, data_dir=args.data_dir,
     )
     results += grid_search.run_rule_based(
         client, stock_codes, RsiStrategy(), _rsi_param_grid(args),
         start=start, end=end, interval=args.rule_interval,
         initial_capital=args.capital, commission_rate=args.commission_rate,
-        slippage_rate=args.slippage_rate, in_sample_ratio=args.in_sample_ratio,
+        slippage_rate=args.slippage_rate, tax_rate=args.tax_rate, in_sample_ratio=args.in_sample_ratio,
         use_local_data=use_local_data, data_dir=args.data_dir,
     )
     results += grid_search.run_ml_walk_forward(
         client, stock_codes, _ml_param_grid(args),
         start=start, end=end, interval=args.ml_interval,
         initial_capital=args.capital, commission_rate=args.commission_rate,
-        slippage_rate=args.slippage_rate, train_days=args.train_days,
+        slippage_rate=args.slippage_rate, tax_rate=args.tax_rate, train_days=args.train_days,
         test_days=args.test_days, step_days=args.step_days,
         label_horizon_minutes=args.label_horizon_minutes,
         label_return_threshold=args.label_return_threshold, model_type=args.model_type,
@@ -363,10 +364,10 @@ def _run_download_universe(args) -> None:
         code, name = row["stock_code"], row["name"]
         try:
             daily = load_history(client, code, daily_start, date.today(), interval="day", use_cache=True)
-            daily.to_csv(os.path.join(daily_dir, f"{code}.csv"))
+            _atomic_to_csv(daily, os.path.join(daily_dir, f"{code}.csv"))
 
             minute = load_full_minute_history(client, code, tic_scope=args.minute_tic_scope, use_cache=True)
-            minute.to_csv(os.path.join(minute_dir, f"{code}.csv"))
+            _atomic_to_csv(minute, os.path.join(minute_dir, f"{code}.csv"))
 
             ok_count += 1
             print(f"[{i + 1}/{len(universe)}] {code} {name}: daily={len(daily)} minute={len(minute)}")
@@ -379,10 +380,10 @@ def _run_download_universe(args) -> None:
     for index_code, index_name in INDEX_CODES.items():
         try:
             idx_daily = load_index_history(client, index_code, daily_start, date.today(), interval="day", use_cache=True)
-            idx_daily.to_csv(os.path.join(index_daily_dir, f"{index_code}.csv"))
+            _atomic_to_csv(idx_daily, os.path.join(index_daily_dir, f"{index_code}.csv"))
 
             idx_minute = load_full_index_minute_history(client, index_code, tic_scope=args.minute_tic_scope, use_cache=True)
-            idx_minute.to_csv(os.path.join(index_minute_dir, f"{index_code}.csv"))
+            _atomic_to_csv(idx_minute, os.path.join(index_minute_dir, f"{index_code}.csv"))
 
             print(f"{index_code} {index_name}: daily={len(idx_daily)} minute={len(idx_minute)}")
         except Exception as exc:
@@ -675,6 +676,18 @@ def _run_monitor_nasdaq_drop(args) -> None:
             time.sleep(RESTART_DELAY_SECONDS)
 
 
+def _run_collect_ticks(args) -> None:
+    """매매 판단/주문 없이 오늘의 top-N 워치리스트 체결을 data/ticks/에 저장만 하는
+    전용 프로세스. strategy_1~5의 run-trading/monitor-signals와 완전히 분리돼 있다 —
+    이 프로세스가 죽어도 실전 매매에는 영향이 없다."""
+    client = _build_client()
+    if not wait_until_extended_market_open():
+        print("현재 통합장 시간이 아닙니다(평일 08:00~20:00). 수집을 시작하지 않고 종료합니다.")
+        return
+    run_tick_collector_loop(client, top_n=args.top_n)
+    print("통합장 종료로 틱 수집을 마쳤습니다.")
+
+
 def _run_monitor_dashboard(args) -> None:
     """트레이딩 대시보드(dashboard_server.py)가 응답하는지 주기적으로 확인해, 응답이
     끊기면/복구되면 텔레그램으로 알린다. 대시보드와 완전히 분리된 프로세스라 대시보드가
@@ -720,6 +733,11 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument(
         "--slippage-rate", type=float,
         default=float(os.environ.get("BACKTEST_SLIPPAGE_RATE", 0.001)),
+    )
+    common.add_argument(
+        "--tax-rate", type=float,
+        default=float(os.environ.get("BACKTEST_TAX_RATE", 0.0023)),
+        help="매도 증권거래세율 (매도 시에만 부과, 기본 0.23%%)",
     )
     common.add_argument("--csv", help="결과 CSV 저장 경로")
     common.add_argument("--plot", help="최고 성과 조합의 매매 시점 차트를 저장할 이미지 경로 (예: best.png)")
@@ -908,6 +926,13 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard_monitor_parser.add_argument("--port", type=int, default=8765, help="확인할 대시보드 포트 (dashboard 명령의 --port와 맞출 것)")
     dashboard_monitor_parser.add_argument("--interval-seconds", type=float, default=30.0, help="확인 간격(초)")
     dashboard_monitor_parser.set_defaults(func=_run_monitor_dashboard)
+
+    collect_ticks_parser = sub.add_parser(
+        "collect-ticks",
+        help="매매 판단/주문 없이 오늘의 top-N 워치리스트 체결(틱)만 data/ticks/에 저장 (strategy_1~5와 분리된 프로세스)",
+    )
+    collect_ticks_parser.add_argument("--top-n", type=int, default=35)
+    collect_ticks_parser.set_defaults(func=_run_collect_ticks)
 
     return parser
 

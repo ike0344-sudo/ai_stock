@@ -15,6 +15,7 @@ import os
 import time
 from datetime import datetime
 
+import pandas as pd
 from kiwoom_client import KiwoomClient
 
 from .heartbeat import write_heartbeat
@@ -53,6 +54,31 @@ def check_rank_promotion(previous_ranks: dict, current_ranks: dict) -> str | Non
     if current_ranks.get(prev_4th) == WATCHED_TO_RANK:
         return prev_4th
     return None
+
+
+def generate_signals(df: pd.DataFrame) -> pd.DataFrame:
+    """Strategy 프로토콜 어댑터 — df에 이 종목의 시점별 거래대금 순위를 담은 'rank'
+    컬럼이 있어야 한다(check_rank_promotion은 원래 여러 종목의 순위 dict를 비교하는
+    함수라, 한 종목 OHLCV df만으로는 그 dict를 채울 수 없어 직전/현재 순위만 한 쌍씩
+    감싸 그대로 호출한다). check_rank_promotion 결과가 있으면 signal=1, 없으면 0."""
+    out = df.copy()
+    out["signal"] = 0
+    prev_rank = out["rank"].shift(1)
+    for idx in out.index:
+        prev, curr = prev_rank.at[idx], out.at[idx, "rank"]
+        if pd.isna(prev) or pd.isna(curr):
+            continue
+        promoted = check_rank_promotion({"_self": int(prev)}, {"_self": int(curr)})
+        if promoted is not None:
+            out.at[idx, "signal"] = 1
+    return out
+
+
+generate_signals.name = "strategy_4"
+generate_signals.params = {
+    "watched_from_rank": WATCHED_FROM_RANK,
+    "watched_to_rank": WATCHED_TO_RANK,
+}
 
 
 def _write_rank_watch_config(output_path: str, top_n: int, poll_interval_seconds: float, is_mock: bool) -> None:

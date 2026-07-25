@@ -6,6 +6,7 @@
 """
 import threading
 import time
+import uuid
 from datetime import date
 
 import requests
@@ -35,6 +36,13 @@ class KiwoomClient:
         # 실제 요청을 쏴버릴 수 있다(실측: 토큰 발급 엔드포인트 자체가 429). request_tr()
         # 전체(토큰 발급~요청~응답 헤더 반영)를 이 락으로 감싸 인스턴스당 완전히 직렬화한다.
         self._request_lock = threading.Lock()
+        # client_order_id -> place_order 응답. 같은 client_order_id로 place_order가 다시
+        # 호출되면(재시도 등) 실제 API를 다시 부르지 않고 이전 응답을 그대로 돌려준다
+        # (execution-agent.md §핵심원칙 2 — 멱등성). 프로세스 재시작까지 살아남을
+        # 필요는 없어서 in-memory로만 추적한다.
+        # ponytail: 프로세스 수명 내내 무한정 쌓이는 dict(전역 락 없음) — 하루 거래량
+        # 규모에선 무해하지만, 초장기 상주 프로세스에서 메모리가 문제되면 TTL/만료를 추가.
+        self._submitted_orders: dict[str, dict] = {}
 
     def issue_token(self) -> str:
         url = f"{self.base_url}/oauth2/token"
@@ -213,16 +221,23 @@ class KiwoomClient:
         side: str,
         quantity: int,
         price: int = 0,
-        order_type: str = "3",
+        order_type: str = "0",
         exchange: str | None = None,
+        client_order_id: str | None = None,
     ) -> dict:
         """주식 매수(kt10000)/매도(kt10001) 주문.
 
         side: "buy" 또는 "sell".
-        order_type(매매구분, trde_tp): "0"=보통(지정가), "3"=시장가(기본값) 등 —
-        키움 매매구분 코드 전체 목록은 공식 가이드 참고. 시장가일 때 price는
-        무시되고 주문단가(ord_uv)는 빈 문자열로 전송된다.
+        order_type(매매구분, trde_tp): "0"=보통(지정가, 기본값 — 슬리피지 통제를 위해
+        시장가를 기본으로 두지 않는다, execution-agent.md §1), "3"=시장가 등. 시장가로
+        내려면 order_type="3"을 명시적으로 넘겨야 하며, 이때 price는 무시되고
+        주문단가(ord_uv)는 빈 문자열로 전송된다.
         응답에 주문번호(ord_no)가 포함되어야 취소/체결확인에 사용할 수 있다.
+
+        client_order_id: 같은 값으로 다시 호출되면(재시도) 실제 API를 다시 부르지 않고
+        직전 응답을 그대로 돌려준다(멱등성 가드, execution-agent.md §2) — 미지정 시
+        매 호출마다 새 uuid를 발급하므로 중복 차단은 호출자가 재시도 시 같은 id를
+        재사용할 때만 의미가 있다.
 
         exchange 미지정 시 실전은 "SOR"(통합), 모의투자는 "KRX"로 기본값이 갈린다.
         실전에서 "KRX" 고정이면 정규장(09:00~15:30) 밖, 즉 넥스트레이드(NXT)
@@ -232,6 +247,10 @@ class KiwoomClient:
         해당업무가 제공되지 않습니다") "KRX"로 보내야 주문이 들어간다 — 조회용
         TR(kt00004 등)은 모의투자에서도 SOR이 되는 것과 다르다.
         """
+        order_id = client_order_id or uuid.uuid4().hex
+        if order_id in self._submitted_orders:
+            return self._submitted_orders[order_id]
+
         if exchange is None:
             exchange = "KRX" if self.is_mock else "SOR"
         api_id = "kt10000" if side == "buy" else "kt10001"
@@ -243,7 +262,9 @@ class KiwoomClient:
             "trde_tp": order_type,
             "cond_uv": "",
         }
-        return self.request_tr(api_id, body, path="/api/dostk/ordr")
+        result = self.request_tr(api_id, body, path="/api/dostk/ordr")
+        self._submitted_orders[order_id] = result
+        return result
 
     def cancel_order(self, order_no: str, stock_code: str, quantity: int, exchange: str | None = None) -> dict:
         """주식 취소주문 (kt10003). quantity=0이면 잔량 전부 취소.

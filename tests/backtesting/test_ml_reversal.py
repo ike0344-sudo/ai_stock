@@ -33,7 +33,8 @@ def test_extract_armed_features_skips_points_below_arm_threshold():
 
 
 def test_extract_armed_features_includes_points_after_arming():
-    candles = _candles("2026-01-01", [100, 102, 101, 100.5])  # 2번째에서 +2% 근접 -> 무장
+    # 체결시점 보수화로 진입은 idx1의 시가(101)에서 체결되고, idx2에서 +2.5% 근접 -> 무장
+    candles = _candles("2026-01-01", [100, 101, 104, 102, 100.5])
     path = simulate_trade_path(candles, entry_idx=0, take_profit_pct=0.10, stop_loss_pct=0.10)
 
     features = extract_armed_features(candles, path, breakeven_arm_pct=0.01)
@@ -43,8 +44,10 @@ def test_extract_armed_features_includes_points_after_arming():
 
 
 def test_build_training_examples_labels_by_final_outcome():
-    winning = _candles("2026-01-01", [100, 102, 104])  # take_profit
-    losing = _candles("2026-01-02", [100, 101.5, 98])  # 무장 후 stop_loss
+    # 체결시점 보수화(다음 봉 시가 체결)를 감안해 익절/무장 후 손절 경로에 각각
+    # 상승 지속 봉을 추가했다.
+    winning = _candles("2026-01-01", [100, 101, 104, 108, 108])  # take_profit
+    losing = _candles("2026-01-02", [100, 101, 104, 100, 96])  # 무장 후 stop_loss
 
     win_path = simulate_trade_path(winning, entry_idx=0, take_profit_pct=0.03, stop_loss_pct=0.02)
     lose_path = simulate_trade_path(losing, entry_idx=0, take_profit_pct=0.03, stop_loss_pct=0.02)

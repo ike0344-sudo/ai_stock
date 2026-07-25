@@ -6,8 +6,11 @@ import pytest
 
 from backtesting import strategy4_rank_watch
 from backtesting.strategy4_rank_watch import (
+    WATCHED_FROM_RANK,
+    WATCHED_TO_RANK,
     check_rank_promotion,
     describe_strategy_4,
+    generate_signals,
     run_rank_watch_loop,
 )
 
@@ -52,6 +55,29 @@ def test_check_rank_promotion_none_when_a_different_stock_becomes_3rd():
 
 def test_check_rank_promotion_none_on_first_cycle_with_no_previous_data():
     assert check_rank_promotion({}, {"AAA": 1, "BBB": 2, "CCC": 3, "DDD": 4}) is None
+
+
+# ---- generate_signals (Strategy 프로토콜 어댑터) ----
+
+def test_generate_signals_fires_on_rank_promotion_from_rank_column():
+    df = pd.DataFrame({"rank": [5, 4, 3, 3]})  # idx1->idx2에서 4위->3위 승격
+
+    out = generate_signals(df)
+
+    assert list(out["signal"]) == [0, 0, 1, 0]
+
+
+def test_generate_signals_all_zero_when_prev_4th_stays_at_4th():
+    df = pd.DataFrame({"rank": [4, 4, 4]})
+
+    out = generate_signals(df)
+
+    assert (out["signal"] == 0).all()
+
+
+def test_generate_signals_exposes_name_and_params():
+    assert generate_signals.name == "strategy_4"
+    assert generate_signals.params == {"watched_from_rank": WATCHED_FROM_RANK, "watched_to_rank": WATCHED_TO_RANK}
 
 
 def test_run_rank_watch_loop_notifies_and_logs_on_promotion_without_placing_orders(monkeypatch, tmp_path):

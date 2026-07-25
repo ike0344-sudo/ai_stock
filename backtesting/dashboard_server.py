@@ -3,10 +3,16 @@ backtest_results.py가 파싱한 상태를 JSON으로 직렬화해 응답하고,
 프론트엔드를 서빙한다. 파일 파싱/손상 처리는 전혀 하지 않고 각 데이터 계층에
 위임한다(Design §9.2 의존 규칙).
 
-trading_loop.py/risk_manager.py를 import하지 않는다 — 완전히 분리된 프로세스로
-실행된다(trading-dashboard.design.md §1.2). top35 갱신(POST /api/top35-update)이
-이 서버의 유일한 쓰기 트리거이며, 그 로직은 top35_job.py 한 모듈에만 격리돼 있다
+trading_loop.py를 import하지 않는다 — 완전히 분리된 프로세스로 실행된다
+(trading-dashboard.design.md §1.2). top35 갱신(POST /api/top35-update)이 이 서버의
+유일한 쓰기 트리거이며, 그 로직은 top35_job.py 한 모듈에만 격리돼 있다
 (backtest-dashboard.design.md §1.1/§9.2) — 그 외 라우트는 여전히 read-only.
+
+예외적으로 risk_manager.py는 check_order()만 읽기 전용으로 호출한다 — /api/sell,
+/api/sell-all이 실제 매도 주문을 내기 전에 risk_manager의 승인을 거치게 해, 리스크
+심사를 대시보드가 우회하지 않도록 한다(감사 지적사항). risk_state는 조회만 하고
+쓰지 않으며, /api/kill-switch/*는 사람이 누르는 긴급 수동 오버라이드라 이 승인
+경로에서 의도적으로 제외한다.
 
 정적 파일은 index.html/app.js/style.css 3개로 화이트리스트 매핑한다 — 요청 경로를
 그대로 파일시스템 경로로 쓰지 않아 경로 순회(path traversal)를 원천 차단한다
@@ -25,10 +31,13 @@ import math
 import os
 import subprocess
 import sys
+import threading
+import time
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import kill_switch_control, sell_all_job, sell_order, stop_control, top35_job
+from . import kill_switch_control, risk_manager, sell_all_job, sell_order, stop_control, top35_job
 from .account_status import get_account_snapshot
 from .backtest_results import list_results, read_result
 from .dashboard_data import (
@@ -42,7 +51,9 @@ from .dashboard_monitor import DEFAULT_STATE_DIR as DASHBOARD_MONITOR_STATE_DIR
 from .heartbeat import read_heartbeat_age_seconds
 from .market_snapshot import get_market_snapshot
 from .nasdaq_drop_monitor import DEFAULT_STATE_DIR as NASDAQ_DROP_MONITOR_STATE_DIR
+from .orderbook_collector import is_extended_market_open
 from .strategy_catalog import describe_strategy
+from .tick_collector import DEFAULT_STATE_DIR as TICK_COLLECTOR_STATE_DIR
 from .trading_value_ranking import get_ranking as get_trading_value_ranking
 from .trading_value_ranking import start_background_poller as start_ranking_background_poller
 
@@ -97,6 +108,45 @@ def spawn_detached(command: list[str], cwd: str, log_file) -> subprocess.Popen:
     )
 
 
+def start_tick_collector(state_root: str) -> bool:
+    """틱 수집 프로세스를 새로 띄운다. 이미 실행 중이면(heartbeat 기준) 아무 것도 안
+    하고 False — POST /api/tick-collector/start와 아래 일별 자동시작 스케줄러가
+    이 함수 하나를 공유해 "중복 실행 방지" 로직이 한 곳에만 있게 한다."""
+    if is_strategy_running(state_root, TICK_COLLECTOR_FOLDER_NAME):
+        return False
+    command = [sys.executable, "-m", "backtesting.cli", "collect-ticks"]
+    tick_collector_dir = os.path.join(state_root, TICK_COLLECTOR_FOLDER_NAME)
+    os.makedirs(tick_collector_dir, exist_ok=True)
+    log_file = open(os.path.join(tick_collector_dir, "loop_log.txt"), "a", encoding="utf-8")
+    spawn_detached(command, PROJECT_ROOT, log_file)
+    return True
+
+
+TICK_COLLECTOR_SCHEDULER_POLL_SECONDS = 60.0
+
+
+def _tick_collector_scheduler_loop(state_root: str) -> None:
+    """대시보드가 켜져 있는 동안, 통합장 시간이면서 아직 안 돌고 있으면 틱 수집을
+    스스로 (재)시작한다 — top35_job.start_daily_scheduler와 같은 이유(이 PC는 Windows
+    작업 스케줄러 등록이 UAC로 막혀있어 대시보드 프로세스 안에서 자체 스케줄링).
+    수집 루프 자체가 통합장이 끝나면 스스로 종료하므로(tick_collector.py), 날짜가
+    바뀌는 것과 무관하게 "통합장 시간 + 안 돌고 있음"만 확인하면 매일 자연히
+    반복된다 — 중간에 죽어도 다음 폴링에서 자동으로 다시 띄워진다."""
+    while True:
+        try:
+            if is_extended_market_open(datetime.now()):
+                start_tick_collector(state_root)
+        except Exception:
+            pass  # 상시 스케줄러 — 한 사이클 실패해도 다음 사이클에 계속
+        time.sleep(TICK_COLLECTOR_SCHEDULER_POLL_SECONDS)
+
+
+def start_tick_collector_scheduler(state_root: str) -> threading.Thread:
+    thread = threading.Thread(target=_tick_collector_scheduler_loop, args=(state_root,), daemon=True)
+    thread.start()
+    return thread
+
+
 MONITOR_ONLY_STRATEGIES = {"strategy_3", "strategy_4"}  # 주문 없이 관찰만 하는 전략 — monitor-signals로 실행
 
 
@@ -133,7 +183,9 @@ STATE_FILENAMES = {
 NON_STRATEGY_STATE_FOLDERS = {
     os.path.basename(NASDAQ_DROP_MONITOR_STATE_DIR),
     os.path.basename(DASHBOARD_MONITOR_STATE_DIR),
+    os.path.basename(TICK_COLLECTOR_STATE_DIR),
 }
+TICK_COLLECTOR_FOLDER_NAME = os.path.basename(TICK_COLLECTOR_STATE_DIR)
 
 
 def list_strategies(state_root: str) -> list[str]:
@@ -214,6 +266,19 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         strategies = list_strategies(self.state_root)
         return strategies[0] if strategies else DEFAULT_STRATEGY
 
+    def _sell_risk_decision(self, strategy: str, code: str, quantity: int) -> risk_manager.RiskDecision:
+        """매도도 risk_manager.check_order()를 거치게 한다 — 지금은 check_order가
+        side=="sell"이면 rule_id=sell_always_allowed로 무조건 승인하지만, 대시보드가
+        승인 경로 자체를 우회하지 않아야 향후 매도측 리스크 룰이 추가돼도 이 라우트가
+        자동으로 적용받는다(감사 지적사항). 킬 스위치는 사람이 누르는 긴급 수동
+        오버라이드라 이 경로에서 의도적으로 제외한다(/api/kill-switch/*는 그대로 직접 실행)."""
+        risk_state = risk_manager.load_state(self._strategy_path(strategy, "risk_state"))
+        config = load_strategy_config(self._strategy_path(strategy, "config"))
+        total_capital_krw = config.get("total_capital_krw", 10_000_000)
+        portfolio = risk_manager.PortfolioState(risk_state=risk_state, total_capital_krw=total_capital_krw)
+        order = risk_manager.OrderRequest(code=code, side="sell", quantity=quantity, price=0.0)
+        return risk_manager.check_order(order, portfolio)
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
@@ -233,6 +298,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/dashboard-monitor-status":
             self._send_json({
                 "running": is_strategy_running(self.state_root, os.path.basename(DASHBOARD_MONITOR_STATE_DIR)),
+            })
+        elif parsed.path == "/api/tick-collector-status":
+            self._send_json({
+                "running": is_strategy_running(self.state_root, TICK_COLLECTOR_FOLDER_NAME),
             })
         elif parsed.path == "/api/trading-value-ranking":
             window = query.get("window", ["extended"])[0]
@@ -294,7 +363,21 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
+    def _origin_is_trusted(self) -> bool:
+        """이 서버는 인증이 없어 상태 변경 라우트(매도/킬스위치/전략 시작-중지 등)가
+        누구나 호출 가능 — 같은 브라우저에 열린 다른 탭(악성 페이지)이 CSRF로 이 API를
+        조용히 호출하는 걸 막기 위해, Origin 헤더가 있는데 이 서버 자신(Host)과 다르면
+        거부한다. curl 등 브라우저가 아닌 클라이언트는 Origin을 안 보내므로 그대로 통과."""
+        origin = self.headers.get("Origin")
+        if origin is None:
+            return True
+        host = self.headers.get("Host", "")
+        return origin in (f"http://{host}", f"https://{host}")
+
     def do_POST(self) -> None:
+        if not self._origin_is_trusted():
+            self._send_json({"ok": False, "message": "허용되지 않은 요청 출처입니다"}, status=403)
+            return
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
         if parsed.path == "/api/top35-update":
@@ -314,11 +397,16 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             kill_switch_control.clear_kill_switch(path)
             self._send_json(kill_switch_control.get_override_status(path))
         elif parsed.path == "/api/sell-all":
-            started = sell_all_job.start_job(self.kiwoom_appkey, self.kiwoom_secretkey, self.kiwoom_is_mock)
-            if started:
-                self._send_json({"started": True}, status=200)
+            strategy = self._selected_strategy(query)
+            decision = self._sell_risk_decision(strategy, "ALL", 0)
+            if not decision.approved:
+                self._send_json({"started": False, "reason": decision.reason}, status=403)
             else:
-                self._send_json({"started": False, "reason": "이미 실행 중입니다"}, status=409)
+                started = sell_all_job.start_job(self.kiwoom_appkey, self.kiwoom_secretkey, self.kiwoom_is_mock)
+                if started:
+                    self._send_json({"started": True}, status=200)
+                else:
+                    self._send_json({"started": False, "reason": "이미 실행 중입니다"}, status=409)
         elif parsed.path == "/api/sell":
             code = query.get("code", [""])[0]
             try:
@@ -328,12 +416,17 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             if not code or quantity <= 0:
                 self._send_json({"ok": False, "message": "code/quantity가 올바르지 않습니다"}, status=400)
             else:
-                try:
-                    result = sell_order.sell_one(self.kiwoom_appkey, self.kiwoom_secretkey, self.kiwoom_is_mock, code, quantity)
-                    ok = result.get("return_code") == 0
-                    self._send_json({"ok": ok, "message": result.get("return_msg", "")}, status=200 if ok else 502)
-                except Exception as exc:
-                    self._send_json({"ok": False, "message": str(exc)}, status=502)
+                strategy = self._selected_strategy(query)
+                decision = self._sell_risk_decision(strategy, code, quantity)
+                if not decision.approved:
+                    self._send_json({"ok": False, "message": decision.reason}, status=403)
+                else:
+                    try:
+                        result = sell_order.sell_one(self.kiwoom_appkey, self.kiwoom_secretkey, self.kiwoom_is_mock, code, quantity)
+                        ok = result.get("return_code") == 0
+                        self._send_json({"ok": ok, "message": result.get("return_msg", "")}, status=200 if ok else 502)
+                    except Exception as exc:
+                        self._send_json({"ok": False, "message": str(exc)}, status=502)
         elif parsed.path == "/api/strategy/start":
             strategy = self._selected_strategy(query)
             if is_strategy_running(self.state_root, strategy):
@@ -349,6 +442,17 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/strategy/stop":
             strategy = self._selected_strategy(query)
             stop_control.request_stop(os.path.join(self.state_root, strategy, stop_control.DEFAULT_STOP_FLAG_FILENAME))
+            self._send_json({"stopped": True})
+        elif parsed.path == "/api/tick-collector/start":
+            started = start_tick_collector(self.state_root)
+            if started:
+                self._send_json({"started": True})
+            else:
+                self._send_json({"started": False, "reason": "이미 실행 중입니다"}, status=409)
+        elif parsed.path == "/api/tick-collector/stop":
+            stop_control.request_stop(
+                os.path.join(self.state_root, TICK_COLLECTOR_FOLDER_NAME, stop_control.DEFAULT_STOP_FLAG_FILENAME)
+            )
             self._send_json({"stopped": True})
         else:
             self.send_response(404)
@@ -428,6 +532,16 @@ def run_dashboard_server(
         # 해서, 거래대금 랭킹의 "장중"(regular) 베이스라인이 사람이 그 시간에 대시보드를
         # 열어봤는지에 의존하지 않게 한다(trading_value_ranking.py 모듈 docstring 참고).
         start_ranking_background_poller(kiwoom_appkey, kiwoom_secretkey, kiwoom_is_mock)
+        # 매일 장 마감 후(기본 15:40) top35 업데이트를 스스로 트리거 — cli.py의
+        # update-top35 docstring이 안내하는 "OS 스케줄러 등록"이 이 PC에선 UAC로
+        # 막혀 있어(top35_job.start_daily_scheduler 참고), 대신 이미 상시 실행 중인
+        # 대시보드 서버 프로세스 안에서 자체 스케줄링한다.
+        top35_job.start_daily_scheduler(kiwoom_appkey, kiwoom_secretkey, kiwoom_is_mock)
+        # 틱 수집도 매일 통합장 시간에 자동 (재)시작 — appkey/secretkey는 collect-ticks
+        # 서브프로세스가 자기 .env에서 직접 읽으므로 여기선 안 넘긴다(top35_job과 다른 점).
+        # 이 대시보드 인스턴스에 자격증명이 있을 때만 켠다 — 없으면 collect-ticks가 어차피
+        # 매번 실패할 걸 알면서 계속 재시도만 하게 된다.
+        start_tick_collector_scheduler(state_root)
     display_host = "127.0.0.1" if host == "0.0.0.0" else host
     print(f"대시보드 서버 시작: http://{display_host}:{port} (Ctrl+C로 중단)", flush=True)
     if host == "0.0.0.0":

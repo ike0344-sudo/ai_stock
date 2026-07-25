@@ -11,7 +11,27 @@ portfolio_sim.py의 "슬롯 N개, 없으면 스킵" 개념을 백테스트에서
 import json
 import os
 from dataclasses import asdict, dataclass, field
-from datetime import date
+from datetime import date, datetime
+
+import yaml
+
+DEFAULT_RISK_LIMITS_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "risk_limits.yaml")
+
+
+def load_risk_limits(path: str = DEFAULT_RISK_LIMITS_PATH) -> dict:
+    """risk_limits.yaml을 읽는다. 한도 변경은 코드가 아니라 이 파일에서만 한다
+    (risk-agent.md §핵심원칙 4) — check_order/get_position_size는 이 함수가 반환한
+    값만 참조하고, 전략 모듈(final_strategy.py 등)을 import하지 않는다."""
+    with open(path, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+_LIMITS = load_risk_limits()
+# trading_loop.py 등 실거래 코드가 참조하는 상수 — final_strategy.py(전략 모듈) 대신
+# 여기서 가져오게 하여 전략과 리스크 모듈의 독립성을 지킨다(감사 지적사항 #2).
+STOP_LOSS_PCT = _LIMITS["stop_loss_pct"]
+TIERS = tuple(_LIMITS["tiers"])
+RECOMMENDED_MAX_CONCURRENT_POSITIONS = _LIMITS["max_concurrent_positions"]
 
 
 @dataclass
@@ -22,6 +42,7 @@ class OpenPosition:
     entry_price: float
     remaining_fraction: float = 1.0  # 분할매도로 일부만 청산됐을 때 남은 비중
     total_quantity: int = 0  # 최초 매수 주식수 — 분할매도 시 실제 정수 수량 계산용(trading_loop.py)
+    pnl_krw: float = 0.0  # 이 포지션의 누적 실현손익(분할매도 legs 합산) — 연속손절 판정용
 
 
 @dataclass
@@ -30,6 +51,31 @@ class RiskState:
     realized_pnl_krw: float = 0.0
     open_positions: list = field(default_factory=list)
     kill_switch_active: bool = False
+    consecutive_losses: int = 0
+    last_exit: dict = field(default_factory=dict)  # code -> {"time": iso, "was_loss": bool} (재진입 쿨다운용)
+
+
+@dataclass
+class OrderRequest:
+    code: str
+    side: str  # "buy" | "sell"
+    quantity: int
+    price: float
+    stop: float | None = None  # 손절가 — None이면 check_order가 무조건 거부
+
+
+@dataclass
+class PortfolioState:
+    risk_state: RiskState
+    total_capital_krw: float
+
+
+@dataclass
+class RiskDecision:
+    approved: bool
+    reason: str
+    rule_id: str
+    adjusted_qty: int | None = None
 
 
 def load_state(path: str) -> RiskState:
@@ -44,6 +90,8 @@ def load_state(path: str) -> RiskState:
         realized_pnl_krw=raw.get("realized_pnl_krw", 0.0),
         open_positions=positions,
         kill_switch_active=raw.get("kill_switch_active", False),
+        consecutive_losses=raw.get("consecutive_losses", 0),
+        last_exit=raw.get("last_exit", {}),
     )
 
 
@@ -83,6 +131,8 @@ def roll_to_new_day_if_needed(
         realized_pnl_krw=0.0,
         open_positions=state.open_positions,
         kill_switch_active=False,
+        consecutive_losses=0,  # 연속손절 한도는 당일 기준(risk-agent.md §3)
+        last_exit={},
     )
 
 
@@ -146,13 +196,17 @@ def record_position_added_to(
 
 
 def record_partial_exit(
-    state: RiskState, code: str, exit_price: float, sold_fraction: float, max_daily_loss_krw: float
+    state: RiskState, code: str, exit_price: float, sold_fraction: float, max_daily_loss_krw: float,
+    exit_time: str | None = None,
 ) -> RiskState:
     """포지션의 일부(또는 전부)를 매도했을 때 호출. 전략 1번은 4단계 분할매도라
     한 포지션이 여러 번에 걸쳐 청산될 수 있다 — remaining_fraction이 0이 될 때까지
     슬롯을 계속 점유하고(다른 신규 진입이 그 슬롯을 못 씀), 완전히 청산돼야 슬롯이
     빈다(백테스트의 evaluate_tiered_exit_from_path_with_exit_idx와 동일한 "마지막
     leg에서만 종료" 규칙을 실거래 상태로 이식).
+
+    exit_time: 완전청산 시 state.last_exit[code]에 기록되는 시각(재진입 쿨다운
+    판정용, check_order 참고) — 미지정 시 현재 시각을 쓴다.
     """
     position = next((p for p in state.open_positions if p.code == code), None)
     if position is None:
@@ -162,9 +216,13 @@ def record_partial_exit(
     pnl_krw = position.allocated_capital * sold_fraction * pnl_pct
     state.realized_pnl_krw += pnl_krw
     position.remaining_fraction -= sold_fraction
+    position.pnl_krw += pnl_krw
 
     if position.remaining_fraction <= 1e-9:
         state.open_positions = [p for p in state.open_positions if p.code != code]
+        was_loss = position.pnl_krw < 0
+        state.last_exit[code] = {"time": exit_time or datetime.now().isoformat(), "was_loss": was_loss}
+        state.consecutive_losses = state.consecutive_losses + 1 if was_loss else 0
 
     if state.realized_pnl_krw <= -max_daily_loss_krw:
         state.kill_switch_active = True
@@ -172,7 +230,97 @@ def record_partial_exit(
     return state
 
 
-def record_position_closed(state: RiskState, code: str, exit_price: float, max_daily_loss_krw: float) -> RiskState:
+def record_position_closed(
+    state: RiskState, code: str, exit_price: float, max_daily_loss_krw: float, exit_time: str | None = None,
+) -> RiskState:
     """포지션을 한 번에 전량 청산(sold_fraction=1.0)하는 record_partial_exit의 별칭.
     분할매도 없이 단순 손절/전량청산되는 경우에 사용."""
-    return record_partial_exit(state, code, exit_price, sold_fraction=1.0, max_daily_loss_krw=max_daily_loss_krw)
+    return record_partial_exit(
+        state, code, exit_price, sold_fraction=1.0, max_daily_loss_krw=max_daily_loss_krw, exit_time=exit_time,
+    )
+
+
+def get_position_size(code: str, entry: float, stop: float, portfolio: PortfolioState, limits: dict | None = None) -> int:
+    """손절 거리 기반 포지션 사이징 (리스크 금액 고정 방식, risk-agent.md §1):
+    수량 = (계좌 x 트레이드당 리스크%) / (진입가 - 손절가).
+
+    entry == stop(손절거리 0)이면 나눗셈이 불가능하므로 0을 반환한다 — 호출자가
+    check_order를 거치므로 정상 흐름에서는 도달하지 않는다.
+    """
+    limits = limits if limits is not None else _LIMITS
+    per_share_risk = abs(entry - stop)
+    if per_share_risk == 0:
+        return 0
+    risk_amount_krw = portfolio.total_capital_krw * limits["risk_pct_per_trade"]
+    return max(0, int(risk_amount_krw // per_share_risk))
+
+
+def check_order(
+    order: OrderRequest, portfolio: PortfolioState, limits: dict | None = None, now: str | None = None,
+) -> RiskDecision:
+    """모든 주문은 이 심사를 통과해야 실행 에이전트로 전달된다(risk-agent.md §핵심원칙
+    1) — 전략 코드는 import하지 않고 order/portfolio와 risk_limits.yaml만으로 판단한다.
+    승인/거부 어느 쪽이든 reason/rule_id를 채워 조용한 결정이 없게 한다(§핵심원칙 3).
+
+    now: reentry_cooldown_sec 판정 기준 시각(테스트 주입용) — 미지정 시 현재 시각.
+    """
+    limits = limits if limits is not None else _LIMITS
+    risk_state = portfolio.risk_state
+
+    if order.side == "sell":
+        return RiskDecision(approved=True, reason="청산 주문은 리스크 심사 대상이 아님", rule_id="sell_always_allowed")
+
+    if order.stop is None:
+        return RiskDecision(approved=False, reason="손절가 없는 진입 요청은 거부", rule_id="no_stop_loss")
+
+    if risk_state.kill_switch_active:
+        return RiskDecision(approved=False, reason="킬 스위치 발동 중 — 신규 진입 전면 차단", rule_id="kill_switch_active")
+
+    max_consecutive_losses = limits.get("max_consecutive_losses")
+    if max_consecutive_losses is not None and risk_state.consecutive_losses >= max_consecutive_losses:
+        return RiskDecision(
+            approved=False,
+            reason=f"연속손절 {risk_state.consecutive_losses}회로 한도 {max_consecutive_losses}회 도달 — 당일 거래 중단",
+            rule_id="max_consecutive_losses",
+        )
+
+    max_concurrent = limits.get("max_concurrent_positions")
+    if max_concurrent is not None and not can_open_new_position(risk_state, max_concurrent):
+        return RiskDecision(
+            approved=False, reason=f"동시보유 한도 {max_concurrent}종목 초과", rule_id="max_concurrent_positions",
+        )
+
+    notional = order.quantity * order.price
+    max_order_notional = limits.get("max_order_notional")
+    if max_order_notional is not None and notional > max_order_notional:
+        return RiskDecision(
+            approved=False,
+            reason=f"단일주문 금액 {notional:,.0f}원이 한도 {max_order_notional:,.0f}원 초과(팻핑거 방지)",
+            rule_id="max_order_notional",
+        )
+
+    max_symbol_weight_pct = limits.get("max_symbol_weight_pct")
+    if max_symbol_weight_pct is not None:
+        existing_capital = sum(p.allocated_capital for p in risk_state.open_positions if p.code == order.code)
+        weight = (existing_capital + notional) / portfolio.total_capital_krw
+        if weight > max_symbol_weight_pct:
+            return RiskDecision(
+                approved=False,
+                reason=f"{order.code} 비중 {weight:.1%}가 한도 {max_symbol_weight_pct:.1%} 초과",
+                rule_id="max_symbol_weight_pct",
+            )
+
+    reentry_cooldown_sec = limits.get("reentry_cooldown_sec")
+    if reentry_cooldown_sec is not None:
+        last = risk_state.last_exit.get(order.code)
+        if last is not None and last["was_loss"]:
+            now_dt = datetime.fromisoformat(now) if now is not None else datetime.now()
+            elapsed = (now_dt - datetime.fromisoformat(last["time"])).total_seconds()
+            if elapsed < reentry_cooldown_sec:
+                return RiskDecision(
+                    approved=False,
+                    reason=f"{order.code} 손절 후 재진입 쿨다운 {reentry_cooldown_sec}초 미경과(경과 {elapsed:.0f}초)",
+                    rule_id="reentry_cooldown",
+                )
+
+    return RiskDecision(approved=True, reason="리스크 심사 통과", rule_id="approved")
