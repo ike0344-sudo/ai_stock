@@ -642,13 +642,9 @@ function renderResultDetail(detail) {
 }
 
 function renderTop35Status(status) {
-  const button = document.getElementById("top35-update-button");
   const progress = document.getElementById("top35-progress");
   const summary = document.getElementById("top35-summary");
   const error = document.getElementById("top35-error");
-
-  button.disabled = status.status === "running";
-  button.textContent = status.status === "running" ? "업데이트 중..." : "top35 업데이트";
 
   progress.classList.toggle("hidden", status.status !== "running");
   if (status.status === "running") {
@@ -677,7 +673,10 @@ function renderTop35Results(results) {
   for (const item of results) {
     const row = document.createElement("tr");
     const isSuccess = item.status === "ok";
-    const cells = [item.stock_code, item.name, isSuccess ? "성공" : item.status];
+    const cells = [
+      item.stock_code, item.name, isSuccess ? "성공" : item.status,
+      item.daily_range || "-", item.minute_range || "-",
+    ];
     for (const value of cells) {
       const td = document.createElement("td");
       td.textContent = value;
@@ -694,16 +693,6 @@ async function pollTop35Status() {
     if (res.ok) renderTop35Status(await res.json());
   } catch (err) {
     // 이 폴링은 메인 연결경고와 별개로 조용히 재시도한다.
-  }
-}
-
-async function triggerTop35Update() {
-  try {
-    await fetch("/api/top35-update", { method: "POST" });
-    // 409(이미 실행 중)든 200이든, 다음 pollTop35Status()가 실제 상태를 반영한다.
-    pollTop35Status();
-  } catch (err) {
-    // 트리거 요청 자체가 실패해도 버튼은 다음 상태 폴링에서 자연히 복구된다.
   }
 }
 
@@ -809,7 +798,6 @@ async function pollOnce() {
   }
 }
 
-document.getElementById("top35-update-button").addEventListener("click", triggerTop35Update);
 document.getElementById("sell-all-button").addEventListener("click", triggerSellAll);
 document.getElementById("kill-switch-activate-button").addEventListener("click", triggerKillSwitchActivate);
 document.getElementById("kill-switch-clear-button").addEventListener("click", triggerKillSwitchClear);

@@ -103,7 +103,17 @@ def test_to_dataframe_empty_when_no_ticks():
     df = CandleAggregator().to_dataframe()
 
     assert df.empty
-    assert list(df.columns) == ["open", "high", "low", "close", "volume"]
+    assert list(df.columns) == ["open", "high", "low", "close", "volume", "value"]
+
+
+def test_add_tick_accumulates_true_value_from_price_times_volume_delta():
+    agg = CandleAggregator()
+    agg.add_tick({"price": 70000.0, "cum_volume": 1000, "time_hms": "093001"}, "2026-07-22")  # 기준선(delta=0)
+    agg.add_tick({"price": 70100.0, "cum_volume": 1050, "time_hms": "093010"}, "2026-07-22")  # +50 * 70100
+    agg.add_tick({"price": 70200.0, "cum_volume": 1080, "time_hms": "093020"}, "2026-07-22")  # +30 * 70200
+
+    df = agg.to_dataframe()
+    assert df.iloc[0]["value"] == 50 * 70100.0 + 30 * 70200.0
 
 
 def test_to_dataframe_sorted_even_if_ticks_processed_out_of_order():
@@ -205,7 +215,7 @@ def test_get_minute_df_returns_empty_for_unsubscribed_code(feed):
     df = feed.get_minute_df("005930")
 
     assert df.empty
-    assert list(df.columns) == ["open", "high", "low", "close", "volume"]
+    assert list(df.columns) == ["open", "high", "low", "close", "volume", "value"]
 
 
 def test_on_message_data_push_updates_latest_bid(feed):
@@ -256,6 +266,7 @@ def test_seed_from_dataframe_populates_minute_df(feed):
     assert len(df) == 1
     assert df.iloc[0]["close"] == 70100.0
     assert df.index[0] == pd.Timestamp("2026-07-22 09:15:00")
+    assert df.iloc[0]["value"] == 70100.0 * 500.0  # 체결 단위 내역이 없어 close*volume 근사로 시딩
 
 
 def test_seed_from_dataframe_then_live_tick_appends_new_minute(feed):

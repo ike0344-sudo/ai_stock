@@ -40,7 +40,10 @@ import websocket
 from kiwoom_client import KiwoomClient
 
 RECONNECT_DELAY_SECONDS = 5.0
+MAX_RECONNECT_DELAY_SECONDS = 60.0
 MAX_BUFFERED_MINUTES = 400  # 정규장 하루(약 391분)치 여유
+WS_PING_INTERVAL_SECONDS = 20.0
+WS_PING_TIMEOUT_SECONDS = 10.0
 
 
 def _parse_signed(raw) -> float:
@@ -93,7 +96,7 @@ class CandleAggregator:
         if candle is None:
             self.candles[minute_key] = {
                 "open": price, "high": price, "low": price, "close": price,
-                "volume": volume_delta, "trading_date": trading_date,
+                "volume": volume_delta, "value": price * volume_delta, "trading_date": trading_date,
             }
             if len(self.candles) > MAX_BUFFERED_MINUTES:
                 self.candles.popitem(last=False)
@@ -102,15 +105,16 @@ class CandleAggregator:
             candle["low"] = min(candle["low"], price)
             candle["close"] = price
             candle["volume"] += volume_delta
+            candle["value"] += price * volume_delta
 
     def to_dataframe(self) -> pd.DataFrame:
         if not self.candles:
-            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume", "value"])
         rows = []
         index = []
         for minute_key, candle in self.candles.items():
             index.append(pd.Timestamp(f"{candle['trading_date']} {minute_key[:2]}:{minute_key[2:]}:00"))
-            rows.append({k: candle[k] for k in ("open", "high", "low", "close", "volume")})
+            rows.append({k: candle[k] for k in ("open", "high", "low", "close", "volume", "value")})
         return pd.DataFrame(rows, index=index).sort_index()
 
 
@@ -131,6 +135,7 @@ class RealtimeFeed:
         self._thread: threading.Thread | None = None
         self._stop = False
         self._connected = threading.Event()
+        self._last_tick_at: float | None = None
 
     def _ws_url(self) -> str:
         host = "mockapi.kiwoom.com" if self.is_mock else "api.kiwoom.com"
@@ -171,20 +176,35 @@ class RealtimeFeed:
             tick = parse_tick(values)
             if tick is None:
                 continue
+            trading_date = datetime.now().strftime("%Y-%m-%d")
             with self._lock:
-                self._aggregators[code].add_tick(tick, datetime.now().strftime("%Y-%m-%d"))
+                self._aggregators[code].add_tick(tick, trading_date)
                 self._latest[code] = {"price": tick["price"], "bid": tick["bid"]}
+                self._last_tick_at = time.time()
 
     def _run_forever_with_reconnect(self) -> None:
+        consecutive_failures = 0
         while not self._stop:
             self._connected.clear()
             self._ws = websocket.WebSocketApp(
                 self._ws_url(), on_open=self._on_open, on_message=self._on_message,
             )
-            self._ws.run_forever()
+            # ping_interval/ping_timeout 없이는 TCP가 FIN/RST 없이 죽는 경우(와이파이
+            # 드랍 등) run_forever()가 그 사실을 못 알아채고 무한정 대기할 수 있다 —
+            # websocket-client가 자체적으로 ping을 보내고 timeout 안에 pong이 없으면
+            # 연결을 끊어 아래 재연결 루프가 돌게 한다.
+            self._ws.run_forever(ping_interval=WS_PING_INTERVAL_SECONDS, ping_timeout=WS_PING_TIMEOUT_SECONDS)
             if self._stop:
                 break
-            time.sleep(RECONNECT_DELAY_SECONDS)  # 재연결 전 대기 — 즉시 재시도하면 서버 부담
+            if self._connected.is_set():
+                consecutive_failures = 0  # REG까지 성공했었다면 이번 끊김은 일시적 문제로 보고 리셋
+            else:
+                consecutive_failures += 1
+            # REG가 계속 실패해 바로바로 재연결이 반복되면 _on_open이 매번 새
+            # OAuth 토큰을 발급받아 인증 엔드포인트 자체가 rate-limit(429)에 걸릴 수
+            # 있다 — 연속 실패마다 대기시간을 늘려 그 빈도를 낮춘다.
+            delay = min(MAX_RECONNECT_DELAY_SECONDS, RECONNECT_DELAY_SECONDS * (2 ** consecutive_failures))
+            time.sleep(delay)
 
     def start(self, wait_connected_seconds: float = 10.0) -> bool:
         """백그라운드 스레드로 연결을 시작한다. REG 승인까지 wait_connected_seconds
@@ -197,6 +217,15 @@ class RealtimeFeed:
         self._stop = True
         if self._ws is not None:
             self._ws.close()
+
+    def get_feed_age_seconds(self) -> float | None:
+        """마지막으로 유효한 틱을 받은 지 몇 초 지났는지 — 아직 하나도 못 받았으면 None.
+        피드가 소켓은 열려 있는 채로 조용히 데이터만 끊긴 상황을 호출부가 감지하려면
+        (예: 이 값이 임계값을 넘으면 REST로 폴백) 이 값을 폴링해야 한다."""
+        with self._lock:
+            if self._last_tick_at is None:
+                return None
+            return time.time() - self._last_tick_at
 
     def get_minute_df(self, code: str) -> pd.DataFrame:
         with self._lock:
@@ -227,7 +256,11 @@ class RealtimeFeed:
         (당일 신고가, 장중고점 대비 하락폭 등)을 제대로 평가할 수 없다. 백필 분봉엔
         누적거래량 기준선이 없어서, 백필 마지막 분봉과 실시간 첫 틱이 겹치는 구간의
         거래량은 다소 부정확할 수 있다(가격 OHLC는 영향 없음 — detect_entries의 거래대금
-        조건에만 미미하게 영향, 그것도 봉 하나에 한정된 부팅 시점의 일회성 오차)."""
+        조건에만 미미하게 영향, 그것도 봉 하나에 한정된 부팅 시점의 일회성 오차).
+
+        "value"(체결대금)도 백필분은 REST가 체결 단위 내역을 안 줘서 close*volume
+        근사치로 시딩한다 — add_tick이 그 이후 틱부터는 정확한 체결가×체결량 증분을
+        더해가므로, 부정확한 건 백필 마지막 분봉 하나뿐이다(위 거래량 오차와 동일 범위)."""
         with self._lock:
             aggregator = self._aggregators.get(code)
             if aggregator is None or df.empty:
@@ -237,5 +270,6 @@ class RealtimeFeed:
                 aggregator.candles[minute_key] = {
                     "open": float(row["open"]), "high": float(row["high"]),
                     "low": float(row["low"]), "close": float(row["close"]),
-                    "volume": float(row["volume"]), "trading_date": ts.strftime("%Y-%m-%d"),
+                    "volume": float(row["volume"]), "value": float(row["close"]) * float(row["volume"]),
+                    "trading_date": ts.strftime("%Y-%m-%d"),
                 }

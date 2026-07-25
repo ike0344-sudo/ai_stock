@@ -46,7 +46,6 @@ from .strategy3_scalp import run_scalp_monitor_loop
 from .strategy4_rank_watch import DEFAULT_SIGNAL_LOG_PATH as STRATEGY4_DEFAULT_SIGNAL_LOG_PATH
 from .strategy4_rank_watch import run_rank_watch_loop
 from .telegram_order_bot import run_telegram_order_bot
-from .tick_collector import run_tick_collector_loop
 from .trading_loop import run_trading_loop
 from .universe import build_liquid_universe, build_topn_union_universe
 from .updater import update_top35
@@ -676,18 +675,6 @@ def _run_monitor_nasdaq_drop(args) -> None:
             time.sleep(RESTART_DELAY_SECONDS)
 
 
-def _run_collect_ticks(args) -> None:
-    """매매 판단/주문 없이 오늘의 top-N 워치리스트 체결을 data/ticks/에 저장만 하는
-    전용 프로세스. strategy_1~5의 run-trading/monitor-signals와 완전히 분리돼 있다 —
-    이 프로세스가 죽어도 실전 매매에는 영향이 없다."""
-    client = _build_client()
-    if not wait_until_extended_market_open():
-        print("현재 통합장 시간이 아닙니다(평일 08:00~20:00). 수집을 시작하지 않고 종료합니다.")
-        return
-    run_tick_collector_loop(client, top_n=args.top_n)
-    print("통합장 종료로 틱 수집을 마쳤습니다.")
-
-
 def _run_monitor_dashboard(args) -> None:
     """트레이딩 대시보드(dashboard_server.py)가 응답하는지 주기적으로 확인해, 응답이
     끊기면/복구되면 텔레그램으로 알린다. 대시보드와 완전히 분리된 프로세스라 대시보드가
@@ -926,13 +913,6 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard_monitor_parser.add_argument("--port", type=int, default=8765, help="확인할 대시보드 포트 (dashboard 명령의 --port와 맞출 것)")
     dashboard_monitor_parser.add_argument("--interval-seconds", type=float, default=30.0, help="확인 간격(초)")
     dashboard_monitor_parser.set_defaults(func=_run_monitor_dashboard)
-
-    collect_ticks_parser = sub.add_parser(
-        "collect-ticks",
-        help="매매 판단/주문 없이 오늘의 top-N 워치리스트 체결(틱)만 data/ticks/에 저장 (strategy_1~5와 분리된 프로세스)",
-    )
-    collect_ticks_parser.add_argument("--top-n", type=int, default=35)
-    collect_ticks_parser.set_defaults(func=_run_collect_ticks)
 
     return parser
 

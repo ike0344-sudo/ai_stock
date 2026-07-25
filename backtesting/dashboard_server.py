@@ -53,7 +53,6 @@ from .market_snapshot import get_market_snapshot
 from .nasdaq_drop_monitor import DEFAULT_STATE_DIR as NASDAQ_DROP_MONITOR_STATE_DIR
 from .orderbook_collector import is_extended_market_open
 from .strategy_catalog import describe_strategy
-from .tick_collector import DEFAULT_STATE_DIR as TICK_COLLECTOR_STATE_DIR
 from .trading_value_ranking import get_ranking as get_trading_value_ranking
 from .trading_value_ranking import start_background_poller as start_ranking_background_poller
 
@@ -108,45 +107,6 @@ def spawn_detached(command: list[str], cwd: str, log_file) -> subprocess.Popen:
     )
 
 
-def start_tick_collector(state_root: str) -> bool:
-    """틱 수집 프로세스를 새로 띄운다. 이미 실행 중이면(heartbeat 기준) 아무 것도 안
-    하고 False — POST /api/tick-collector/start와 아래 일별 자동시작 스케줄러가
-    이 함수 하나를 공유해 "중복 실행 방지" 로직이 한 곳에만 있게 한다."""
-    if is_strategy_running(state_root, TICK_COLLECTOR_FOLDER_NAME):
-        return False
-    command = [sys.executable, "-m", "backtesting.cli", "collect-ticks"]
-    tick_collector_dir = os.path.join(state_root, TICK_COLLECTOR_FOLDER_NAME)
-    os.makedirs(tick_collector_dir, exist_ok=True)
-    log_file = open(os.path.join(tick_collector_dir, "loop_log.txt"), "a", encoding="utf-8")
-    spawn_detached(command, PROJECT_ROOT, log_file)
-    return True
-
-
-TICK_COLLECTOR_SCHEDULER_POLL_SECONDS = 60.0
-
-
-def _tick_collector_scheduler_loop(state_root: str) -> None:
-    """대시보드가 켜져 있는 동안, 통합장 시간이면서 아직 안 돌고 있으면 틱 수집을
-    스스로 (재)시작한다 — top35_job.start_daily_scheduler와 같은 이유(이 PC는 Windows
-    작업 스케줄러 등록이 UAC로 막혀있어 대시보드 프로세스 안에서 자체 스케줄링).
-    수집 루프 자체가 통합장이 끝나면 스스로 종료하므로(tick_collector.py), 날짜가
-    바뀌는 것과 무관하게 "통합장 시간 + 안 돌고 있음"만 확인하면 매일 자연히
-    반복된다 — 중간에 죽어도 다음 폴링에서 자동으로 다시 띄워진다."""
-    while True:
-        try:
-            if is_extended_market_open(datetime.now()):
-                start_tick_collector(state_root)
-        except Exception:
-            pass  # 상시 스케줄러 — 한 사이클 실패해도 다음 사이클에 계속
-        time.sleep(TICK_COLLECTOR_SCHEDULER_POLL_SECONDS)
-
-
-def start_tick_collector_scheduler(state_root: str) -> threading.Thread:
-    thread = threading.Thread(target=_tick_collector_scheduler_loop, args=(state_root,), daemon=True)
-    thread.start()
-    return thread
-
-
 MONITOR_ONLY_STRATEGIES = {"strategy_3", "strategy_4"}  # 주문 없이 관찰만 하는 전략 — monitor-signals로 실행
 
 
@@ -183,9 +143,7 @@ STATE_FILENAMES = {
 NON_STRATEGY_STATE_FOLDERS = {
     os.path.basename(NASDAQ_DROP_MONITOR_STATE_DIR),
     os.path.basename(DASHBOARD_MONITOR_STATE_DIR),
-    os.path.basename(TICK_COLLECTOR_STATE_DIR),
 }
-TICK_COLLECTOR_FOLDER_NAME = os.path.basename(TICK_COLLECTOR_STATE_DIR)
 
 
 def list_strategies(state_root: str) -> list[str]:
@@ -298,10 +256,6 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/dashboard-monitor-status":
             self._send_json({
                 "running": is_strategy_running(self.state_root, os.path.basename(DASHBOARD_MONITOR_STATE_DIR)),
-            })
-        elif parsed.path == "/api/tick-collector-status":
-            self._send_json({
-                "running": is_strategy_running(self.state_root, TICK_COLLECTOR_FOLDER_NAME),
             })
         elif parsed.path == "/api/trading-value-ranking":
             window = query.get("window", ["extended"])[0]
@@ -443,17 +397,6 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             strategy = self._selected_strategy(query)
             stop_control.request_stop(os.path.join(self.state_root, strategy, stop_control.DEFAULT_STOP_FLAG_FILENAME))
             self._send_json({"stopped": True})
-        elif parsed.path == "/api/tick-collector/start":
-            started = start_tick_collector(self.state_root)
-            if started:
-                self._send_json({"started": True})
-            else:
-                self._send_json({"started": False, "reason": "이미 실행 중입니다"}, status=409)
-        elif parsed.path == "/api/tick-collector/stop":
-            stop_control.request_stop(
-                os.path.join(self.state_root, TICK_COLLECTOR_FOLDER_NAME, stop_control.DEFAULT_STOP_FLAG_FILENAME)
-            )
-            self._send_json({"stopped": True})
         else:
             self.send_response(404)
             self.end_headers()
@@ -537,11 +480,6 @@ def run_dashboard_server(
         # 막혀 있어(top35_job.start_daily_scheduler 참고), 대신 이미 상시 실행 중인
         # 대시보드 서버 프로세스 안에서 자체 스케줄링한다.
         top35_job.start_daily_scheduler(kiwoom_appkey, kiwoom_secretkey, kiwoom_is_mock)
-        # 틱 수집도 매일 통합장 시간에 자동 (재)시작 — appkey/secretkey는 collect-ticks
-        # 서브프로세스가 자기 .env에서 직접 읽으므로 여기선 안 넘긴다(top35_job과 다른 점).
-        # 이 대시보드 인스턴스에 자격증명이 있을 때만 켠다 — 없으면 collect-ticks가 어차피
-        # 매번 실패할 걸 알면서 계속 재시도만 하게 된다.
-        start_tick_collector_scheduler(state_root)
     display_host = "127.0.0.1" if host == "0.0.0.0" else host
     print(f"대시보드 서버 시작: http://{display_host}:{port} (Ctrl+C로 중단)", flush=True)
     if host == "0.0.0.0":
