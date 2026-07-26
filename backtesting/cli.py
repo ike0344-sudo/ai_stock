@@ -30,6 +30,7 @@ from .data_loader import (
     load_index_history,
 )
 from .final_strategy import RECOMMENDED_PROBA_THRESHOLD, train_and_save_final_model
+from .heartbeat import write_heartbeat
 from .live_monitor import run_monitor_loop
 from .ml_entry_filter import FEATURE_COLUMNS, load_model
 from .nasdaq_drop_monitor import DROP_THRESHOLD_PCT, WINDOW_SECONDS, run_nasdaq_drop_monitor
@@ -535,17 +536,22 @@ def _run_trading(args) -> None:
         print("TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID가 .env에 설정되어 있지 않습니다. 체결/오류/kill switch 알림 없이는 실주문을 시작하지 않습니다.")
         return
 
+    strategy = getattr(args, "strategy", "strategy_1")
+    defaults = _strategy_state_defaults(strategy)
+    risk_state_path = args.risk_state_path or defaults["risk_state_path"]
+
     client = _build_client()
-    if not wait_until_extended_market_open():
+    # 08:00 대기 구간에도 heartbeat를 계속 찍어야 한다 — 안 그러면 대시보드가 이
+    # 프로세스를 "중지됨"으로 오판해 "시작" 버튼으로 중복 실행시키는 사고가 난다
+    # (trading_loop.run_trading_loop의 같은 문제를 고친 이유와 동일, 실계좌에서 실측).
+    write_heartbeat(os.path.dirname(risk_state_path))
+    if not wait_until_extended_market_open(on_wait_tick=lambda: write_heartbeat(os.path.dirname(risk_state_path))):
         print("현재 통합장 시간이 아닙니다(평일 08:00~20:00). 실주문을 시작하지 않고 종료합니다.")
         return
 
     is_mock = os.environ.get("KIWOOM_IS_MOCK", "true").lower() == "true"
     mode_label = "모의투자" if is_mock else "*** 실계좌(실제 자금) ***"
 
-    strategy = getattr(args, "strategy", "strategy_1")
-    defaults = _strategy_state_defaults(strategy)
-    risk_state_path = args.risk_state_path or defaults["risk_state_path"]
     order_log_path = args.order_log_path or defaults["order_log_path"]
     pnl_history_path = args.pnl_history_path or defaults["pnl_history_path"]
     kill_switch_override_path = args.kill_switch_override_path or defaults["kill_switch_override_path"]

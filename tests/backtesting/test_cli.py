@@ -592,7 +592,7 @@ def test_run_trading_skips_when_market_closed(monkeypatch, capsys):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
     monkeypatch.setattr(cli, "_build_client", lambda: object())
-    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda: False)
+    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: False)
     calls = []
     monkeypatch.setattr(cli, "run_trading_loop", lambda *a, **k: calls.append((a, k)))
 
@@ -609,7 +609,7 @@ def test_run_trading_starts_loop_with_env_values_when_market_open(monkeypatch, c
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
     monkeypatch.setenv("KIWOOM_IS_MOCK", "true")
     monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
-    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda: True)
+    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     monkeypatch.setattr(cli, "load_model", lambda path: f"trained:{path}")
     monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
     calls = []
@@ -638,7 +638,7 @@ def test_run_trading_warns_real_account_when_not_mock(monkeypatch, capsys):
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
     monkeypatch.setenv("KIWOOM_IS_MOCK", "false")
     monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
-    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda: True)
+    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     monkeypatch.setattr(cli, "load_model", lambda path: "trained")
     monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
     monkeypatch.setattr(cli, "run_trading_loop", lambda *a, **k: None)
@@ -654,7 +654,7 @@ def test_run_trading_derives_paths_from_strategy_when_not_explicit(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
     monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
-    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda: True)
+    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     monkeypatch.setattr(cli, "load_model", lambda path: f"trained:{path}")
     monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
     calls = []
@@ -684,7 +684,7 @@ def test_run_trading_writes_strategy_config_snapshot(monkeypatch):
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
     monkeypatch.setenv("KIWOOM_IS_MOCK", "true")
     monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
-    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda: True)
+    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     monkeypatch.setattr(cli, "load_model", lambda path: "trained")
     monkeypatch.setattr(cli, "run_trading_loop", lambda *a, **k: None)
     config_calls = []
@@ -711,7 +711,7 @@ def test_run_trading_dispatches_strategy_2_to_oversold_loop_without_loading_mode
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
     monkeypatch.setenv("KIWOOM_IS_MOCK", "true")
     monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
-    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda: True)
+    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
     model_calls = []
     monkeypatch.setattr(cli, "load_model", lambda path: model_calls.append(path) or "trained")
@@ -743,7 +743,7 @@ def test_run_trading_strategy_2_config_snapshot_has_no_ml_fields(monkeypatch):
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
     monkeypatch.setenv("KIWOOM_IS_MOCK", "true")
     monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
-    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda: True)
+    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     monkeypatch.setattr(cli, "run_oversold_trading_loop", lambda *a, **k: None)
     config_calls = []
     monkeypatch.setattr(cli, "_write_strategy_config", lambda risk_state_path, config: config_calls.append((risk_state_path, config)))

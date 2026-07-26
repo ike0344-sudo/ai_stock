@@ -43,7 +43,7 @@ def is_extended_market_open(now: datetime) -> bool:
     return start <= now <= end
 
 
-def wait_until_extended_market_open(now_fn=datetime.now) -> bool:
+def wait_until_extended_market_open(now_fn=datetime.now, on_wait_tick=None) -> bool:
     """지금이 평일 08:00 이전이면 08:00까지 대기했다가 True를 반환한다 — 사람이 8시
     정각에 맞춰 수동으로 실행해야 하는 부담/오차(전략1~4를 8시에 직접 실행하려 했으나
     정확히 맞추지 못해 그냥 종료되곤 했던 문제) 없이, 미리 켜두면 자동으로 통합장
@@ -52,7 +52,14 @@ def wait_until_extended_market_open(now_fn=datetime.now) -> bool:
     다음 개장일을 기다리게 하는 건 이 함수의 범위 밖이다.
 
     now_fn: 매 폴링마다 현재 시각을 얻는 콜백(기본 datetime.now) — 테스트에서 가짜
-    시계를 주입할 수 있도록 nasdaq_drop_monitor.py의 _now() 래퍼와 같은 이유로 존재."""
+    시계를 주입할 수 있도록 nasdaq_drop_monitor.py의 _now() 래퍼와 같은 이유로 존재.
+
+    on_wait_tick: 대기 중 매 폴링마다 호출되는 콜백(기본 없음) — 대시보드는 heartbeat
+    나이로만 "실행 중"을 판단하는데, 이 대기 구간은 trading_loop.run_trading_loop 진입
+    전이라 원래 heartbeat를 전혀 안 썼다. 그래서 08:00까지 대기가 길어지면(자동시작이
+    07:50에 걸려도 최대 10분) 대시보드가 "중지됨"으로 오판해 "시작" 버튼으로 중복
+    실행되는 사고가 실계좌에서 실측됐다 — 호출자가 write_heartbeat를 여기 꽂아 대기
+    구간에도 하트비트가 계속 갱신되게 한다."""
     now = now_fn()
     today_open = now.replace(hour=EXTENDED_OPEN_HOUR, minute=EXTENDED_OPEN_MINUTE, second=0, microsecond=0)
     if now.weekday() >= 5 or now >= today_open:
@@ -64,6 +71,8 @@ def wait_until_extended_market_open(now_fn=datetime.now) -> bool:
         flush=True,
     )
     while now_fn() < today_open:
+        if on_wait_tick is not None:
+            on_wait_tick()
         time.sleep(15.0)
     return True
 
