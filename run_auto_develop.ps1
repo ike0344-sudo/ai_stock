@@ -1,4 +1,4 @@
-# 자율 전략 개선 사이클 1회 실행 — nasdaq_monitor_watchdog.ps1이 주기가 되면 이 스크립트를
+﻿# 자율 전략 개선 사이클 1회 실행 — nasdaq_monitor_watchdog.ps1이 주기가 되면 이 스크립트를
 # 백그라운드로 띄운다. 격리를 위해 매번 새 git worktree(새 브랜치)에서 실행하고,
 # 결과는 auto_develop_prompt.md의 규칙에 따라 검증 통과 시에만 origin/main에 push된다
 # (로컬 main 체크아웃/작업 디렉토리는 건드리지 않음).
