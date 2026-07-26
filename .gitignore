@@ -14,3 +14,4 @@ ai_tradingview/
 *.png
 *.pdf
 grid_tp_zones_results.txt
+.worktrees/
