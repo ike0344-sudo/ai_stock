@@ -271,8 +271,12 @@ def process_exits_once(
             continue
 
         try:
+            # 시장가(order_type="3") — 지정가는 접수돼도 미체결로 남을 수 있는데, 아래에서
+            # 응답만 확인하고 바로 "청산 완료"로 기록해 미체결 관리/체결확인 인프라가 아직
+            # 없다(2026-07-26 execution-agent 감사 지적). 손절/청산은 슬리피지 통제보다
+            # 확실한 체결이 우선이라 시장가로 되돌린다 — 매수 쪽은 지정가 유지.
             order_response = client.place_order(
-                position.code, side="sell", quantity=quantity_to_sell, price=current_price, order_type="0",
+                position.code, side="sell", quantity=quantity_to_sell, price=current_price, order_type="3",
             )
         except Exception as exc:
             notify_error(strategy, f"{position.code} 매도 주문 실패({exit_reason})", exc, bot_token, chat_id)

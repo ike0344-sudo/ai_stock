@@ -455,7 +455,7 @@ def test_process_exits_once_sells_all_on_stop_loss(monkeypatch):
     assert len(executed) == 1
     assert executed[0]["reason"] == "stop_loss"
     assert client.orders == [{"code": "005930", "side": "sell", "quantity": 20}]
-    assert client.order_kwargs == [{"price": 97.5, "order_type": "0"}]  # 지정가(슬리피지 통제)
+    assert client.order_kwargs == [{"price": 97.5, "order_type": "3"}]  # 시장가(체결확인 인프라 없어 되돌림)
     assert risk_state.open_positions == []  # 전량 청산 -> 슬롯 해제
 
 

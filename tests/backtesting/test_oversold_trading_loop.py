@@ -282,7 +282,7 @@ def test_exit_fires_on_touch_and_resets_episode():
     assert risk_state.open_positions == []
     assert episode == OversoldEpisodeState()  # 다음 에피소드를 위해 리셋됨
     assert client.orders == [{"code": "000660", "side": "sell", "quantity": 9890}]
-    assert client.order_kwargs == [{"price": 100.0, "order_type": "0"}]  # 지정가(슬리피지 통제)
+    assert client.order_kwargs == [{"price": 100.0, "order_type": "3"}]  # 시장가(체결확인 인프라 없어 되돌림)
 
 
 def test_exit_fires_on_hard_stop():

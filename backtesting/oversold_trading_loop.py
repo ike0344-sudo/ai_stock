@@ -218,8 +218,11 @@ def process_oversold_exit_once(
 
     quantity = position.total_quantity
     try:
+        # 시장가(order_type="3") — trading_loop.py와 같은 이유(2026-07-26 execution-agent
+        # 감사 지적): 지정가는 미체결로 남을 수 있는데 체결확인/미체결관리 인프라가 아직
+        # 없어, 손절/청산은 확실한 체결이 슬리피지 통제보다 우선이라 되돌린다.
         order_response = client.place_order(
-            STOCK_CODE, side="sell", quantity=quantity, price=current_price, order_type="0",
+            STOCK_CODE, side="sell", quantity=quantity, price=current_price, order_type="3",
         )
     except Exception as exc:
         notify_error(STRATEGY_NAME, f"{STOCK_CODE} 매도 주문 실패({reason})", exc, bot_token, chat_id)
