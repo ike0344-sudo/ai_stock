@@ -52,6 +52,68 @@ function Test-TargetAlive($Target) {
     return Test-HeartbeatFresh $Target.HeartbeatPath
 }
 
+# ---- 자율 전략 개선 사이클 (auto_develop_prompt.md 참고) ----
+# 이건 "항상 켜짐"이 아니라 "주기적으로 딱 한 번" 실행되는 작업이라 위 heartbeat/http
+# 대상들과 성격이 다르다 — 하지만 이 스크립트가 이미 5분마다 깨어나므로 별도의
+# 두 번째 스케줄러 프로세스를 새로 띄우는 대신 이 루프에 얹는다.
+$autoDevelopCadenceSeconds = 7 * 24 * 3600  # 주 1회
+$autoDevelopStuckThresholdSeconds = 6 * 3600  # 시작만 하고 6시간 넘게 안 끝나면 죽었다고 보고 재시도 허용
+
+function Test-AutoDevelopDue {
+    $startedPath = Join-Path $repoRoot "state\auto_develop\last_run_started.json"
+    $finishedPath = Join-Path $repoRoot "state\auto_develop\last_run_finished.json"
+
+    if (Test-Path $startedPath) {
+        try {
+            $started = [double](Get-Content $startedPath -Raw | ConvertFrom-Json).started_at
+            $finishedAt = $null
+            if (Test-Path $finishedPath) {
+                $finishedAt = [double](Get-Content $finishedPath -Raw | ConvertFrom-Json).finished_at
+            }
+            # 마지막 시작이 마지막 종료보다 최신인데(=현재 실행 중이거나 멈춘 상태) 아직
+            # stuck 임계값을 안 넘었으면 새로 띄우지 않는다 — 중복 실행 방지.
+            if ($null -eq $finishedAt -or $finishedAt -lt $started) {
+                $sinceStarted = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $started
+                if ($sinceStarted -lt $autoDevelopStuckThresholdSeconds) { return $false }
+            }
+        } catch {
+            return $false  # 상태 파일이 손상됐으면 판단 불가 — 다음 사이클에 재확인
+        }
+    }
+
+    if (-not (Test-Path $finishedPath)) { return $true }  # 한 번도 실행된 적 없음
+    try {
+        $finished = [double](Get-Content $finishedPath -Raw | ConvertFrom-Json).finished_at
+        $age = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $finished
+        return $age -ge $autoDevelopCadenceSeconds
+    } catch {
+        return $false
+    }
+}
+
+function Remove-StaleAutoDevelopWorktrees {
+    # auto_develop_prompt.md 자신은 자기 worktree를 못 지우므로(메인 체크아웃에서만
+    # git worktree remove 가능), 다음 사이클을 새로 띄우기 직전에 여기서 정리한다.
+    # 이 시점엔 Test-AutoDevelopDue로 이전 사이클이 이미 끝났다는 게 확인된 상태다.
+    try {
+        $currentPath = $null
+        foreach ($line in (git -C $repoRoot worktree list --porcelain)) {
+            if ($line -match "^worktree (.+)$") {
+                $currentPath = $Matches[1]
+            } elseif ($line -match "^branch refs/heads/((worktree-)?auto-develop-\S+)$" -and $currentPath) {
+                $branchName = $Matches[1]
+                # 클로드 세션이 죽어도 worktree lock이 안 풀리는 경우가 있어(실제로 겪음)
+                # --force를 두 번 줘야 lock까지 무시하고 지운다.
+                try { git -C $repoRoot worktree remove --force --force $currentPath 2>$null } catch {}
+                try { git -C $repoRoot branch -D $branchName 2>$null } catch {}
+                $currentPath = $null
+            }
+        }
+    } catch {
+        # 정리 실패해도 watchdog은 계속 돈다 — 다음 폴링에서 재시도됨
+    }
+}
+
 while ($true) {
     try {
         $pythonProcesses = Get-CimInstance Win32_Process -Filter "Name='python.exe'"
@@ -70,6 +132,13 @@ while ($true) {
                 -WorkingDirectory $repoRoot -WindowStyle Hidden `
                 -RedirectStandardOutput (Join-Path $repoRoot "$($target.LogName).log") `
                 -RedirectStandardError (Join-Path $repoRoot "$($target.LogName).err.log")
+        }
+
+        if (Test-AutoDevelopDue) {
+            Remove-StaleAutoDevelopWorktrees
+            Start-Process -FilePath "powershell.exe" `
+                -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "$repoRoot\run_auto_develop.ps1" `
+                -WorkingDirectory $repoRoot -WindowStyle Hidden
         }
     } catch {
         # 이 확인/재시작 사이클 하나가 실패해도 watchdog 자체는 죽으면 안 된다 —
