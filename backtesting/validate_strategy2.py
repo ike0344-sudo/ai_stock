@@ -19,7 +19,7 @@ import os
 
 import pandas as pd
 
-from .breakout_reversal import DEFAULT_COMMISSION_RATE, DEFAULT_SLIPPAGE_RATE
+from .breakout_reversal import DEFAULT_COMMISSION_RATE, DEFAULT_SLIPPAGE_RATE, DEFAULT_TAX_RATE
 from .data_loader import _resample_minute
 from .oversold_strategy import (
     BAR_INTERVAL_MINUTES,
@@ -53,6 +53,7 @@ def simulate_all_episodes(
     ma_window: int = MA_WINDOW,
     commission_rate: float = DEFAULT_COMMISSION_RATE,
     slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
+    tax_rate: float = DEFAULT_TAX_RATE,
 ) -> list[dict]:
     """oversold_trading_loop과 같은 순서(청산 확인 → 진입/추가매수 확인)로 15분봉을
     순회하며 완결된 에피소드(3단 이내 분할매수 ~ 전량청산)를 모두 기록한다.
@@ -97,7 +98,7 @@ def simulate_all_episodes(
                 exit_price, reason = bar["close"] * (1 - slippage_rate), "time_exit"
 
             if reason is not None:
-                net_pct = (exit_price - avg_entry_price) / avg_entry_price - commission_rate * 2
+                net_pct = (exit_price - avg_entry_price) / avg_entry_price - commission_rate * 2 - tax_rate
                 episodes.append(
                     {
                         "entry_time": entry_time, "entry_date": entry_date, "exit_time": idx,
@@ -126,7 +127,7 @@ def simulate_all_episodes(
         avg_entry_price = sum(filled_prices) / len(filled_prices)
         last_idx = candles_15m.index[-1]
         exit_price = candles_15m["close"].iloc[-1] * (1 - slippage_rate)
-        net_pct = (exit_price - avg_entry_price) / avg_entry_price - commission_rate * 2
+        net_pct = (exit_price - avg_entry_price) / avg_entry_price - commission_rate * 2 - tax_rate
         episodes.append(
             {
                 "entry_time": entry_time, "entry_date": entry_date, "exit_time": last_idx,

@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from backtesting.validate_strategy2 import compute_episode_metrics, simulate_all_episodes
 
@@ -26,6 +27,20 @@ def test_simulate_all_episodes_full_cycle_entry_then_touch_exit():
     assert ep["n_tiers"] == 1
     assert ep["exit_reason"] == "touch_ma"
     assert ep["net_pct"] > 0  # 910대에 사서 1000 근처에 팔았으니 수수료/슬리피지 감안해도 순이익
+
+
+def test_simulate_all_episodes_net_pct_subtracts_sell_tax():
+    """2026-07-26 backtest-agent 감사 지적: 예전엔 매도 증권거래세(DEFAULT_TAX_RATE)를
+    아예 안 빼서 순손익이 과대평가됐다 — tax_rate=0 대비 실제로 그만큼 낮게 나오는지 확인."""
+    rows = [(f"2026-01-01 09:{i:02d}:00", 1000, 1000, 1000, 1000) for i in range(60)]
+    rows.append(("2026-01-01 10:00:00", 1000, 1000, 900, 1000))
+    rows.append(("2026-01-01 10:15:00", 1000, 1005, 1000, 1000))
+    candles = _bars(rows)
+
+    with_tax = simulate_all_episodes(candles, ma_window=60, tax_rate=0.0023)
+    without_tax = simulate_all_episodes(candles, ma_window=60, tax_rate=0.0)
+
+    assert without_tax[0]["net_pct"] - with_tax[0]["net_pct"] == pytest.approx(0.0023)
 
 
 def test_simulate_all_episodes_hard_stop_exit():
