@@ -29,6 +29,7 @@ from .orderbook_collector import (
 )
 from .oversold_strategy import (
     BAR_INTERVAL_MINUTES,
+    HARD_STOP_PCT,
     MA_WINDOW,
     STOCK_CODE,
     TIER_FRACTION,
@@ -40,7 +41,10 @@ from .oversold_strategy import (
 )
 from .realtime_feed import RealtimeFeed
 from .risk_manager import (
+    OrderRequest,
+    PortfolioState,
     RiskState,
+    check_order,
     load_state,
     record_position_added_to,
     record_position_closed,
@@ -129,16 +133,34 @@ def process_oversold_entry_once(
     tier_capital_krw: float,
     bot_token: str,
     chat_id: str,
+    total_capital_krw: float,
     order_log_path: str = DEFAULT_ORDER_LOG_PATH,
     now: datetime | None = None,
 ) -> OversoldEpisodeState:
-    """현재가가 다음 미체결 밴드를 건드렸으면 그 티어만큼 지정가로 매수한다."""
+    """현재가가 다음 미체결 밴드를 건드렸으면 그 티어만큼 지정가로 매수한다.
+
+    total_capital_krw로 risk_manager.check_order를 통과해야 실제로 주문을 낸다
+    (2026-07-26 risk-agent 감사 지적 — trading_loop.py와 동일한 갭이 이 전략에도
+    있었음). 손절가는 이 티어 체결가 기준 하드스톱(HARD_STOP_PCT) 근사치를 쓴다 —
+    2차/3차 분할매수는 실제 평단이 체결 후에야 갱신되므로, 그 시점엔 아직 모르는
+    최종 평단 대신 이번 체결가 자체를 기준으로 보수적으로 추정한다."""
     now = now or datetime.now()
     tier = next_entry_tier(episode.filled_tier_count, current_price, ma_value)
     if tier is None:
         return episode
 
     quantity = max(1, int(tier_capital_krw // current_price))
+    stop_price = current_price * (1 - HARD_STOP_PCT)
+    decision = check_order(
+        OrderRequest(code=STOCK_CODE, side="buy", quantity=quantity, price=current_price, stop=stop_price),
+        PortfolioState(risk_state=risk_state, total_capital_krw=total_capital_krw),
+    )
+    if not decision.approved:
+        notify_error(STRATEGY_NAME, f"{STOCK_CODE} {tier}차 매수 리스크 심사 거부({decision.rule_id})", RuntimeError(decision.reason), bot_token, chat_id)
+        return episode
+    if decision.adjusted_qty is not None:
+        quantity = decision.adjusted_qty
+
     try:
         order_response = client.place_order(
             STOCK_CODE, side="buy", quantity=quantity, price=current_price, order_type="0",
@@ -317,7 +339,7 @@ def run_oversold_trading_loop(
                 if not risk_state.kill_switch_active and not just_closed:
                     episode = process_oversold_entry_once(
                         client, risk_state, episode, ma_value, current_price, tier_capital_krw,
-                        bot_token, chat_id, order_log_path=order_log_path,
+                        bot_token, chat_id, total_capital_krw, order_log_path=order_log_path,
                     )
 
             save_state(risk_state, risk_state_path)

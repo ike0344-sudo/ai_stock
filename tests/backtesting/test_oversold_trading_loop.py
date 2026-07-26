@@ -14,7 +14,7 @@ from backtesting.oversold_trading_loop import (
     run_oversold_trading_loop,
     save_episode_state,
 )
-from backtesting.risk_manager import RiskState, record_position_opened
+from backtesting.risk_manager import RiskDecision, RiskState, record_position_opened
 
 
 @pytest.fixture(autouse=True)
@@ -157,7 +157,7 @@ def test_entry_fires_tier_1_when_price_touches_first_band():
 
     episode = process_oversold_entry_once(
         client, risk_state, episode, ma_value=100.0, current_price=90.0, tier_capital_krw=900_000,
-        bot_token="", chat_id="", now=now,
+        bot_token="", chat_id="", total_capital_krw=10_000_000, now=now,
     )
 
     assert episode.filled_tier_count == 1
@@ -175,7 +175,7 @@ def test_entry_does_not_fire_when_price_above_first_band():
 
     episode = process_oversold_entry_once(
         client, risk_state, episode, ma_value=100.0, current_price=95.0, tier_capital_krw=900_000,
-        bot_token="", chat_id="",
+        bot_token="", chat_id="", total_capital_krw=10_000_000,
     )
 
     assert episode.filled_tier_count == 0
@@ -191,7 +191,7 @@ def test_entry_fires_tier_2_and_averages_into_existing_position():
 
     episode = process_oversold_entry_once(
         client, risk_state, episode, ma_value=100.0, current_price=87.0, tier_capital_krw=900_000,
-        bot_token="", chat_id="",
+        bot_token="", chat_id="", total_capital_krw=10_000_000,
     )
 
     assert episode.filled_tier_count == 2
@@ -207,7 +207,7 @@ def test_entry_never_fires_beyond_three_tiers():
 
     episode = process_oversold_entry_once(
         client, risk_state, episode, ma_value=100.0, current_price=50.0, tier_capital_krw=900_000,
-        bot_token="", chat_id="",
+        bot_token="", chat_id="", total_capital_krw=10_000_000,
     )
 
     assert episode.filled_tier_count == 3
@@ -222,7 +222,7 @@ def test_entry_handles_order_failure_without_mutating_state(monkeypatch):
 
     episode = process_oversold_entry_once(
         client, risk_state, episode, ma_value=100.0, current_price=90.0, tier_capital_krw=900_000,
-        bot_token="", chat_id="",
+        bot_token="", chat_id="", total_capital_krw=10_000_000,
     )
 
     assert episode.filled_tier_count == 0
@@ -237,10 +237,32 @@ def test_entry_handles_order_rejection_without_mutating_state(monkeypatch):
 
     episode = process_oversold_entry_once(
         client, risk_state, episode, ma_value=100.0, current_price=90.0, tier_capital_krw=900_000,
-        bot_token="", chat_id="",
+        bot_token="", chat_id="", total_capital_krw=10_000_000,
     )
 
     assert episode.filled_tier_count == 0
+    assert risk_state.open_positions == []
+
+
+def test_entry_rejects_order_when_risk_check_disapproves(monkeypatch):
+    """2026-07-26 risk-agent 감사 지적: trading_loop.py와 같은 갭이 이 전략에도
+    있었다 — check_order를 안 거치고 바로 place_order를 불렀음."""
+    client = _StubClient()
+    monkeypatch.setattr(oversold_trading_loop, "notify_error", lambda *a, **k: None)
+    monkeypatch.setattr(
+        oversold_trading_loop, "check_order",
+        lambda order, portfolio: RiskDecision(approved=False, reason="테스트 거부", rule_id="test_rule"),
+    )
+    risk_state = RiskState(trading_date="2026-07-22")
+    episode = OversoldEpisodeState()
+
+    episode = process_oversold_entry_once(
+        client, risk_state, episode, ma_value=100.0, current_price=90.0, tier_capital_krw=900_000,
+        bot_token="", chat_id="", total_capital_krw=10_000_000,
+    )
+
+    assert episode.filled_tier_count == 0
+    assert client.orders == []  # place_order 자체가 호출되면 안 됨
     assert risk_state.open_positions == []
 
 

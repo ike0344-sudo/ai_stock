@@ -558,12 +558,13 @@ def run_dashboard_server(
         # 막혀 있어(top35_job.start_daily_scheduler 참고), 대신 이미 상시 실행 중인
         # 대시보드 서버 프로세스 안에서 자체 스케줄링한다.
         top35_job.start_daily_scheduler(kiwoom_appkey, kiwoom_secretkey, kiwoom_is_mock)
-        # 매일 아침(기본 07:50, 평일만) strategy_1 실전매매를 스스로 시작 — 사람이 매일
-        # 대시보드에서 "시작"을 직접 눌러야 했던 것을 대체한다(2026-07-26, 사용자 요청 —
-        # 실계좌 상태에서도 그대로 적용하기로 명시적으로 확인받음). 일일 손실한도/텔레그램
-        # 등 기존 안전장치(cli.py _run_trading)는 그대로 유지되고, 이 스케줄러는 "시작"
-        # 버튼을 대신 눌러주는 것뿐이다.
-        start_strategy_auto_start_scheduler(state_root)
+        # 매일 아침(기본 07:50, 평일만) strategy_1 실전매매를 스스로 시작하는 기능 —
+        # 잠정 비활성화(2026-07-26). risk-agent 점검에서 trading_loop.py/
+        # oversold_trading_loop.py의 실제 매수 진입이 risk_manager.check_order()를
+        # 아예 거치지 않는다는 게 발견됨(손절가 없는 진입 거부, risk_limits.yaml의
+        # 한도들이 전부 미적용). 그 연결 작업이 끝나고 검증되기 전까지는 사람이 매일
+        # 직접 "시작"을 눌러야 한다 — 그게 사실상 마지막 확인 단계였다.
+        # start_strategy_auto_start_scheduler(state_root)
     display_host = "127.0.0.1" if host == "0.0.0.0" else host
     print(f"대시보드 서버 시작: http://{display_host}:{port} (Ctrl+C로 중단)", flush=True)
     if host == "0.0.0.0":

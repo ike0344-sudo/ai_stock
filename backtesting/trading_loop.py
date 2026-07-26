@@ -26,8 +26,11 @@ from .risk_manager import (
     RECOMMENDED_MAX_CONCURRENT_POSITIONS,
     STOP_LOSS_PCT,
     TIERS,
+    OrderRequest,
+    PortfolioState,
     RiskState,
     can_open_new_position,
+    check_order,
     load_state,
     record_partial_exit,
     record_position_opened,
@@ -141,6 +144,7 @@ def process_entries_once(
     bot_token: str,
     chat_id: str,
     seen_signals: set,
+    total_capital_krw: float,
     order_log_path: str = DEFAULT_ORDER_LOG_PATH,
     feed: RealtimeFeed | None = None,
     code_to_name: dict | None = None,
@@ -158,7 +162,13 @@ def process_entries_once(
     보낸 건지 구분이 안 되는 문제가 있었다 — 모든 notify_* 호출 맨 앞에 붙는다.
 
     exchange: 진입 조건용 분봉의 거래소 기준. 전략1은 "3"(통합, KRX+NXT)이 기본값 —
-    전략3(strategy3_scalp.py)는 별도로 KRX 기준을 유지한다."""
+    전략3(strategy3_scalp.py)는 별도로 KRX 기준을 유지한다.
+
+    total_capital_krw + STOP_LOSS_PCT 기반 손절가로 risk_manager.check_order를 통과한
+    주문만 실제로 낸다(risk-agent.md §핵심원칙 1) — 이전엔 can_open_new_position(동시보유
+    슬롯)만 확인하고 바로 place_order를 불러, risk_limits.yaml의 나머지 한도(단일주문
+    금액/종목당 비중/재진입 쿨다운/연속손절 한도)가 값을 채워도 전혀 적용되지 않는
+    상태였다(2026-07-26 risk-agent 감사 지적)."""
     code_to_name = code_to_name or {}
     new_signals = scan_watchlist_once(
         client, trained, today_top35, regime_ok, data_dir, proba_threshold, seen_signals, feed=feed, exchange=exchange
@@ -171,6 +181,17 @@ def process_entries_once(
             continue
 
         quantity = max(1, int(position_capital_krw // signal["price"]))
+        stop_price = signal["price"] * (1 - STOP_LOSS_PCT)
+        decision = check_order(
+            OrderRequest(code=code, side="buy", quantity=quantity, price=signal["price"], stop=stop_price),
+            PortfolioState(risk_state=risk_state, total_capital_krw=total_capital_krw),
+        )
+        if not decision.approved:
+            notify_error(strategy, f"{code} 매수 리스크 심사 거부({decision.rule_id})", RuntimeError(decision.reason), bot_token, chat_id)
+            continue
+        if decision.adjusted_qty is not None:
+            quantity = decision.adjusted_qty
+
         try:
             order_response = client.place_order(code, side="buy", quantity=quantity, price=signal["price"], order_type="0")
         except Exception as exc:
@@ -392,7 +413,7 @@ def run_trading_loop(
                 process_entries_once(
                     client, trained, today_top35, regime_ok, risk_state, exit_tracking,
                     data_dir, proba_threshold, max_concurrent_positions, position_capital_krw,
-                    bot_token, chat_id, seen_signals, order_log_path=order_log_path, feed=feed,
+                    bot_token, chat_id, seen_signals, total_capital_krw, order_log_path=order_log_path, feed=feed,
                     code_to_name=code_to_name, strategy=strategy,
                 )
 

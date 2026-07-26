@@ -8,7 +8,7 @@ import pytest
 
 from backtesting import live_monitor, trading_loop
 from backtesting.ml_entry_filter import TrainedEntryFilterModel
-from backtesting.risk_manager import RiskState, can_open_new_position, record_position_opened
+from backtesting.risk_manager import RiskDecision, RiskState, can_open_new_position, record_position_opened
 from backtesting.trading_loop import (
     ExitTrackingState,
     _log_order,
@@ -203,7 +203,7 @@ def test_process_entries_once_places_buy_order_and_updates_risk_state(monkeypatc
     executed = process_entries_once(
         client, trained=None, today_top35={"005930"}, regime_ok=True, risk_state=risk_state,
         exit_tracking={}, data_dir="data", proba_threshold=0.5, max_concurrent_positions=5,
-        position_capital_krw=2_000_000, bot_token="", chat_id="", seen_signals=set(),
+        position_capital_krw=2_000_000, bot_token="", chat_id="", seen_signals=set(), total_capital_krw=10_000_000,
     )
 
     assert len(executed) == 1
@@ -226,7 +226,7 @@ def test_process_entries_once_skips_when_no_free_slot(monkeypatch):
     executed = process_entries_once(
         client, trained=None, today_top35={"005930"}, regime_ok=True, risk_state=risk_state,
         exit_tracking={}, data_dir="data", proba_threshold=0.5, max_concurrent_positions=5,
-        position_capital_krw=2_000_000, bot_token="", chat_id="", seen_signals=set(),
+        position_capital_krw=2_000_000, bot_token="", chat_id="", seen_signals=set(), total_capital_krw=10_000_000,
     )
 
     assert executed == []
@@ -248,7 +248,7 @@ def test_process_entries_once_sends_capture_notification_when_regime_bullish(tmp
     executed = process_entries_once(
         client, trained=trained, today_top35={"000001"}, regime_ok=True, risk_state=risk_state,
         exit_tracking={}, data_dir=data_dir, proba_threshold=0.6, max_concurrent_positions=5,
-        position_capital_krw=2_000_000, bot_token="TOKEN", chat_id="CHAT", seen_signals=set(),
+        position_capital_krw=2_000_000, bot_token="TOKEN", chat_id="CHAT", seen_signals=set(), total_capital_krw=10_000_000,
     )
 
     assert len(detected) == 1
@@ -271,7 +271,7 @@ def test_process_entries_once_sends_no_capture_notification_when_regime_bearish(
     executed = process_entries_once(
         client, trained=trained, today_top35={"000001"}, regime_ok=False, risk_state=risk_state,
         exit_tracking={}, data_dir=data_dir, proba_threshold=0.6, max_concurrent_positions=5,
-        position_capital_krw=2_000_000, bot_token="TOKEN", chat_id="CHAT", seen_signals=set(),
+        position_capital_krw=2_000_000, bot_token="TOKEN", chat_id="CHAT", seen_signals=set(), total_capital_krw=10_000_000,
     )
 
     assert detected == []
@@ -293,7 +293,7 @@ def test_process_entries_once_notifies_signal_detected_even_without_free_slot(mo
     executed = process_entries_once(
         client, trained=None, today_top35={"005930"}, regime_ok=True, risk_state=risk_state,
         exit_tracking={}, data_dir="data", proba_threshold=0.5, max_concurrent_positions=5,
-        position_capital_krw=2_000_000, bot_token="", chat_id="", seen_signals=set(),
+        position_capital_krw=2_000_000, bot_token="", chat_id="", seen_signals=set(), total_capital_krw=10_000_000,
     )
 
     assert executed == []
@@ -313,7 +313,7 @@ def test_process_entries_once_includes_stock_name_from_code_to_name_in_notificat
     process_entries_once(
         client, trained=None, today_top35={"005930"}, regime_ok=True, risk_state=risk_state,
         exit_tracking={}, data_dir="data", proba_threshold=0.5, max_concurrent_positions=5,
-        position_capital_krw=2_000_000, bot_token="", chat_id="", seen_signals=set(),
+        position_capital_krw=2_000_000, bot_token="", chat_id="", seen_signals=set(), total_capital_krw=10_000_000,
         code_to_name={"005930": "삼성전자"},
     )
 
@@ -333,7 +333,7 @@ def test_process_entries_once_notifies_and_continues_on_order_failure(monkeypatc
     executed = process_entries_once(
         client, trained=None, today_top35={"005930"}, regime_ok=True, risk_state=risk_state,
         exit_tracking={}, data_dir="data", proba_threshold=0.5, max_concurrent_positions=5,
-        position_capital_krw=2_000_000, bot_token="", chat_id="", seen_signals=set(),
+        position_capital_krw=2_000_000, bot_token="", chat_id="", seen_signals=set(), total_capital_krw=10_000_000,
     )
 
     assert executed == []
@@ -357,12 +357,65 @@ def test_process_entries_once_notifies_and_continues_on_order_rejected(monkeypat
     executed = process_entries_once(
         client, trained=None, today_top35={"005930"}, regime_ok=True, risk_state=risk_state,
         exit_tracking={}, data_dir="data", proba_threshold=0.5, max_concurrent_positions=5,
-        position_capital_krw=2_000_000, bot_token="", chat_id="", seen_signals=set(),
+        position_capital_krw=2_000_000, bot_token="", chat_id="", seen_signals=set(), total_capital_krw=10_000_000,
     )
 
     assert executed == []
     assert len(notified) == 1
     assert risk_state.open_positions == []
+
+
+def test_process_entries_once_rejects_order_when_risk_check_disapproves(monkeypatch):
+    """2026-07-26 risk-agent 감사 지적: 예전엔 can_open_new_position(동시보유 슬롯)만
+    확인하고 바로 place_order를 불러, risk_manager.check_order의 나머지 한도(단일주문
+    금액/종목당 비중/재진입 쿨다운/연속손절 한도)가 전혀 적용되지 않았다. 이제
+    check_order가 거부하면 실제로 주문을 안 내는지 확인한다."""
+    client = _StubOrderClient()
+    monkeypatch.setattr(
+        trading_loop, "scan_watchlist_once",
+        lambda *a, **k: [{"stock_code": "005930", "signal_time": "t1", "price": 70000, "proba": 0.7}],
+    )
+    notified = []
+    monkeypatch.setattr(trading_loop, "notify_error", lambda *a, **k: notified.append(a))
+    monkeypatch.setattr(
+        trading_loop, "check_order",
+        lambda order, portfolio: RiskDecision(approved=False, reason="테스트 거부", rule_id="test_rule"),
+    )
+    risk_state = RiskState(trading_date="2026-07-20")
+
+    executed = process_entries_once(
+        client, trained=None, today_top35={"005930"}, regime_ok=True, risk_state=risk_state,
+        exit_tracking={}, data_dir="data", proba_threshold=0.5, max_concurrent_positions=5,
+        position_capital_krw=2_000_000, bot_token="", chat_id="", seen_signals=set(), total_capital_krw=10_000_000,
+    )
+
+    assert executed == []
+    assert client.orders == []  # place_order 자체가 호출되면 안 됨
+    assert len(notified) == 1
+    assert risk_state.open_positions == []
+
+
+def test_process_entries_once_uses_adjusted_qty_from_risk_check(monkeypatch):
+    client = _StubOrderClient()
+    monkeypatch.setattr(
+        trading_loop, "scan_watchlist_once",
+        lambda *a, **k: [{"stock_code": "005930", "signal_time": "t1", "price": 70000, "proba": 0.7}],
+    )
+    monkeypatch.setattr(
+        trading_loop, "check_order",
+        lambda order, portfolio: RiskDecision(approved=True, reason="조정 승인", rule_id="test_rule", adjusted_qty=5),
+    )
+    risk_state = RiskState(trading_date="2026-07-20")
+
+    executed = process_entries_once(
+        client, trained=None, today_top35={"005930"}, regime_ok=True, risk_state=risk_state,
+        exit_tracking={}, data_dir="data", proba_threshold=0.5, max_concurrent_positions=5,
+        position_capital_krw=2_000_000, bot_token="", chat_id="", seen_signals=set(), total_capital_krw=10_000_000,
+    )
+
+    assert len(executed) == 1
+    assert client.orders == [{"code": "005930", "side": "buy", "quantity": 5}]
+    assert risk_state.open_positions[0].total_quantity == 5
 
 
 # ---- process_exits_once ----
@@ -702,7 +755,7 @@ def test_process_entries_once_logs_order_on_successful_buy(monkeypatch, tmp_path
     process_entries_once(
         client, trained=None, today_top35={"005930"}, regime_ok=True, risk_state=risk_state,
         exit_tracking={}, data_dir="data", proba_threshold=0.5, max_concurrent_positions=5,
-        position_capital_krw=2_000_000, bot_token="", chat_id="", seen_signals=set(),
+        position_capital_krw=2_000_000, bot_token="", chat_id="", seen_signals=set(), total_capital_krw=10_000_000,
         order_log_path=str(tmp_path / "orders.jsonl"),
     )
 
@@ -725,7 +778,7 @@ def test_process_entries_once_does_not_log_when_order_fails(monkeypatch, tmp_pat
     process_entries_once(
         client, trained=None, today_top35={"005930"}, regime_ok=True, risk_state=risk_state,
         exit_tracking={}, data_dir="data", proba_threshold=0.5, max_concurrent_positions=5,
-        position_capital_krw=2_000_000, bot_token="", chat_id="", seen_signals=set(),
+        position_capital_krw=2_000_000, bot_token="", chat_id="", seen_signals=set(), total_capital_krw=10_000_000,
         order_log_path=str(tmp_path / "orders.jsonl"),
     )
 
