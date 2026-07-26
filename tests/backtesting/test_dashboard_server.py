@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import time
+from datetime import datetime
 from http.client import HTTPConnection
 from types import SimpleNamespace
 
@@ -9,7 +10,7 @@ import pandas as pd
 import pytest
 
 from backtesting import sell_all_job, top35_job
-from backtesting.dashboard_server import build_dashboard_server
+from backtesting.dashboard_server import _strategy_auto_start_due, build_dashboard_server
 from backtesting.sell_all_job import SellAllJobState
 from backtesting.top35_job import Top35JobState
 
@@ -963,4 +964,31 @@ def test_post_api_strategy_stop_writes_stop_flag_file(running_server):
     assert response.status == 200
     assert json.loads(body) == {"stopped": True}
     assert os.path.exists(stop_flag_path)
+
+
+# ---- strategy auto-start scheduling (_strategy_auto_start_due) ----
+
+def test_strategy_auto_start_due_true_when_time_passed_and_not_run_today():
+    now = datetime(2026, 7, 27, 7, 51)  # Monday
+    assert _strategy_auto_start_due(now, last_success_date=None) is True
+
+
+def test_strategy_auto_start_due_false_before_scheduled_time():
+    now = datetime(2026, 7, 27, 7, 49)  # Monday
+    assert _strategy_auto_start_due(now, last_success_date=None) is False
+
+
+def test_strategy_auto_start_due_false_when_already_run_today():
+    now = datetime(2026, 7, 27, 8, 30)  # Monday
+    assert _strategy_auto_start_due(now, last_success_date="2026-07-27") is False
+
+
+def test_strategy_auto_start_due_true_on_new_day_even_if_run_yesterday():
+    now = datetime(2026, 7, 27, 7, 51)  # Monday
+    assert _strategy_auto_start_due(now, last_success_date="2026-07-24") is True
+
+
+def test_strategy_auto_start_due_false_on_weekend():
+    now = datetime(2026, 7, 25, 7, 51)  # Saturday
+    assert _strategy_auto_start_due(now, last_success_date=None) is False
 

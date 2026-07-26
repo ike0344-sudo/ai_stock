@@ -204,6 +204,90 @@ def is_strategy_running(state_root: str, strategy: str) -> bool:
     return age is not None and age < threshold
 
 
+def start_strategy(state_root: str, strategy: str) -> bool:
+    """전략 실전매매 루프를 새로 띄운다. 이미 실행 중이면 아무 것도 안 하고 False —
+    POST /api/strategy/start와 아래 일별 자동시작 스케줄러가 이 함수 하나를 공유해
+    "중복 실행 방지" 로직이 한 곳에만 있게 한다."""
+    if is_strategy_running(state_root, strategy):
+        return False
+    config = load_strategy_config(os.path.join(state_root, strategy, STATE_FILENAMES["config"]))
+    command = build_strategy_command(strategy, config)
+    strategy_dir = os.path.join(state_root, strategy)
+    os.makedirs(strategy_dir, exist_ok=True)
+    log_file = open(os.path.join(strategy_dir, "loop_log.txt"), "a", encoding="utf-8")
+    spawn_detached(command, PROJECT_ROOT, log_file)
+    return True
+
+
+STRATEGY_AUTO_START_HOUR = 7
+STRATEGY_AUTO_START_MINUTE = 50
+STRATEGY_AUTO_START_STRATEGY = "strategy_1"
+STRATEGY_AUTO_START_SCHEDULER_POLL_SECONDS = 30.0
+STRATEGY_AUTO_START_MARKER_FILENAME = "auto_start_last_success_date.txt"
+
+
+def _strategy_auto_start_marker_path(state_root: str, strategy: str) -> str:
+    return os.path.join(state_root, strategy, STRATEGY_AUTO_START_MARKER_FILENAME)
+
+
+def _read_strategy_auto_start_last_success(state_root: str, strategy: str) -> str | None:
+    """마지막 성공 날짜를 파일로 영속화한다 — in-memory 변수였으면 대시보드가
+    재시작될 때마다(watchdog이 죽은 프로세스를 재시작하는 경우 포함) 잊어버려서,
+    이미 오늘 시작했는데도 재시작 직후 또 시작을 시도하게 된다(2026-07-26, 실제로
+    이 문제 때문에 당일 재시작 전에 미리 오늘 날짜를 심어둬야 했음)."""
+    path = _strategy_auto_start_marker_path(state_root, strategy)
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        return f.read().strip() or None
+
+
+def _write_strategy_auto_start_last_success(state_root: str, strategy: str, date_str: str) -> None:
+    path = _strategy_auto_start_marker_path(state_root, strategy)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(date_str)
+
+
+def _strategy_auto_start_due(now: datetime, last_success_date: str | None) -> bool:
+    """평일이고, 오늘 아직 자동시작을 성공(또는 이미 실행 중으로 확인)시킨 적 없고,
+    지정 시각을 지났으면 True (단위 테스트 대상 순수 함수)."""
+    if now.weekday() >= 5:
+        return False
+    if last_success_date == now.date().isoformat():
+        return False
+    return (now.hour, now.minute) >= (STRATEGY_AUTO_START_HOUR, STRATEGY_AUTO_START_MINUTE)
+
+
+def _strategy_auto_start_scheduler_loop(state_root: str, strategy: str) -> None:
+    """대시보드가 켜져 있는 평일 아침, 지정 시각(기본 07:50)이 지나면 전략을 스스로
+    시작한다 — top35_job.start_daily_scheduler와 같은 이유(이 PC는 Windows 작업
+    스케줄러 등록이 UAC로 막혀있어 대시보드 프로세스 안에서 자체 스케줄링).
+
+    한 번 성공(또는 이미 실행 중 확인)하면 그날은 다시 건드리지 않는다 — 사용자가
+    낮에 수동으로 "중지"를 누른 경우까지 자동으로 재시작하면 수동 중지가 무의미해지므로,
+    top35_job과 동일하게 "실패 시에만 그날 안에서 재시도" 원칙을 따른다(성공 판정
+    자체가 크래시 후 재시작까지는 보장하지 않음 — 필요해지면 별도로 요청할 것)."""
+    while True:
+        try:
+            now = datetime.now()
+            last_success_date = _read_strategy_auto_start_last_success(state_root, strategy)
+            if is_strategy_running(state_root, strategy):
+                _write_strategy_auto_start_last_success(state_root, strategy, now.date().isoformat())
+            elif _strategy_auto_start_due(now, last_success_date):
+                if start_strategy(state_root, strategy):
+                    _write_strategy_auto_start_last_success(state_root, strategy, now.date().isoformat())
+        except Exception:
+            pass  # 상시 스케줄러 — 한 사이클 실패해도 다음 사이클에 계속
+        time.sleep(STRATEGY_AUTO_START_SCHEDULER_POLL_SECONDS)
+
+
+def start_strategy_auto_start_scheduler(state_root: str, strategy: str = STRATEGY_AUTO_START_STRATEGY) -> threading.Thread:
+    thread = threading.Thread(target=_strategy_auto_start_scheduler_loop, args=(state_root, strategy), daemon=True)
+    thread.start()
+    return thread
+
+
 class DashboardRequestHandler(BaseHTTPRequestHandler):
     state_root = "state"
     results_dir = "results"
@@ -383,16 +467,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                         self._send_json({"ok": False, "message": str(exc)}, status=502)
         elif parsed.path == "/api/strategy/start":
             strategy = self._selected_strategy(query)
-            if is_strategy_running(self.state_root, strategy):
-                self._send_json({"started": False, "reason": "이미 실행 중입니다"}, status=409)
-            else:
-                config = load_strategy_config(self._strategy_path(strategy, "config"))
-                command = build_strategy_command(strategy, config)
-                strategy_dir = os.path.join(self.state_root, strategy)
-                os.makedirs(strategy_dir, exist_ok=True)
-                log_file = open(os.path.join(strategy_dir, "loop_log.txt"), "a", encoding="utf-8")
-                spawn_detached(command, PROJECT_ROOT, log_file)
+            if start_strategy(self.state_root, strategy):
                 self._send_json({"started": True})
+            else:
+                self._send_json({"started": False, "reason": "이미 실행 중입니다"}, status=409)
         elif parsed.path == "/api/strategy/stop":
             strategy = self._selected_strategy(query)
             stop_control.request_stop(os.path.join(self.state_root, strategy, stop_control.DEFAULT_STOP_FLAG_FILENAME))
@@ -480,6 +558,12 @@ def run_dashboard_server(
         # 막혀 있어(top35_job.start_daily_scheduler 참고), 대신 이미 상시 실행 중인
         # 대시보드 서버 프로세스 안에서 자체 스케줄링한다.
         top35_job.start_daily_scheduler(kiwoom_appkey, kiwoom_secretkey, kiwoom_is_mock)
+        # 매일 아침(기본 07:50, 평일만) strategy_1 실전매매를 스스로 시작 — 사람이 매일
+        # 대시보드에서 "시작"을 직접 눌러야 했던 것을 대체한다(2026-07-26, 사용자 요청 —
+        # 실계좌 상태에서도 그대로 적용하기로 명시적으로 확인받음). 일일 손실한도/텔레그램
+        # 등 기존 안전장치(cli.py _run_trading)는 그대로 유지되고, 이 스케줄러는 "시작"
+        # 버튼을 대신 눌러주는 것뿐이다.
+        start_strategy_auto_start_scheduler(state_root)
     display_host = "127.0.0.1" if host == "0.0.0.0" else host
     print(f"대시보드 서버 시작: http://{display_host}:{port} (Ctrl+C로 중단)", flush=True)
     if host == "0.0.0.0":
