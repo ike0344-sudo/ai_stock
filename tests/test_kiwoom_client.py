@@ -294,6 +294,18 @@ def test_place_order_limit_price_sets_ord_uv(monkeypatch):
     assert captured["body"]["trde_tp"] == "0"
 
 
+def test_place_order_float_price_sends_integer_ord_uv(monkeypatch):
+    # 회귀 테스트 — 실시간 체결가(feed.get_latest_price)는 float으로 오는데
+    # str(93000.0) == "93000.0"이라 키움 API가 ord_uv를 "정수만 입력가능합니다"로
+    # 거부했다(실측: return_code=2, [1517]).
+    client = KiwoomClient("key", "secret")
+    captured = _capture_request_tr(client, monkeypatch)
+
+    client.place_order("005930", side="buy", quantity=1, price=70000.0, order_type="0")
+
+    assert captured["body"]["ord_uv"] == "70000"
+
+
 def test_place_order_market_order_ignores_price(monkeypatch):
     client = KiwoomClient("key", "secret")
     captured = _capture_request_tr(client, monkeypatch)

@@ -258,7 +258,10 @@ class KiwoomClient:
             "dmst_stex_tp": exchange,
             "stk_cd": stock_code,
             "ord_qty": str(quantity),
-            "ord_uv": str(price) if order_type != "3" and price else "",
+            # int(price)로 정수화 — 호출부(oversold_trading_loop.py 등)가 현재가를
+            # float으로 넘기면 str(93000.0) == "93000.0"이 되어 ord_uv가 "정수만
+            # 입력가능합니다"로 거부된다(실측: return_code=2, [1517]).
+            "ord_uv": str(int(price)) if order_type != "3" and price else "",
             "trde_tp": order_type,
             "cond_uv": "",
         }
