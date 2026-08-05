@@ -109,16 +109,19 @@ def test_generate_signals_exposes_name_and_params():
 
 def test_run_rank_watch_loop_notifies_and_logs_on_promotion_without_placing_orders(monkeypatch, tmp_path):
     rankings = iter([
-        pd.DataFrame([
+        [
             {"stock_code": "AAA", "name": "가상1", "rank": 3},
             {"stock_code": "DDD", "name": "가상4", "rank": 4},
-        ]),
-        pd.DataFrame([
+        ],
+        [
             {"stock_code": "DDD", "name": "가상4", "rank": 3},
             {"stock_code": "AAA", "name": "가상1", "rank": 4},
-        ]),
+        ],
     ])
-    monkeypatch.setattr(strategy4_rank_watch, "top_by_trading_value", lambda client, top_n: next(rankings))
+    monkeypatch.setattr(
+        strategy4_rank_watch, "get_trading_value_ranking",
+        lambda appkey, secretkey, is_mock, window, top_n: {"rows": next(rankings)},
+    )
 
     calls_state = {"iterations": 0}
 
@@ -149,18 +152,21 @@ def test_run_rank_watch_loop_notifies_and_logs_on_promotion_without_placing_orde
 
 def test_run_rank_watch_loop_notifies_separately_for_each_simultaneous_promotion(monkeypatch, tmp_path):
     rankings = iter([
-        pd.DataFrame([
+        [
             {"stock_code": "AAA", "name": "가상1", "rank": 3},
             {"stock_code": "DDD", "name": "가상4", "rank": 4},
             {"stock_code": "EEE", "name": "가상5", "rank": 5},
-        ]),
-        pd.DataFrame([
+        ],
+        [
             {"stock_code": "AAA", "name": "가상1", "rank": 2},
             {"stock_code": "DDD", "name": "가상4", "rank": 3},
             {"stock_code": "EEE", "name": "가상5", "rank": 4},
-        ]),
+        ],
     ])
-    monkeypatch.setattr(strategy4_rank_watch, "top_by_trading_value", lambda client, top_n: next(rankings))
+    monkeypatch.setattr(
+        strategy4_rank_watch, "get_trading_value_ranking",
+        lambda appkey, secretkey, is_mock, window, top_n: {"rows": next(rankings)},
+    )
 
     calls_state = {"iterations": 0}
 
@@ -187,7 +193,10 @@ def test_run_rank_watch_loop_notifies_separately_for_each_simultaneous_promotion
 
 
 def test_run_rank_watch_loop_writes_config_immediately_so_dashboard_lists_it(monkeypatch, tmp_path):
-    monkeypatch.setattr(strategy4_rank_watch, "top_by_trading_value", lambda client, top_n: pd.DataFrame({"stock_code": [], "name": [], "rank": []}))
+    monkeypatch.setattr(
+        strategy4_rank_watch, "get_trading_value_ranking",
+        lambda appkey, secretkey, is_mock, window, top_n: {"rows": []},
+    )
     monkeypatch.setattr(strategy4_rank_watch, "is_market_open", lambda now: False)  # 조회 없이 바로 종료
 
     output_path = str(tmp_path / "strategy_4" / "signals.jsonl")
@@ -212,13 +221,13 @@ def test_run_rank_watch_loop_stops_when_stop_flag_requested_mid_run(monkeypatch,
     stop_flag_path = str(tmp_path / "stop_requested.json")
     fetch_calls = []
 
-    def fake_fetch(client, top_n):
+    def fake_fetch(appkey, secretkey, is_mock, window, top_n):
         fetch_calls.append(1)
         if len(fetch_calls) == 2:
             request_stop(stop_flag_path)  # 두 번째 조회 도중 중지 요청이 온 상황 재현
-        return pd.DataFrame({"stock_code": [], "name": [], "rank": []})
+        return {"rows": []}
 
-    monkeypatch.setattr(strategy4_rank_watch, "top_by_trading_value", fake_fetch)
+    monkeypatch.setattr(strategy4_rank_watch, "get_trading_value_ranking", fake_fetch)
 
     client = SimpleNamespace(appkey="a", secretkey="b", is_mock=True)
     run_rank_watch_loop(client, "TOKEN", "CHAT", output_path=output_path, stop_flag_path=stop_flag_path)
@@ -238,10 +247,10 @@ def test_run_rank_watch_loop_continues_after_ranking_fetch_failure(monkeypatch, 
 
     monkeypatch.setattr(strategy4_rank_watch, "is_market_open", fake_is_market_open)
 
-    def fake_fetch(client, top_n):
+    def fake_fetch(appkey, secretkey, is_mock, window, top_n):
         raise RuntimeError("조회 실패")
 
-    monkeypatch.setattr(strategy4_rank_watch, "top_by_trading_value", fake_fetch)
+    monkeypatch.setattr(strategy4_rank_watch, "get_trading_value_ranking", fake_fetch)
 
     output_path = str(tmp_path / "signals.jsonl")
     client = SimpleNamespace(appkey="a", secretkey="b", is_mock=True)

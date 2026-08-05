@@ -4,12 +4,21 @@
 자체가 바뀌는 모든 경우가 아니라, 감시 대상 종목 자체를 추적하다가 한 칸 올라서는
 순간만 본다).
 
-매 사이클 top_by_trading_value(screener.py)로 순위를 다시 조회해 직전 사이클과
-비교한다 — 별도 실시간 피드 없이 REST 폴링만으로 충분하다(거래대금 순위는 분 단위로도
-크게 안 바뀌는 지표라 기존 전략들처럼 초 단위 실시간 체결까지는 필요 없음).
+매 사이클 trading_value_ranking.get_ranking(window="regular")로 순위를 다시 조회해
+직전 사이클과 비교한다 — 별도 실시간 피드 없이 REST 폴링만으로 충분하다(거래대금
+순위는 분 단위로도 크게 안 바뀌는 지표라 기존 전략들처럼 초 단위 실시간 체결까지는
+필요 없음).
 
-거래소 기준: 이 전략은 순위 데이터(top_by_trading_value, 통합/KRX+NXT 기준)만 쓴다 —
-별도 분봉/호가 조회가 없어 KRX/통합 구분이 추가로 필요한 지점 자체가 없다.
+screener.top_by_trading_value를 직접 쓰지 않는 이유: 그건 하루 전체(장전 포함) 누적
+거래대금 기준 순위라, 대시보드 ranking.html의 "장중" 버튼이 보여주는 "09:00 이후
+순수 증가분" 기준 순위와 다르다(둘 다 "장중"이라 부르지만 계산이 다름 — 사용자가
+실측으로 확인). trading_value_ranking.get_ranking(window="regular")은 09:00 베이스라인을
+빼 순증가분으로 다시 정렬·재번호(1위부터 빈틈없이)한 순위라 대시보드와 동일한
+숫자를 본다.
+
+거래소 기준: 이 전략은 순위 데이터(get_ranking → screener.top_by_trading_value,
+통합/KRX+NXT 기준)만 쓴다 — 별도 분봉/호가 조회가 없어 KRX/통합 구분이 추가로
+필요한 지점 자체가 없다.
 """
 import json
 import os
@@ -22,11 +31,11 @@ from kiwoom_client import KiwoomClient
 from .heartbeat import write_heartbeat
 from .notifier import send_telegram
 from .orderbook_collector import is_market_open
-from .screener import top_by_trading_value
 from .stop_control import clear_stop_flag, is_stop_requested
+from .trading_value_ranking import get_ranking as get_trading_value_ranking
 
 STRATEGY_NAME = "strategy_4"
-DEFAULT_TOP_N = 10  # 4~6위만 보면 되지만, 순위 데이터를 위에서부터 채우는 top_by_trading_value 특성상 여유 있게 받아둠
+DEFAULT_TOP_N = 10  # 4~6위만 보면 되지만, 순위 데이터를 위에서부터 채우는 get_ranking 특성상 여유 있게 받아둠
 DEFAULT_SIGNAL_LOG_PATH = "state/strategy_4/signals.jsonl"
 
 WATCHED_RANK_PAIRS = [(4, 3), (5, 4), (6, 5)]  # (from_rank, to_rank) 감시 목록
@@ -127,9 +136,9 @@ def run_rank_watch_loop(
     previous_names: dict = {}
     while is_market_open(datetime.now()) and not is_stop_requested(stop_flag_path):
         try:
-            df = top_by_trading_value(client, top_n=top_n)
-            current_ranks = dict(zip(df["stock_code"], df["rank"]))
-            current_names = dict(zip(df["stock_code"], df["name"]))
+            rows = get_trading_value_ranking(client.appkey, client.secretkey, client.is_mock, "regular", top_n=top_n)["rows"]
+            current_ranks = {row["stock_code"]: row["rank"] for row in rows}
+            current_names = {row["stock_code"]: row["name"] for row in rows}
         except Exception as exc:
             print(f"순위 조회 실패 - {exc}", flush=True)
             write_heartbeat(os.path.dirname(output_path) or ".")
