@@ -43,6 +43,17 @@ MINUTE_COLUMN_MAP = {
 
 
 def find_records(payload: dict):
+    # HTTP 200이어도 API 자체 오류(토큰 만료/레이트리밋 등)는 return_code!=0으로 응답에
+    # 실려 온다(kiwoom_client.py place_order 등과 동일 관례) — 이 체크 없이 진행하면
+    # 레코드 리스트가 없어 아래 "차트 레코드 리스트를 찾지 못했습니다"만 보여서 진짜
+    # 원인이 로그에 안 남는다(screener.py의 ka10032 return_code 누락과 같은 문제가
+    # 여기서도 실측됨 — live_monitor.py의 "확인 중 오류" 반복이 이 경로).
+    # return_code가 없는(테스트 픽스처 등) 페이로드는 그냥 아래 키 탐색으로 넘어간다.
+    return_code = payload.get("return_code")
+    if return_code is not None and return_code != 0:
+        raise RuntimeError(
+            f"차트 조회 API 오류 - return_code={return_code} {payload.get('return_msg', '')}".strip()
+        )
     for key in RECORDS_KEY_CANDIDATES:
         if key in payload and isinstance(payload[key], list):
             return payload[key]
