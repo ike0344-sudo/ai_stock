@@ -43,6 +43,27 @@ def is_extended_market_open(now: datetime) -> bool:
     return start <= now <= end
 
 
+def _wait_until_session_open(open_hour, open_minute, is_open_fn, session_label, now_fn, on_wait_tick) -> bool:
+    """wait_until_extended_market_open/wait_until_market_open의 공통 대기 루프 —
+    개장 시각·개장 여부 판정 함수만 다를 뿐 나머지 로직(주말 처리, 대기 중 heartbeat
+    틱, 대기 종료 후 True 반환)은 동일해 중복을 피하려 여기로 뺐다."""
+    now = now_fn()
+    today_open = now.replace(hour=open_hour, minute=open_minute, second=0, microsecond=0)
+    if now.weekday() >= 5 or now >= today_open:
+        return is_open_fn(now)
+
+    print(
+        f"{session_label} 시작({open_hour:02d}:{open_minute:02d}) 전입니다 — "
+        "그때까지 대기합니다. 중단하려면 Ctrl+C.",
+        flush=True,
+    )
+    while now_fn() < today_open:
+        if on_wait_tick is not None:
+            on_wait_tick()
+        time.sleep(15.0)
+    return True
+
+
 def wait_until_extended_market_open(now_fn=datetime.now, on_wait_tick=None) -> bool:
     """지금이 평일 08:00 이전이면 08:00까지 대기했다가 True를 반환한다 — 사람이 8시
     정각에 맞춰 수동으로 실행해야 하는 부담/오차(전략1~4를 8시에 직접 실행하려 했으나
@@ -60,21 +81,19 @@ def wait_until_extended_market_open(now_fn=datetime.now, on_wait_tick=None) -> b
     07:50에 걸려도 최대 10분) 대시보드가 "중지됨"으로 오판해 "시작" 버튼으로 중복
     실행되는 사고가 실계좌에서 실측됐다 — 호출자가 write_heartbeat를 여기 꽂아 대기
     구간에도 하트비트가 계속 갱신되게 한다."""
-    now = now_fn()
-    today_open = now.replace(hour=EXTENDED_OPEN_HOUR, minute=EXTENDED_OPEN_MINUTE, second=0, microsecond=0)
-    if now.weekday() >= 5 or now >= today_open:
-        return is_extended_market_open(now)
-
-    print(
-        f"통합장 시작({EXTENDED_OPEN_HOUR:02d}:{EXTENDED_OPEN_MINUTE:02d}) 전입니다 — "
-        "그때까지 대기합니다. 중단하려면 Ctrl+C.",
-        flush=True,
+    return _wait_until_session_open(
+        EXTENDED_OPEN_HOUR, EXTENDED_OPEN_MINUTE, is_extended_market_open, "통합장", now_fn, on_wait_tick,
     )
-    while now_fn() < today_open:
-        if on_wait_tick is not None:
-            on_wait_tick()
-        time.sleep(15.0)
-    return True
+
+
+def wait_until_market_open(now_fn=datetime.now, on_wait_tick=None) -> bool:
+    """wait_until_extended_market_open과 동일한 대기 로직이지만 09:00(정규장) 기준 —
+    전략4(strategy4_rank_watch.py)가 통합장(08:00~20:00)이 아니라 정규장(09:00~15:30)
+    동안만 순위를 감시하도록 사용자가 명시해, cli.py의 strategy_4 분기가 이 함수로
+    대기한다."""
+    return _wait_until_session_open(
+        MARKET_OPEN_HOUR, MARKET_OPEN_MINUTE, is_market_open, "정규장", now_fn, on_wait_tick,
+    )
 
 
 def collect_once(client: KiwoomClient, stock_code: str, now: datetime | None = None) -> dict:

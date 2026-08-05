@@ -34,7 +34,12 @@ from .heartbeat import write_heartbeat
 from .live_monitor import run_monitor_loop
 from .ml_entry_filter import FEATURE_COLUMNS, load_model
 from .nasdaq_drop_monitor import DROP_THRESHOLD_PCT, WINDOW_SECONDS, run_nasdaq_drop_monitor
-from .orderbook_collector import is_market_open, run_collection_loop, wait_until_extended_market_open
+from .orderbook_collector import (
+    is_market_open,
+    run_collection_loop,
+    wait_until_extended_market_open,
+    wait_until_market_open,
+)
 from .oversold_strategy import STOCK_CODE as OVERSOLD_STOCK_CODE
 from .oversold_trading_loop import run_oversold_trading_loop
 from .risk_manager import RECOMMENDED_MAX_CONCURRENT_POSITIONS
@@ -468,32 +473,41 @@ def _run_monitor_signals(args) -> None:
 
     --strategy strategy_3은 ML 모델/코스피 레짐 없이 3분 거래대금+수익률 조건만
     보는 테스트 모드 전략(strategy3_scalp.py), --strategy strategy_4는 거래대금
-    순위 4위→3위 승격만 감시하는 전략(strategy4_rank_watch.py)이라 둘 다 완전히
-    다른 실행 경로(텔레그램 알림 포함)로 분기한다 — run-trading의 strategy_2 분기와
-    같은 이유(다른 전략을 strategy_1 경로로 잘못 태우는 버그 방지)."""
+    순위 4→3위/5→4위/6→5위 승격만 감시하는 전략(strategy4_rank_watch.py)이라 둘 다
+    완전히 다른 실행 경로(텔레그램 알림 포함)로 분기한다 — run-trading의 strategy_2
+    분기와 같은 이유(다른 전략을 strategy_1 경로로 잘못 태우는 버그 방지)."""
     client = _build_client()
+    strategy = getattr(args, "strategy", "strategy_1")
+
+    if strategy == "strategy_4":
+        # strategy_4는 정규장(09:00~15:30)만 감시하므로, 다른 전략들의 통합장
+        # (08:00~20:00) 대기 게이트를 타면 08:00~09:00 사이에 시작했을 때 곧바로
+        # 종료돼버린다 — 그래서 이 분기는 wait_until_extended_market_open보다 먼저,
+        # 정규장 기준 대기로 처리한다.
+        if not wait_until_market_open():
+            print("현재 정규장 시간이 아닙니다(평일 09:00~15:30). 아무 것도 감시하지 않고 종료합니다.")
+            return
+        load_dotenv()
+        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+        output_path = args.output if args.output != "signals.jsonl" else STRATEGY4_DEFAULT_SIGNAL_LOG_PATH
+        run_rank_watch_loop(
+            client, bot_token, chat_id,
+            output_path=output_path, top_n=args.top_n, poll_interval_seconds=args.interval_seconds,
+        )
+        print("정규장 종료로 감시를 마쳤습니다.")
+        return
+
     if not wait_until_extended_market_open():
         print("현재 통합장 시간이 아닙니다(평일 08:00~20:00). 아무 것도 감시하지 않고 종료합니다.")
         return
 
-    strategy = getattr(args, "strategy", "strategy_1")
     if strategy == "strategy_3":
         load_dotenv()
         bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
         chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
         output_path = args.output if args.output != "signals.jsonl" else STRATEGY3_DEFAULT_SIGNAL_LOG_PATH
         run_scalp_monitor_loop(
-            client, bot_token, chat_id,
-            output_path=output_path, top_n=args.top_n, poll_interval_seconds=args.interval_seconds,
-        )
-        print("통합장 종료로 감시를 마쳤습니다.")
-        return
-    if strategy == "strategy_4":
-        load_dotenv()
-        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-        output_path = args.output if args.output != "signals.jsonl" else STRATEGY4_DEFAULT_SIGNAL_LOG_PATH
-        run_rank_watch_loop(
             client, bot_token, chat_id,
             output_path=output_path, top_n=args.top_n, poll_interval_seconds=args.interval_seconds,
         )
@@ -854,7 +868,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="정규장 동안 오늘 top-N 종목을 실시간 감시해 통과 신호를 로그로만 기록 (매수 주문 없음). "
         "--strategy strategy_3은 3분거래대금+수익률 조건만 보는 테스트 모드(텔레그램 알림 포함)",
     )
-    monitor_parser.add_argument("--strategy", default="strategy_1", help="strategy_1(기본, 조건1~8+ML), strategy_3(3분 거래대금+수익률만, ML/레짐 없음), strategy_4(거래대금 순위 4위→3위 승격 감시) — strategy_3/4 모두 텔레그램 알림 포함")
+    monitor_parser.add_argument("--strategy", default="strategy_1", help="strategy_1(기본, 조건1~8+ML), strategy_3(3분 거래대금+수익률만, ML/레짐 없음), strategy_4(거래대금 순위 4→3위/5→4위/6→5위 승격 감시, 정규장 09:00~15:30) — strategy_3/4 모두 텔레그램 알림 포함")
     monitor_parser.add_argument("--model-path", default="models/strategy_1/entry_filter_model.joblib", help="train-entry-model로 저장한 모델 경로 (strategy_1 전용)")
     monitor_parser.add_argument("--top-n", type=int, default=35)
     monitor_parser.add_argument("--proba-threshold", type=float, default=RECOMMENDED_PROBA_THRESHOLD, help="ML 예측 성공확률 임계값 (strategy_1 전용)")
