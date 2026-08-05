@@ -13,6 +13,8 @@ risk_pct_per_trade: 0.01
 # 아래는 심사 메커니즘만 구현되어 있고 값은 미적용(null) 상태 — 사용자가 실제
 # 수치를 정하기 전까지는 해당 검사를 건너뛴다.
 max_symbol_weight_pct: null
-max_order_notional: null
+# 팻핑거 방지용 단일 주문 노셔널 상한. strategy_1 슬롯당 정상 노셔널
+# (10,000,000 / max_concurrent_positions = 2,000,000원)의 2배로 설정 (2026-07-27 사용자 승인).
+max_order_notional: 4000000
 reentry_cooldown_sec: null
 max_consecutive_losses: null
