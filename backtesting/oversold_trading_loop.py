@@ -19,7 +19,7 @@ from .data_loader import _resample_minute, load_history
 from .heartbeat import write_heartbeat
 from .kill_switch_control import DEFAULT_OVERRIDE_PATH as DEFAULT_KILL_SWITCH_OVERRIDE_PATH
 from .kill_switch_control import is_kill_switch_requested
-from .notifier import notify_error, notify_kill_switch, notify_order_filled
+from .notifier import notify_error, notify_kill_switch, notify_order_filled, notify_signal_detected
 from .orderbook_collector import (
     MARKET_CLOSE_HOUR,
     MARKET_CLOSE_MINUTE,
@@ -149,7 +149,13 @@ def process_oversold_entry_once(
     if tier is None:
         return episode
 
-    quantity = max(1, int(tier_capital_krw // current_price))
+    quantity = int(tier_capital_krw // current_price)
+    if quantity < 1:
+        # 배정된 티어 자금으로 1주도 못 사면(고가 급등 등) 강제로 1주를 사서 티어 예산을
+        # 초과하는 대신, 신호만 알리고 매수는 건너뛴다.
+        notify_signal_detected(STRATEGY_NAME, STOCK_CODE, "", current_price, None, bot_token, chat_id)
+        return episode
+
     stop_price = current_price * (1 - HARD_STOP_PCT)
     decision = check_order(
         OrderRequest(code=STOCK_CODE, side="buy", quantity=quantity, price=current_price, stop=stop_price),

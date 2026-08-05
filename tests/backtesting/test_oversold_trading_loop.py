@@ -168,6 +168,31 @@ def test_entry_fires_tier_1_when_price_touches_first_band():
     assert client.order_kwargs == [{"price": 90.0, "order_type": "0"}]  # 지정가(슬리피지 통제)
 
 
+def test_entry_notifies_signal_only_when_tier_capital_cannot_buy_one_share(monkeypatch):
+    # 회귀 테스트 — 예전엔 quantity = max(1, tier_capital_krw // current_price)라서
+    # 티어 자금으로 1주도 못 사는 가격이면 예산을 초과해서라도 강제로 1주를 매수했다
+    # (그리고 current_price=0이면 ZeroDivisionError로 죽었다). 이제는 매수 없이 신호만
+    # 알린다.
+    notified = []
+    monkeypatch.setattr(
+        oversold_trading_loop, "notify_signal_detected",
+        lambda *a, **k: notified.append((a, k)),
+    )
+    client = _StubClient()
+    risk_state = RiskState(trading_date="2026-07-22")
+    episode = OversoldEpisodeState()
+
+    episode = process_oversold_entry_once(
+        client, risk_state, episode, ma_value=100.0, current_price=90.0, tier_capital_krw=50,
+        bot_token="", chat_id="", total_capital_krw=10_000_000,
+    )
+
+    assert episode.filled_tier_count == 0
+    assert risk_state.open_positions == []
+    assert client.orders == []
+    assert len(notified) == 1
+
+
 def test_entry_does_not_fire_when_price_above_first_band():
     client = _StubClient()
     risk_state = RiskState(trading_date="2026-07-22")

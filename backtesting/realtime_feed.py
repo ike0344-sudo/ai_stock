@@ -174,7 +174,7 @@ class RealtimeFeed:
             if not code or code not in self._aggregators or not values:
                 continue
             tick = parse_tick(values)
-            if tick is None:
+            if tick is None or tick["price"] <= 0:
                 continue
             trading_date = datetime.now().strftime("%Y-%m-%d")
             with self._lock:
