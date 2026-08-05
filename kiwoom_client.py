@@ -11,6 +11,14 @@ from datetime import date
 
 import requests
 
+INVALID_TOKEN_ERROR_CODE = "8005"
+
+
+def _is_invalid_token_response(payload: dict) -> bool:
+    """request_tr 응답이 "토큰이 유효하지 않습니다([8005])" 오류인지 판별 — 이 경우만
+    토큰 재발급으로 회복 가능하다(다른 return_code!=0 오류는 재시도해도 소용없음)."""
+    return payload.get("return_code") not in (0, None) and INVALID_TOKEN_ERROR_CODE in str(payload.get("return_msg", ""))
+
 
 class KiwoomClient:
     def __init__(self, appkey: str, secretkey: str, is_mock: bool = True, min_request_interval: float = 1.1):
@@ -96,27 +104,41 @@ class KiwoomClient:
         여러 스레드가 같은 인스턴스를 동시에 쓸 수 있는 환경(dashboard의 kiwoom_session
         공유 클라이언트)에서, 락 없이는 두 스레드가 거의 동시에 페이싱 검사를 통과해
         실제 요청을 겹쳐 쏠 수 있다.
+
+        토큰이 무효화된 응답(return_code!=0, [8005:Token이 유효하지 않습니다])이 오면
+        한 번 재발급받아 재시도한다 — RealtimeFeed(realtime_feed.py)가 WebSocket
+        재연결마다 같은 appkey로 새 토큰을 발급받는데, 그러면 이 인스턴스가 들고 있던
+        토큰이 서버 쪽에서 무효화된다(실측). 재발급 로직이 없던 예전엔 그 순간부터
+        이 인스턴스의 모든 요청이 세션이 끝날 때까지 계속 실패했다(전략1 실계좌
+        로그에서 89,877회 반복된 "워치리스트 갱신 실패"의 근본 원인으로 실측 확인).
         """
         with self._request_lock:
             if not self.token:
                 self.issue_token()
 
-            self._throttle()
+            payload = self._post_tr(api_id, body, path, cont_yn, next_key)
+            if _is_invalid_token_response(payload):
+                self.issue_token()
+                payload = self._post_tr(api_id, body, path, cont_yn, next_key)
 
-            url = f"{self.base_url}{path}"
-            headers = {
-                "Content-Type": "application/json;charset=UTF-8",
-                "authorization": f"Bearer {self.token}",
-                "api-id": api_id,
-                "cont-yn": cont_yn,
-                "next-key": next_key,
-            }
-            res = requests.post(url, headers=headers, json=body, timeout=10)
-            res.raise_for_status()
+        return payload
 
-            self.last_cont_yn = res.headers.get("cont-yn", "N")
-            self.last_next_key = res.headers.get("next-key", "")
+    def _post_tr(self, api_id: str, body: dict, path: str, cont_yn: str, next_key: str) -> dict:
+        self._throttle()
 
+        url = f"{self.base_url}{path}"
+        headers = {
+            "Content-Type": "application/json;charset=UTF-8",
+            "authorization": f"Bearer {self.token}",
+            "api-id": api_id,
+            "cont-yn": cont_yn,
+            "next-key": next_key,
+        }
+        res = requests.post(url, headers=headers, json=body, timeout=10)
+        res.raise_for_status()
+
+        self.last_cont_yn = res.headers.get("cont-yn", "N")
+        self.last_next_key = res.headers.get("next-key", "")
         return res.json()
 
     def _paginate(self, api_id: str, body: dict, path: str, max_pages: int) -> list[dict]:

@@ -85,6 +85,75 @@ def test_request_tr_serializes_concurrent_calls_from_same_instance(monkeypatch):
     assert all(gap >= client.min_request_interval * 0.9 for gap in gaps)
 
 
+def test_request_tr_reissues_token_once_on_invalid_token_error(monkeypatch):
+    # 실측 회귀 테스트 — RealtimeFeed(realtime_feed.py)가 WebSocket 재연결마다 같은
+    # appkey로 새 토큰을 발급받으면, 이 REST 클라이언트가 들고 있던 토큰이 서버 쪽에서
+    # 무효화된다(return_code=3, "인증에 실패했습니다[8005:Token이 유효하지 않습니다]").
+    # 재발급 로직이 없던 예전엔 그 순간부터 이 인스턴스의 모든 요청이 세션 끝까지
+    # 계속 실패했다(전략1 실계좌 로그에서 89,877회 반복 확인). 이제는 이 오류를 보면
+    # 토큰을 한 번 재발급받아 재시도한다.
+    client = KiwoomClient("key", "secret")
+    client.token = "stale-token"
+
+    def fake_issue_token():
+        client.token = "fresh-token"
+        return "fresh-token"
+
+    monkeypatch.setattr(client, "issue_token", fake_issue_token)
+
+    responses = iter([
+        {"return_code": 3, "return_msg": "인증에 실패했습니다[8005:Token이 유효하지 않습니다]"},
+        {"return_code": 0, "return_msg": "정상적으로 처리되었습니다", "stk_cd": "000660"},
+    ])
+    captured_tokens = []
+
+    class _FakeResponse:
+        headers: dict = {}
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return next(responses)
+
+    def fake_post(url, headers=None, json=None, timeout=10):
+        captured_tokens.append(headers["authorization"])
+        return _FakeResponse()
+
+    monkeypatch.setattr("kiwoom_client.requests.post", fake_post)
+
+    result = client.request_tr("ka10032", {})
+
+    assert result == {"return_code": 0, "return_msg": "정상적으로 처리되었습니다", "stk_cd": "000660"}
+    assert captured_tokens == ["Bearer stale-token", "Bearer fresh-token"]
+
+
+def test_request_tr_does_not_reissue_token_on_other_api_errors(monkeypatch):
+    # 토큰 무효화가 아닌 다른 return_code!=0 오류(예: 모의투자에서 막힌 TR)는
+    # 재발급해도 소용없으니 재시도하지 않고 그대로 반환한다.
+    client = KiwoomClient("key", "secret")
+    client.token = "existing-token"
+
+    reissue_calls = []
+    monkeypatch.setattr(client, "issue_token", lambda: reissue_calls.append(1))
+
+    class _FakeResponse:
+        headers: dict = {}
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"return_code": 20, "return_msg": "RC9000:모의투자에서는 지원하지 않는 기능입니다"}
+
+    monkeypatch.setattr("kiwoom_client.requests.post", lambda url, headers=None, json=None, timeout=10: _FakeResponse())
+
+    result = client.request_tr("kt00005", {})
+
+    assert result["return_code"] == 20
+    assert reissue_calls == []
+
+
 def _client_with_stub_request(monkeypatch, pages_by_call: list[dict], cont_yns: list[str]):
     """request_tr을 스텁으로 대체해 실제 네트워크 없이 페이지네이션 로직만 검증."""
     client = KiwoomClient("key", "secret")
