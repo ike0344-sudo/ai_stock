@@ -38,7 +38,7 @@ class _StubRankingClient:
         self._i += 1
         self.last_cont_yn = "Y" if self._i < len(self._pages) else "N"
         self.last_next_key = str(self._i) if self.last_cont_yn == "Y" else ""
-        return page
+        return {"return_code": 0, "return_msg": "정상적으로 처리되었습니다", **page}
 
 
 def _item(
@@ -102,6 +102,18 @@ def test_top_by_trading_value_paginates_until_top_n_filled():
 
     assert len(df) == 2
     assert set(df["stock_code"]) == {"005930", "000660"}
+
+
+def test_top_by_trading_value_raises_clear_error_on_api_return_code_failure():
+    # 실측 회귀 테스트 — API가 200 OK로 응답하면서 return_code!=0(토큰 만료 등 자체
+    # 오류)를 실어 보내면, 이전에는 이 체크가 없어 trde_prica_upper가 없는 채로 그냥
+    # 진행되고 결과 DataFrame에 "stock_code" 컬럼이 없어 호출부가 KeyError('stock_code')
+    # 만 보고 진짜 원인(토큰/레이트리밋 등)을 알 수 없었다(strategy_1 실계좌 로그에서
+    # "워치리스트 갱신 실패 - 'stock_code'"가 수만 번 반복된 원인으로 실측 확인).
+    client = _StubRankingClient([{"return_code": 3, "return_msg": "유효하지 않은 토큰입니다"}])
+
+    with pytest.raises(RuntimeError, match="유효하지 않은 토큰입니다"):
+        top_by_trading_value(client, top_n=5)
 
 
 def test_top_by_trading_value_includes_etf_when_disabled():

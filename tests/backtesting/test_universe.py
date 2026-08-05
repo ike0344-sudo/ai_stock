@@ -16,7 +16,7 @@ class _StubClient:
         self.last_next_key = ""
 
     def request_tr(self, api_id, body, path, cont_yn="N", next_key=""):
-        return self._ranking_page
+        return {"return_code": 0, "return_msg": "정상적으로 처리되었습니다", **self._ranking_page}
 
     def get_daily_chart(self, stock_code, base_date=""):
         return self._daily_by_code.get(stock_code, {"stk_dt_pole_chart_qry": []})

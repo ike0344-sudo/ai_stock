@@ -73,6 +73,13 @@ def top_by_trading_value(
     cont_yn, next_key = "N", ""
     for _ in range(max_pages):
         payload = client.request_tr("ka10032", body, path=RANKING_PATH, cont_yn=cont_yn, next_key=next_key)
+        # HTTP 200이어도 API 자체 오류는 return_code!=0으로 응답에 실려 온다(kiwoom_client.py의
+        # place_order 등과 동일한 관례) — 이 체크 없이 진행하면 trde_prica_upper가 없어
+        # rows=[]가 되고, 호출부에서 결과 DataFrame의 "stock_code" 컬럼이 없다는 KeyError만
+        # 보여서 진짜 원인(토큰 만료/레이트리밋 등)이 로그에 안 남는다(실측: 워치리스트
+        # 갱신 실패가 'stock_code' KeyError로만 반복 기록돼 원인 추적이 안 됐던 문제).
+        if payload.get("return_code") != 0:
+            raise RuntimeError(f"ka10032 응답 오류 - return_code={payload.get('return_code')} {payload.get('return_msg', '')}".strip())
         for item in payload.get("trde_prica_upper", []):
             name = item["stk_nm"]
             if exclude_etf and _is_excluded_instrument(name):
