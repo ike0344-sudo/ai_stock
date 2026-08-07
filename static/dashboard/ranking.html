@@ -25,17 +25,23 @@
         <button id="window-extended-button" type="button" class="btn btn-segment toggle-active">전체</button>
       </span>
       &nbsp;
+      <span class="segmented">
+        <button id="font-smaller-button" type="button" class="btn btn-segment">A-</button>
+        <button id="font-bigger-button" type="button" class="btn btn-segment">A+</button>
+      </span>
+      &nbsp;
       <span id="as-of">-</span>
       &nbsp;·&nbsp;
       <a href="/">← 메인 대시보드</a>
     </div>
   </header>
 
+  <p id="preflight-error" class="empty hidden" style="color: var(--danger);"></p>
+
   <table id="ranking-table">
     <thead>
       <tr>
-        <th>순위</th><th>종목명</th><th>현재가</th><th>대비</th><th>등락률</th>
-        <th>거래량</th><th>거래대금(억원)</th>
+        <th>순위</th><th>종목명</th><th>현재가</th><th>등락률</th><th>거래대금(억원)</th>
       </tr>
     </thead>
     <tbody id="ranking-tbody"></tbody>
@@ -53,11 +59,6 @@
     function formatChangeRate(value) {
       const sign = value > 0 ? "+" : "";
       return `${sign}${value.toFixed(2)}%`;
-    }
-
-    function formatSignedKrw(value) {
-      const sign = value > 0 ? "+" : "";
-      return sign + Math.round(value).toLocaleString("ko-KR");
     }
 
     function formatTradingValueEok(value) {
@@ -98,9 +99,7 @@
             [index + 1, null],
             [item.name, null],
             [Math.round(item.current_price).toLocaleString("ko-KR"), null],
-            [formatSignedKrw(item.change_amount), rateClass],
             [formatChangeRate(item.change_rate), rateClass],
-            [item.volume.toLocaleString("ko-KR"), null],
             [formatTradingValueEok(item.trading_value), null],
           ];
           for (const [text, cls] of cells) {
@@ -116,8 +115,39 @@
       }
     }
 
+    // 서버 시작 시 키움 토큰 발급을 미리 시도해본 결과(dashboard_client.py의
+    // _preflight_error) — 실패했으면 원인을 화면에 그대로 보여준다. 그래야 다른
+    // PC에서 "그냥 안 됨"만 보고 원인을 특정할 수 없는 상황을 피할 수 있다.
+    const preflightError = new URLSearchParams(location.search).get("error");
+    if (preflightError) {
+      const el = document.getElementById("preflight-error");
+      el.textContent = "⚠ " + preflightError;
+      el.classList.remove("hidden");
+    }
+
     document.getElementById("window-regular-button").addEventListener("click", () => setWindow("regular"));
     document.getElementById("window-extended-button").addEventListener("click", () => setWindow("extended"));
+
+    // 글씨 크기: 페이지 전체가 rem 기반이라 <html> 루트 font-size를 바꾸면
+    // 헤더/표가 같이 스케일된다. localStorage에 저장해 다음 실행에도 유지.
+    const FONT_SIZE_KEY = "ranking-root-font-px";
+    const MIN_FONT_PX = 14;
+    const MAX_FONT_PX = 26;
+    const DEFAULT_FONT_PX = 18;
+
+    function applyFontSize(px) {
+      document.documentElement.style.fontSize = px + "px";
+      localStorage.setItem(FONT_SIZE_KEY, px);
+    }
+
+    function changeFontSize(delta) {
+      const current = parseInt(localStorage.getItem(FONT_SIZE_KEY), 10) || DEFAULT_FONT_PX;
+      applyFontSize(Math.min(MAX_FONT_PX, Math.max(MIN_FONT_PX, current + delta)));
+    }
+
+    document.getElementById("font-smaller-button").addEventListener("click", () => changeFontSize(-2));
+    document.getElementById("font-bigger-button").addEventListener("click", () => changeFontSize(2));
+    applyFontSize(parseInt(localStorage.getItem(FONT_SIZE_KEY), 10) || DEFAULT_FONT_PX);
 
     poll();
     setInterval(poll, POLL_INTERVAL_MS);

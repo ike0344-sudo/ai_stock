@@ -15,3 +15,7 @@ ai_tradingview/
 *.pdf
 grid_tp_zones_results.txt
 .worktrees/
+dashboard_client_config.json
+dist/
+build/
+*.spec
