@@ -19,6 +19,7 @@ main dashboard_server.py의 전체 핸들러(매도 주문 등 실거래 라우�
     dist/dashboard_client.exe 와 그 PC용 .env(KIWOOM_APPKEY/KIWOOM_SECRETKEY)를 같이 배포
 """
 import argparse
+import ctypes
 import json
 import logging
 import os
@@ -135,6 +136,28 @@ def _save_url(url: str) -> None:
     CONFIG_PATH.write_text(json.dumps({"url": url}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _warn_if_no_webview2() -> None:
+    """WebView2 런타임(또는 .NET 4.6.2+)이 없으면 pywebview가 조용히 구식 mshtml로
+    폴백하는데, ranking.html의 fetch/템플릿 리터럴이 그 위에서 전혀 안 돌아 빈 흰
+    화면만 뜬다(실측) — --windowed 빌드라 사용자는 원인을 알 방법이 없다. 창을
+    띄우기 전에 렌더러를 먼저 확인해 알아볼 수 있는 메시지박스로 알려준다."""
+    if sys.platform != "win32":
+        return
+    try:
+        from webview.platforms.winforms import renderer
+    except Exception:
+        return  # 감지 실패는 기존 동작(그냥 창 띄우기)을 막지 않는다
+    if renderer != "mshtml":
+        return
+    ctypes.windll.user32.MessageBoxW(
+        0,
+        "Microsoft Edge WebView2 Runtime이 설치돼 있지 않아 화면이 비어 보입니다.\n"
+        "Microsoft 공식 사이트에서 'WebView2 Runtime'을 검색해 설치한 뒤 다시 실행하세요.",
+        "[0184] 거래대금상위 - 실행 환경 확인 필요",
+        0x10,  # MB_ICONERROR
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--url", help="이미 켜져 있는 원격 dashboard_server를 보려면 그 ranking.html URL 지정 (생략 시 독립 실행)")
@@ -158,6 +181,7 @@ def main() -> None:
             os.environ.get("KIWOOM_IS_MOCK", "true").lower() == "true",
         )
 
+    _warn_if_no_webview2()
     webview.create_window("[0184] 거래대금상위", url, width=900, height=700)
     webview.start()
 

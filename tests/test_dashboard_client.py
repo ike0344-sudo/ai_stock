@@ -49,3 +49,31 @@ def test_start_local_server_appends_preflight_error_to_url(monkeypatch):
     monkeypatch.setattr(dashboard_client, "_preflight_error", lambda *a, **k: "키움 API 연결 실패: 테스트")
     url = dashboard_client._start_local_server("key", "secret", True)
     assert "error=" in url
+
+
+def test_warn_if_no_webview2_shows_messagebox_when_mshtml(monkeypatch):
+    fake_platforms = types.ModuleType("webview.platforms")
+    fake_winforms = types.ModuleType("webview.platforms.winforms")
+    fake_winforms.renderer = "mshtml"
+    monkeypatch.setitem(sys.modules, "webview.platforms", fake_platforms)
+    monkeypatch.setitem(sys.modules, "webview.platforms.winforms", fake_winforms)
+    calls = []
+    monkeypatch.setattr(dashboard_client.ctypes.windll.user32, "MessageBoxW", lambda *a: calls.append(a))
+
+    dashboard_client._warn_if_no_webview2()
+
+    assert len(calls) == 1
+
+
+def test_warn_if_no_webview2_stays_silent_when_edgechromium(monkeypatch):
+    fake_platforms = types.ModuleType("webview.platforms")
+    fake_winforms = types.ModuleType("webview.platforms.winforms")
+    fake_winforms.renderer = "edgechromium"
+    monkeypatch.setitem(sys.modules, "webview.platforms", fake_platforms)
+    monkeypatch.setitem(sys.modules, "webview.platforms.winforms", fake_winforms)
+    calls = []
+    monkeypatch.setattr(dashboard_client.ctypes.windll.user32, "MessageBoxW", lambda *a: calls.append(a))
+
+    dashboard_client._warn_if_no_webview2()
+
+    assert calls == []
