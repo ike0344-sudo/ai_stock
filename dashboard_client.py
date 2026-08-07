@@ -20,6 +20,7 @@ main dashboard_server.py의 전체 핸들러(매도 주문 등 실거래 라우�
 """
 import argparse
 import json
+import logging
 import os
 import sys
 import threading
@@ -140,6 +141,9 @@ def main() -> None:
     args = parser.parse_args()
 
     os.chdir(APP_DIR)  # 상태 파일(state/...)이 exe 위치 기준 고정 폴더에 쌓이게
+    # --windowed 빌드는 콘솔이 없어 pywebview가 내는 경고(예: WebView2 런타임이
+    # 없어 구식 mshtml로 폴백했다는 경고)를 볼 방법이 없다 — 파일로라도 남긴다.
+    logging.basicConfig(filename=str(APP_DIR / "dashboard_client.log"), level=logging.WARNING, encoding="utf-8")
     saved_url = _load_url()
     if args.url:
         _save_url(args.url)
