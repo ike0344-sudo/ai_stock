@@ -114,8 +114,88 @@ function Remove-StaleAutoDevelopWorktrees {
     }
 }
 
+# ---- 2026-08-07 장중 베이스라인 수정 확인 (일회성 — 확인 끝나면 이 블록 통째로 지워도 됨) ----
+# trading_value_ranking.py의 _ensure_baseline이 빈 베이스라인을 확정으로 안 믿게 고친 게
+# 내일 장 시작 후 실제로 동작하는지 사람이 그 시간에 안 붙어있어도 확인하려고 추가.
+# 마커 파일이 생기면 그 뒤로는 영원히 다시 안 돈다(날짜 재확인 없음 — 진짜 1회성).
+$baselineVerifyMarker = Join-Path $repoRoot "state\baseline_verify_2026-08-07_done.json"
+$baselineVerifyDueAt = Get-Date "2026-08-07 09:05:00"
+
+function Get-DotEnvValue([string]$Key) {
+    $envPath = Join-Path $repoRoot ".env"
+    if (-not (Test-Path $envPath)) { return $null }
+    foreach ($line in Get-Content $envPath) {
+        if ($line -match "^\s*$Key\s*=\s*(.+?)\s*$") { return $Matches[1].Trim('"') }
+    }
+    return $null
+}
+
+function Invoke-BaselineVerifyOnce {
+    $lines = @("[baseline_verify] 2026-08-07 장중 베이스라인 수정 확인 결과")
+    try {
+        $baselinePath = Join-Path $repoRoot "state\regular_session_baseline.json"
+        if (Test-Path $baselinePath) {
+            $baseline = Get-Content $baselinePath -Raw | ConvertFrom-Json
+            $count = ($baseline.baseline.PSObject.Properties | Measure-Object).Count
+            if ($baseline.date -eq "2026-08-07" -and $count -gt 0) {
+                $lines += "PASS baseline: date=$($baseline.date), 종목수=$count"
+            } else {
+                $lines += "FAIL baseline: date=$($baseline.date), 종목수=$count (오늘자+비어있지 않아야 정상)"
+            }
+        } else {
+            $lines += "FAIL baseline: 파일 없음"
+        }
+    } catch {
+        $lines += "FAIL baseline: 확인 중 오류 - $_"
+    }
+
+    try {
+        $regular = Invoke-RestMethod -Uri "http://127.0.0.1:8765/api/trading-value-ranking?window=regular" -TimeoutSec 10
+        $extended = Invoke-RestMethod -Uri "http://127.0.0.1:8765/api/trading-value-ranking?window=extended" -TimeoutSec 10
+        $regTop = $regular.rows[0].trading_value
+        $extTop = $extended.rows[0].trading_value
+        if ($regTop -lt $extTop) {
+            $lines += "PASS regular<extended: $regTop < $extTop ($($regular.rows[0].name))"
+        } else {
+            $lines += "FAIL regular<extended: $regTop >= $extTop (베이스라인이 여전히 안 빠지는 듯)"
+        }
+    } catch {
+        $lines += "FAIL API 호출 오류 - $_"
+    }
+
+    try {
+        $procs = Get-CimInstance Win32_Process -Filter "Name='python.exe'"
+        $dupDash = ($procs | Where-Object { $_.CommandLine -match "cli dashboard(\s|$)" } | Measure-Object).Count
+        $dupS4 = ($procs | Where-Object { $_.CommandLine -match "monitor-signals.*strategy_4" } | Measure-Object).Count
+        if ($dupDash -le 1 -and $dupS4 -le 1) {
+            $lines += "PASS 중복 프로세스 없음 (dashboard=$dupDash, strategy_4=$dupS4)"
+        } else {
+            $lines += "FAIL 중복 프로세스 있음 (dashboard=$dupDash, strategy_4=$dupS4)"
+        }
+    } catch {
+        $lines += "FAIL 프로세스 확인 오류 - $_"
+    }
+
+    $botToken = Get-DotEnvValue "TELEGRAM_BOT_TOKEN"
+    $chatId = Get-DotEnvValue "TELEGRAM_CHAT_ID"
+    $message = $lines -join "`n"
+    if ($botToken -and $chatId) {
+        try {
+            Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post `
+                -Body (@{ chat_id = $chatId; text = $message } | ConvertTo-Json) -ContentType "application/json" | Out-Null
+        } catch {}
+    }
+
+    New-Item -ItemType Directory -Force -Path (Split-Path $baselineVerifyMarker) | Out-Null
+    $message | Out-File -FilePath $baselineVerifyMarker -Encoding utf8
+}
+
 while ($true) {
     try {
+        if (-not (Test-Path $baselineVerifyMarker) -and (Get-Date) -ge $baselineVerifyDueAt) {
+            Invoke-BaselineVerifyOnce
+        }
+
         $pythonProcesses = Get-CimInstance Win32_Process -Filter "Name='python.exe'"
         foreach ($target in $targets) {
             if (Test-TargetAlive $target) { continue }

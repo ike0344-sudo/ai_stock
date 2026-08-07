@@ -42,7 +42,7 @@ from .screener import top_by_trading_value
 EXTENDED_HOURS_START = clock_time(8, 0)
 EXTENDED_HOURS_END = clock_time(20, 0)
 MARKET_OPEN_TIME = clock_time(MARKET_OPEN_HOUR, MARKET_OPEN_MINUTE)
-CACHE_TTL_SECONDS = 10.0
+CACHE_TTL_SECONDS = 3.0
 BASELINE_PATH = "state/regular_session_baseline.json"
 
 _lock = threading.Lock()
@@ -118,21 +118,30 @@ def _ensure_baseline(now: datetime) -> dict:
     """오늘자 베이스라인을 확정해 반환한다. 이미 확정돼 있으면(메모리 또는 파일) 그대로
     쓰고, 오늘 09:00을 넘겼는데 아직 없으면 지금까지 모인 장전 스냅샷을 그 순간 잠가서
     파일에 저장한다(대시보드 재시작에도 유지). 장전 스냅샷이 오늘 것이 아니면(어제
-    이전 것이거나 아예 없으면) 빈 베이스라인(0 취급)으로 시작한다."""
+    이전 것이거나 아예 없으면) 빈 베이스라인(0 취급)으로 시작한다.
+
+    빈 베이스라인은 "확정"으로 취급하지 않는다 — window="regular"만 조회하는 프로세스
+    (strategy4_rank_watch.py 등, "extended"를 안 불러 장전 스냅샷이 절대 안 쌓임)가
+    09:00 직후 이 함수를 먼저 호출하면 장전 스냅샷 없이 빈 베이스라인을 그 순간 파일에
+    잠가버려, 그 뒤로 진짜 장전 스냅샷을 가진 다른 프로세스(대시보드 등)까지 파일만
+    믿고 하루 종일 빈 베이스라인(=장중 증가분이 사실상 누적치 전체)을 쓰게 되는 문제가
+    있었다(실측). 메모리/파일 모두 baseline이 비어 있으면 "아직 못 구함"으로 보고 계속
+    재시도하되, 빈 값 자체는 파일에 저장하지 않아 다른 프로세스가 나중에 진짜 스냅샷으로
+    덮어쓸 여지를 남긴다."""
     global _baseline, _baseline_date
     today_str = now.date().isoformat()
 
-    if _baseline_date == today_str and _baseline is not None:
+    if _baseline_date == today_str and _baseline:
         return _baseline
 
     loaded = _load_baseline_file()
-    if loaded and loaded.get("date") == today_str:
+    if loaded and loaded.get("date") == today_str and loaded.get("baseline"):
         _baseline = loaded["baseline"]
         _baseline_date = today_str
         return _baseline
 
-    if now.time() >= MARKET_OPEN_TIME:
-        _baseline = dict(_pre_market_snapshot) if _pre_market_snapshot_date == today_str else {}
+    if now.time() >= MARKET_OPEN_TIME and _pre_market_snapshot_date == today_str:
+        _baseline = dict(_pre_market_snapshot)
         _baseline_date = today_str
         _save_baseline_file(today_str, _baseline)
         return _baseline
