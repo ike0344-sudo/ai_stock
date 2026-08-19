@@ -1,6 +1,6 @@
 """전략 1번 — 세션에서 확정한 최종 진입/청산 규칙.
 
-진입: 거래대금 상위 35위 이내 AND 당일상승률[7%, 22%) AND 3분 거래대금≥40억
+진입: 거래대금 상위 35위 이내 AND 당일상승률[7%, 22%) AND 3분 거래대금 40억~240억
       AND 3분 수익률≥1.5% AND 당일 장중 신고가 AND 장중고점대비 -5% 하락 이력 없음
       AND 코스피지수 15분봉 60기간 이평선 위(그날 09시 기준)
 청산: 손절 -2.5%, +2.5/4/5.5/7%에서 25%씩 분할매도, 무장 후 진입가 이하로
@@ -37,6 +37,9 @@ from .universe import daily_top_n_from_local
 
 WINDOW_MINUTES = 3
 MIN_TRADE_VALUE = 4_000_000_000
+# 3분 거래대금 상한 240억 — 하한의 6배를 넘는 폭발적 스파이크 진입은 이미 고점 추격이라
+# 기대값이 낮다(2026-08-19 워크포워드 검증: 상한 없음 대비 OOS 손익비 1.69->1.93).
+MAX_TRADE_VALUE = 24_000_000_000
 MIN_RETURN_PCT = 0.015
 DAY_RETURN_FLOOR = 0.07
 DAY_RETURN_CEILING = 0.22
@@ -65,7 +68,7 @@ def describe_strategy_1() -> dict:
         "entry": [
             f"거래대금 상위 {TOP_N}위 이내",
             f"당일상승률 {DAY_RETURN_FLOOR:.0%} 이상 {DAY_RETURN_CEILING:.0%} 미만",
-            f"{WINDOW_MINUTES}분 거래대금 {MIN_TRADE_VALUE / 1e8:.0f}억원 이상",
+            f"{WINDOW_MINUTES}분 거래대금 {MIN_TRADE_VALUE / 1e8:.0f}억원 이상 {MAX_TRADE_VALUE / 1e8:.0f}억원 이하",
             f"{WINDOW_MINUTES}분 수익률 {MIN_RETURN_PCT:.1%} 이상",
             "당일 장중 신고가",
             f"장중고점 대비 -{DRAWDOWN_THRESHOLD:.1%} 하락 이력 없음",
@@ -105,7 +108,7 @@ def detect_final_entries(
     regime_ok = market_regime_filter(minute_df, regime_by_day)
     minute_dates = minute_df.index.normalize()
     top35_ok = pd.Series([code in daily_top35.get(d, set()) for d in minute_dates], index=minute_df.index)
-    base_entries = detect_entries(minute_df, WINDOW_MINUTES, MIN_TRADE_VALUE, MIN_RETURN_PCT)
+    base_entries = detect_entries(minute_df, WINDOW_MINUTES, MIN_TRADE_VALUE, MIN_RETURN_PCT, MAX_TRADE_VALUE)
     return combine_and(base_entries, day_floor_ok, day_ceiling_ok, new_high_ok, no_drawdown_ok, regime_ok, top35_ok)
 
 
@@ -212,6 +215,7 @@ generate_signals.name = "strategy_1"
 generate_signals.params = {
     "window_minutes": WINDOW_MINUTES,
     "min_trade_value": MIN_TRADE_VALUE,
+    "max_trade_value": MAX_TRADE_VALUE,
     "min_return_pct": MIN_RETURN_PCT,
     "day_return_floor": DAY_RETURN_FLOOR,
     "day_return_ceiling": DAY_RETURN_CEILING,

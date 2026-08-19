@@ -344,3 +344,17 @@ def test_simulate_all_tiered_exits_runs_one_per_entry():
     results = simulate_all_tiered_exits(candles, entries, tiers=(0.02, 0.03, 0.04, 0.05), stop_loss_pct=0.02)
 
     assert len(results) == entries.sum()
+
+
+def test_detect_entries_false_when_trade_value_above_ceiling():
+    # 거래대금 3구간 합 6e9 — 하한 4e9는 넘지만 상한 5e9를 초과하므로 제외.
+    closes = [100, 100, 101.6]
+    volumes = [20_000_000, 20_000_000, 20_000_000]
+    candles = _candles("2026-01-01", closes, volumes)
+
+    entries = detect_entries(
+        candles, window_minutes=3, min_trade_value=4_000_000_000, min_return_pct=0.015,
+        max_trade_value=5_000_000_000,
+    )
+
+    assert entries.iloc[2] == False  # noqa: E712

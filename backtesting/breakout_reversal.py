@@ -31,6 +31,7 @@ def detect_entries(
     window_minutes: int = 3,
     min_trade_value: float = 4_000_000_000,
     min_return_pct: float = 0.015,
+    max_trade_value: float | None = None,
 ) -> pd.Series:
     """day별로 나눠 롤링 거래대금·수익률 조건을 계산 (거래일 경계를 넘어 섞이지 않음).
 
@@ -38,13 +39,19 @@ def detect_entries(
     쓰고, 없으면 close*volume으로 근사한다 — REST/과거이력 분봉은 체결 단위 내역이 없어
     근사만 가능하지만, realtime_feed.CandleAggregator가 조립한 분봉은 틱마다 정확한
     체결대금을 누적해 "value" 컬럼으로 제공한다.
+
+    max_trade_value를 주면 거래대금 상한도 함께 건다 (None이면 상한 없음) — 하한과 같은
+    롤링 합계로 판정하므로 "value" 컬럼 유무에 따른 기준 불일치가 생기지 않는다.
     """
     parts = []
     for _, day_df in candles.groupby(candles.index.normalize()):
         per_minute_value = day_df["value"] if "value" in day_df.columns else day_df["close"] * day_df["volume"]
         trade_value = per_minute_value.rolling(window_minutes).sum()
         ret = day_df["close"].pct_change(window_minutes - 1)
-        parts.append((trade_value >= min_trade_value) & (ret >= min_return_pct))
+        ok = (trade_value >= min_trade_value) & (ret >= min_return_pct)
+        if max_trade_value is not None:
+            ok &= trade_value <= max_trade_value
+        parts.append(ok)
     if not parts:
         return pd.Series(dtype=bool)
     return pd.concat(parts).reindex(candles.index).fillna(False)
