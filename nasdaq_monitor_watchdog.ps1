@@ -18,7 +18,10 @@ $repoRoot = "C:\Users\ike03\Desktop\code\ai_stock"
 $targets = @(
     @{ Type = "Heartbeat"; Match = "monitor-nasdaq-drop"; Args = @("-m", "backtesting.cli", "monitor-nasdaq-drop"); LogName = "nasdaq_monitor"; HeartbeatPath = "state\nasdaq_drop_monitor\heartbeat.json" },
     @{ Type = "Heartbeat"; Match = "monitor-dashboard"; Args = @("-m", "backtesting.cli", "monitor-dashboard"); LogName = "dashboard_monitor"; HeartbeatPath = "state\dashboard_monitor\heartbeat.json" },
-    @{ Type = "Http"; Match = "cli dashboard(\s|$)"; Args = @("-m", "backtesting.cli", "dashboard", "--port", "8765"); LogName = "dashboard_server"; Url = "http://127.0.0.1:8765/" }
+    @{ Type = "Http"; Match = "cli dashboard(\s|$)"; Args = @("-m", "backtesting.cli", "dashboard", "--port", "8765"); LogName = "dashboard_server"; Url = "http://127.0.0.1:8765/" },
+    # 소피증권 모바일 화면(8770)을 외부에 여는 Cloudflare 터널. 무료 quick tunnel 은
+    # 띄울 때마다 주소가 바뀌므로, tunnel_job.py 가 바뀐 주소를 텔레그램으로 보낸다.
+    @{ Type = "Heartbeat"; Match = "tunnel_job"; Args = @("tunnel_job.py"); LogName = "tunnel"; HeartbeatPath = "state\tunnel\heartbeat.json" }
 )
 
 # 두 대상의 폴링 주기(15초/30초)보다 훨씬 여유있게, 그러나 이 watchdog 자신의 점검
@@ -190,8 +193,121 @@ function Invoke-BaselineVerifyOnce {
     $message | Out-File -FilePath $baselineVerifyMarker -Encoding utf8
 }
 
+# ---- 클린20 리포트 일일 갱신 (daily_report_job.py) ----
+# auto_develop과 같은 "주기적으로 딱 한 번" 성격이라 같은 패턴을 쓴다. 장 마감 후
+# 정정 시세까지 반영되도록 16시 이후에만 돌리고, 하루에 한 번만 돈다.
+$dailyReportHour = 16
+$dailyReportStuckThresholdSeconds = 3 * 3600
+
+function Test-DailyReportDue {
+    if ((Get-Date).Hour -lt $dailyReportHour) { return $false }
+    if ((Get-Date).DayOfWeek -in @("Saturday", "Sunday")) { return $false }
+
+    $startedPath = Join-Path $repoRoot "state\daily_report\last_run_started.json"
+    $finishedPath = Join-Path $repoRoot "state\daily_report\last_run_finished.json"
+
+    # 실행 중이면(시작 > 종료) stuck 임계값 전까지는 새로 안 띄운다 — 중복 실행 방지
+    if (Test-Path $startedPath) {
+        try {
+            $started = [double](Get-Content $startedPath -Raw | ConvertFrom-Json).started_at
+            $finishedAt = $null
+            if (Test-Path $finishedPath) {
+                $finishedAt = [double](Get-Content $finishedPath -Raw | ConvertFrom-Json).finished_at
+            }
+            if ($null -eq $finishedAt -or $finishedAt -lt $started) {
+                $sinceStarted = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $started
+                if ($sinceStarted -lt $dailyReportStuckThresholdSeconds) { return $false }
+            }
+        } catch {
+            return $false
+        }
+    }
+
+    if (-not (Test-Path $finishedPath)) { return $true }
+    try {
+        # 마지막 완료가 오늘이면 이미 돈 것 (실패였어도 같은 날 재시도는 안 한다 —
+        # API 한도/장애가 원인일 때 5분마다 재시도하면 상황을 더 나쁘게 만든다)
+        $finished = [double](Get-Content $finishedPath -Raw | ConvertFrom-Json).finished_at
+        $finishedLocal = [DateTimeOffset]::FromUnixTimeSeconds([long]$finished).ToLocalTime().Date
+        return $finishedLocal -lt (Get-Date).Date
+    } catch {
+        return $false
+    }
+}
+
+# ---- 통합 분봉 기준선 격주 갱신 (kospi-theme-engine/run_minute_refresh.ps1) ----
+# 소피증권의 유입속도·상대유입·점유율(배점 32점)은 과거 분봉으로 만든 기준선을
+# 분모로 쓴다. 그 창이 낡으면 분모가 실제보다 작아져 여러 테마가 상한에 붙고
+# 서로 구분이 안 된다. 창은 20거래일이라 격주면 절반이 갱신된다.
+#
+# 4~5시간짜리라 장이 없는 토요일에만 돌린다. daily_report 와 같은 표식 규약을 쓴다.
+# 경로를 문자열 하나로 적지 않고 Join-Path 를 두 번 겹친다. 예전에는 폴더와 파일을
+# 역슬래시로 이어 한 문자열에 적었는데, 그 역슬래시와 뒤따르는 r 이 어떤 도구를
+# 거치며 캐리지리턴으로 해석돼 문자열이 두 줄로 쪼개졌다. PowerShell 큰따옴표는
+# 여러 줄을 허용하므로 **문법 오류조차 안 나고** 존재하지 않는 경로가 된다.
+# 그러면 아래 Test-Path 가 조용히 false 를 내서 분봉 갱신이 영영 안 돈다
+# (2026-08-20 ~ 08-27 실제로 그랬다 — 5거래일치 분봉이 통째로 안 쌓였다).
+$minuteRefreshScript = Join-Path (Join-Path $repoRoot 'kospi-theme-engine') 'run_minute_refresh.ps1'
+$minuteRefreshHour = 9
+$minuteRefreshEveryDays = 13          # 격주. 토요일에만 도므로 13일이면 2주 뒤 토요일에 걸린다
+$minuteRefreshStuckThresholdSeconds = 6 * 3600
+
+function Test-MinuteRefreshDue {
+    if (-not (Test-Path $minuteRefreshScript)) {
+        # 조용히 넘어가면 "안 돌 때가 아니었다"와 "못 찾았다"를 구분할 수 없다.
+        New-Item -ItemType Directory -Force -Path (Join-Path $repoRoot "state\minute_refresh") | Out-Null
+        "스크립트를 못 찾음: $minuteRefreshScript" |
+            Out-File -FilePath (Join-Path $repoRoot "state\minute_refresh\missing.txt") -Encoding utf8
+        return $false
+    }
+    if ((Get-Date).DayOfWeek -ne "Saturday") { return $false }
+    if ((Get-Date).Hour -lt $minuteRefreshHour) { return $false }
+
+    $startedPath = Join-Path $repoRoot "state\minute_refresh\last_run_started.json"
+    $finishedPath = Join-Path $repoRoot "state\minute_refresh\last_run_finished.json"
+
+    # 실행 중이면(시작 > 종료) stuck 임계값 전까지 새로 안 띄운다 — 중복 실행 방지
+    if (Test-Path $startedPath) {
+        try {
+            $started = [double](Get-Content $startedPath -Raw | ConvertFrom-Json).started_at
+            $finishedAt = $null
+            if (Test-Path $finishedPath) {
+                $finishedAt = [double](Get-Content $finishedPath -Raw | ConvertFrom-Json).finished_at
+            }
+            if ($null -eq $finishedAt -or $finishedAt -lt $started) {
+                $sinceStarted = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $started
+                if ($sinceStarted -lt $minuteRefreshStuckThresholdSeconds) { return $false }
+            }
+        } catch {
+            return $false
+        }
+    }
+
+    if (-not (Test-Path $finishedPath)) { return $true }
+    try {
+        $finished = [double](Get-Content $finishedPath -Raw | ConvertFrom-Json).finished_at
+        $days = ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $finished) / 86400
+        return $days -ge $minuteRefreshEveryDays
+    } catch {
+        return $false
+    }
+}
+
 while ($true) {
     try {
+        if (Test-MinuteRefreshDue) {
+            Start-Process -FilePath "powershell.exe" `
+                -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $minuteRefreshScript, "-Now") `
+                -WorkingDirectory (Split-Path -Parent $minuteRefreshScript) -WindowStyle Hidden
+        }
+
+        if (Test-DailyReportDue) {
+            Start-Process -FilePath "python" -ArgumentList @("daily_report_job.py") `
+                -WorkingDirectory $repoRoot -WindowStyle Hidden `
+                -RedirectStandardOutput (Join-Path $repoRoot "daily_report.log") `
+                -RedirectStandardError (Join-Path $repoRoot "daily_report.err.log")
+        }
+
         if (-not (Test-Path $baselineVerifyMarker) -and (Get-Date) -ge $baselineVerifyDueAt) {
             Invoke-BaselineVerifyOnce
         }
