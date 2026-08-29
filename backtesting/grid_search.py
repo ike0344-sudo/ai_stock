@@ -2,6 +2,8 @@
 
 Design: docs/02-design/features/strategy-backtesting.design.md §4.1, §4.3
 """
+import concurrent.futures as cf
+import os
 from datetime import date
 from itertools import product
 
@@ -18,6 +20,74 @@ def _param_combinations(param_grid: dict) -> list[dict]:
     keys = list(param_grid.keys())
     values_product = product(*(param_grid[k] for k in keys))
     return [dict(zip(keys, values)) for values in values_product]
+
+
+def _jobs() -> int:
+    """쓸 프로세스 수. BACKTEST_JOBS 로 조절하고 기본은 코어 수.
+
+    1 로 두면 프로세스를 안 띄운다 — 결과가 병렬과 같은지 대조할 때 쓴다.
+    """
+    try:
+        n = int(os.environ.get("BACKTEST_JOBS", "0"))
+    except ValueError:
+        n = 0
+    return n if n > 0 else (os.cpu_count() or 4)
+
+
+_CANDLES: dict = {}        # 프로세스마다 종목별 캔들 캐시
+
+
+def _candles(stock_code, start, end, interval, data_dir):
+    """워커가 스스로 읽는다. DataFrame 을 태스크마다 피클하면 그게 더 비싸다.
+
+    본 프로세스가 이미 한 번 읽어 로컬 캐시를 채워 뒀으므로 여기서는 파일만 읽는다
+    (실측 0.00초). client=None 이라 API 폴백은 없다 — 그래서 병렬 경로는
+    use_local_data=True 일 때만 쓴다.
+    """
+    key = (stock_code, interval)
+    if key not in _CANDLES:
+        _CANDLES[key] = load_history(None, stock_code, start, end, interval=interval,
+                                     use_local_data=True, data_dir=data_dir)
+    return _CANDLES[key]
+
+
+def _combo_task(packed):
+    """워커용. 캔들을 직접 읽어 _one_combo 에 넘긴다."""
+    (params, strategy, stock_code, split_idx, start, end, interval, data_dir,
+     commission_rate, slippage_rate, initial_capital, tax_rate) = packed
+    c = _candles(stock_code, start, end, interval, data_dir)
+    return _one_combo((params, strategy, c.iloc[:split_idx], c.iloc[split_idx:], stock_code,
+                       commission_rate, slippage_rate, initial_capital, tax_rate))
+
+
+def _one_combo(packed):
+    """파라미터 조합 하나. 순차 경로와 **같은 코드**를 부르도록 여기 한 번만 적는다."""
+    (params, strategy, in_sample, out_of_sample, stock_code,
+     commission_rate, slippage_rate, initial_capital, tax_rate) = packed
+    try:
+        signals_is = strategy.evaluate(in_sample, params)
+        signals_oos = strategy.evaluate(out_of_sample, params)
+    except ValueError:
+        return None            # 잘못된 파라미터 조합 (예: short_window >= long_window)
+
+    trades_is = simulator.run(
+        in_sample, signals_is, commission_rate, slippage_rate, initial_capital, stock_code,
+        tax_rate=tax_rate,
+    )
+    trades_oos = simulator.run(
+        out_of_sample, signals_oos, commission_rate, slippage_rate, initial_capital, stock_code,
+        tax_rate=tax_rate,
+    )
+    return GridSearchResult(
+        stock_code=stock_code,
+        strategy_name=strategy.name,
+        params=params,
+        in_sample=metrics.compute(trades_is, in_sample, initial_capital),
+        out_of_sample=metrics.compute(trades_oos, out_of_sample, initial_capital),
+        trades=trades_is + trades_oos,
+        benchmark_is_return_pct=metrics.buy_and_hold_return_pct(in_sample),
+        benchmark_oos_return_pct=metrics.buy_and_hold_return_pct(out_of_sample),
+    )
 
 
 def run_rule_based(
@@ -43,7 +113,12 @@ def run_rule_based(
     종목/기간은 자동으로 API 폴백.
     """
     results: list[GridSearchResult] = []
+    combos = _param_combinations(param_grid)
+    jobs = _jobs()
 
+    # 종목별로 캔들을 먼저 읽는다. 로컬 캐시를 채우는 일이기도 해서, 뒤이어 워커가
+    # 파일만 읽으면 된다. API 폴백이 필요한 종목도 여기서 해결된다.
+    loaded = []
     for stock_code in stock_codes:
         try:
             candles = load_history(
@@ -54,41 +129,37 @@ def run_rule_based(
             continue
         if candles.empty:
             continue
-
         split_idx = int(len(candles) * in_sample_ratio)
-        in_sample = candles.iloc[:split_idx]
-        out_of_sample = candles.iloc[split_idx:]
-        if in_sample.empty or out_of_sample.empty:
+        if split_idx <= 0 or split_idx >= len(candles):
             continue
+        loaded.append((stock_code, candles, split_idx))
 
-        for params in _param_combinations(param_grid):
-            try:
-                signals_is = strategy.evaluate(in_sample, params)
-                signals_oos = strategy.evaluate(out_of_sample, params)
-            except ValueError:
-                continue  # 잘못된 파라미터 조합 (예: short_window >= long_window)
+    tasks = len(loaded) * len(combos)
+    bars = sum(len(c) for _, c, _ in loaded) / max(len(loaded), 1)
+    # 조합당 비용 ≈ 봉수 × 65µs (2026-08-29 실측: 403봉 26ms). Windows 는 프로세스를
+    # 띄우는 데만 워커당 2초쯤 든다(pandas 재임포트) — 작은 격자에서는 병렬이 **더
+    # 느리다**(실측 1.7초 -> 10.8초). 그래서 순차 예상이 충분히 클 때만 나눈다.
+    est_sec = tasks * bars * 65e-6
+    parallel = jobs > 1 and use_local_data and est_sec > 15
 
-            trades_is = simulator.run(
-                in_sample, signals_is, commission_rate, slippage_rate, initial_capital, stock_code,
-                tax_rate=tax_rate,
-            )
-            trades_oos = simulator.run(
-                out_of_sample, signals_oos, commission_rate, slippage_rate, initial_capital, stock_code,
-                tax_rate=tax_rate,
-            )
+    if parallel:
+        packed = [(p, strategy, code, idx, start, end, interval, data_dir,
+                   commission_rate, slippage_rate, initial_capital, tax_rate)
+                  for code, _, idx in loaded for p in combos]
+        with cf.ProcessPoolExecutor(max_workers=min(jobs, len(packed))) as ex:
+            for r in ex.map(_combo_task, packed,
+                            chunksize=max(1, len(packed) // (jobs * 4) or 1)):
+                if r is not None:
+                    results.append(r)
+        return results
 
-            results.append(
-                GridSearchResult(
-                    stock_code=stock_code,
-                    strategy_name=strategy.name,
-                    params=params,
-                    in_sample=metrics.compute(trades_is, in_sample, initial_capital),
-                    out_of_sample=metrics.compute(trades_oos, out_of_sample, initial_capital),
-                    trades=trades_is + trades_oos,
-                    benchmark_is_return_pct=metrics.buy_and_hold_return_pct(in_sample),
-                    benchmark_oos_return_pct=metrics.buy_and_hold_return_pct(out_of_sample),
-                )
-            )
+    for stock_code, candles, split_idx in loaded:
+        in_sample, out_of_sample = candles.iloc[:split_idx], candles.iloc[split_idx:]
+        for params in combos:
+            r = _one_combo((params, strategy, in_sample, out_of_sample, stock_code,
+                            commission_rate, slippage_rate, initial_capital, tax_rate))
+            if r is not None:
+                results.append(r)
 
     return results
 
