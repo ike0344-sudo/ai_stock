@@ -146,9 +146,13 @@ def run_rule_based(
         packed = [(p, strategy, code, idx, start, end, interval, data_dir,
                    commission_rate, slippage_rate, initial_capital, tax_rate)
                   for code, _, idx in loaded for p in combos]
+        # 태스크는 종목별로 뭉쳐 있다. 잘게 쪼개면 워커마다 여러 종목을 건드려
+        # **로드를 반복한다** — 5분봉은 1분봉을 재표본화하느라 종목당 0.51초다
+        # (일봉은 0.00초라 티가 안 났다). 한 종목의 조합을 네 덩이로만 나눠,
+        # 워커가 한두 종목에만 머물게 한다.
+        chunk = max(1, len(combos) // 4)
         with cf.ProcessPoolExecutor(max_workers=min(jobs, len(packed))) as ex:
-            for r in ex.map(_combo_task, packed,
-                            chunksize=max(1, len(packed) // (jobs * 4) or 1)):
+            for r in ex.map(_combo_task, packed, chunksize=chunk):
                 if r is not None:
                     results.append(r)
         return results
