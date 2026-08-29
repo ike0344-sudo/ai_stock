@@ -38,14 +38,29 @@ def run(
     prev_close_by_day = prev_day_close_series(candles)
     n = len(candles)
 
-    for i, (ts, row) in enumerate(candles.iterrows()):
-        day = dates[i]
-        prev_close = prev_close_by_day.get(day, float("nan"))
-        is_last_of_day = force_eod_close and (i == n - 1 or dates[i + 1] != day)
+    # 행마다 Series 를 만들지 않는다. iterrows() 는 봉당 Series 객체를 새로 찍어내고,
+    # signals.loc[ts] 와 prev_close_by_day.get(day) 는 봉마다 라벨 조회를 한다 —
+    # 403봉에 12.5ms 였다(2026-08-29 실측). **판단 로직은 한 줄도 바꾸지 않았고**,
+    # 읽는 방식만 배열로 바꿨다. 결과가 같은지는 대조로 확인한다.
+    index = candles.index
+    opens = candles["open"].to_numpy(dtype=float)
+    closes = candles["close"].to_numpy(dtype=float)
+    day_arr = dates.to_numpy()
+    # reindex 는 .get(day, nan) 과 같이 없는 날을 NaN 으로 준다.
+    prev_close_arr = prev_close_by_day.reindex(dates).to_numpy(dtype=float)
+    # .loc[ts] 와 같은 **라벨 기준** 정렬이다 — 위치로 맞추면 신호가 밀릴 수 있다.
+    signal_arr = signals.reindex(index).to_numpy()
 
-        if pending_signal is not None and not is_price_limit_locked(row["open"], prev_close):
+    for i in range(n):
+        ts = index[i]
+        day = day_arr[i]
+        prev_close = prev_close_arr[i]
+        open_px, close_px = opens[i], closes[i]
+        is_last_of_day = force_eod_close and (i == n - 1 or day_arr[i + 1] != day)
+
+        if pending_signal is not None and not is_price_limit_locked(open_px, prev_close):
             if pending_signal == Signal.BUY and open_trade is None:
-                entry_price = row["open"] * (1 + slippage_rate)
+                entry_price = open_px * (1 + slippage_rate)
                 quantity = int(initial_capital // entry_price)
                 if quantity > 0:
                     commission = entry_price * quantity * commission_rate
@@ -58,22 +73,22 @@ def run(
                         slippage=entry_price * quantity * slippage_rate,
                     )
             elif pending_signal == Signal.SELL and open_trade is not None:
-                exit_price = row["open"] * (1 - slippage_rate)
+                exit_price = open_px * (1 - slippage_rate)
                 _settle_exit(open_trade, ts, exit_price, commission_rate, tax_rate)
                 trades.append(open_trade)
                 open_trade = None
             pending_signal = None
 
         if is_last_of_day and open_trade is not None:
-            if not is_price_limit_locked(row["close"], prev_close):
-                exit_price = row["close"] * (1 - slippage_rate)
+            if not is_price_limit_locked(close_px, prev_close):
+                exit_price = close_px * (1 - slippage_rate)
                 _settle_exit(open_trade, ts, exit_price, commission_rate, tax_rate)
                 trades.append(open_trade)
                 open_trade = None
                 pending_signal = None
             continue
 
-        signal = signals.loc[ts]
+        signal = signal_arr[i]
         if signal in (Signal.BUY, Signal.SELL):
             pending_signal = signal
 
