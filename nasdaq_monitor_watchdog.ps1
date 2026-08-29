@@ -21,7 +21,14 @@ $targets = @(
     @{ Type = "Http"; Match = "cli dashboard(\s|$)"; Args = @("-m", "backtesting.cli", "dashboard", "--port", "8765"); LogName = "dashboard_server"; Url = "http://127.0.0.1:8765/" },
     # 소피증권 모바일 화면(8770)을 외부에 여는 Cloudflare 터널. 무료 quick tunnel 은
     # 띄울 때마다 주소가 바뀌므로, tunnel_job.py 가 바뀐 주소를 텔레그램으로 보낸다.
-    @{ Type = "Heartbeat"; Match = "tunnel_job"; Args = @("tunnel_job.py"); LogName = "tunnel"; HeartbeatPath = "state\tunnel\heartbeat.json" }
+    @{ Type = "Heartbeat"; Match = "tunnel_job"; Args = @("tunnel_job.py"); LogName = "tunnel"; HeartbeatPath = "state\tunnel\heartbeat.json" },
+    # 텔레그램으로 소피증권에 물어보는 봇. **조회 전용**이라 계좌에 닿는 경로가 없다
+    # (주문은 telegram_order_bot.py 몫이고, 조회하려다 손이 미끄러질 자리를 만들지
+    # 않으려고 한 봇에 넣지 않는다). 8770 을 읽으므로 소피증권이 꺼져 있으면
+    # "앱이 꺼져 있나요?"라고 답할 뿐 봇 자체는 계속 돈다.
+    # 롱폴링 한 바퀴가 최대 50초라 하트비트를 폴링 **앞에서** 찍는다 — 뒤에 두면
+    # 기동 직후 이 워치독이 표식을 못 보고 죽은 것으로 판단해 다시 띄운다.
+    @{ Type = "Heartbeat"; Match = "sophie_bot"; Args = @("kospi-theme-engine\sophie_bot.py"); LogName = "sophie_bot"; HeartbeatPath = "state\sophie_bot\heartbeat.json" }
 )
 
 # 두 대상의 폴링 주기(15초/30초)보다 훨씬 여유있게, 그러나 이 watchdog 자신의 점검
