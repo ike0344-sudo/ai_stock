@@ -1,0 +1,580 @@
+<title>장 시작 60분 순위 기록</title>
+<style>
+:root{
+  color-scheme: light;
+  --ground:#F3F5F4; --panel:#FFFFFF; --sunk:#EAEDEC;
+  --ink:#0E1416; --ink-2:#4A5558; --ink-3:#7E8A8D;
+  --line:#DDE2E1; --line-2:#C4CBCA;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4; --s6:#008300;
+  --mute:#98A3A5; --grid:#E6EAE9;
+  --up:#B3382C; --shadow:0 1px 2px rgba(14,20,22,.05),0 12px 28px -20px rgba(14,20,22,.45);
+  --t-ath:#6C3FB5; --t-4y:#8A6200; --t-120:#B3382C;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --ground:#101315; --panel:#171B1E; --sunk:#14181A;
+    --ink:#E9EEEF; --ink-2:#A2AFB2; --ink-3:#707D80;
+    --line:#252B2E; --line-2:#353D41;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300;
+    --mute:#5B686B; --grid:#20262A;
+    --up:#E07A68; --shadow:0 1px 2px rgba(0,0,0,.5),0 12px 28px -20px rgba(0,0,0,.9);
+  --t-ath:#B98BFF; --t-4y:#F5A623; --t-120:#FF4C3B;
+    --t-ath:#B98BFF; --t-4y:#F5A623; --t-120:#FF4C3B;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ground:#101315; --panel:#171B1E; --sunk:#14181A;
+  --ink:#E9EEEF; --ink-2:#A2AFB2; --ink-3:#707D80;
+  --line:#252B2E; --line-2:#353D41;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300;
+  --mute:#5B686B; --grid:#20262A;
+  --up:#E07A68; --shadow:0 1px 2px rgba(0,0,0,.5),0 12px 28px -20px rgba(0,0,0,.9);
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI","Malgun Gothic","Apple SD Gothic Neo",sans-serif;
+  font-size:15px; line-height:1.6; -webkit-font-smoothing:antialiased;
+}
+.mono{font-family:ui-monospace,"Cascadia Code",Consolas,"D2Coding",monospace;font-variant-numeric:tabular-nums}
+.mute{color:var(--mute);font-size:.86em}
+.wrap{max-width:1180px;margin:0 auto;padding:44px 22px 72px;display:flex;flex-direction:column;gap:30px}
+
+.eyebrow{font-family:ui-monospace,Consolas,monospace;font-size:11px;letter-spacing:.2em;
+  text-transform:uppercase;color:var(--ink-3);margin:0 0 10px}
+h1{font-size:clamp(25px,3.4vw,36px);line-height:1.15;margin:0;font-weight:660;letter-spacing:-.02em;text-wrap:balance}
+.lede{margin:14px 0 0;color:var(--ink-2);max-width:62ch}
+
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1px;
+  background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden;box-shadow:var(--shadow)}
+.tile{background:var(--panel);padding:15px 17px;display:flex;flex-direction:column;gap:3px}
+.tile span{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;letter-spacing:.11em;
+  text-transform:uppercase;color:var(--ink-3)}
+.tile b{font-family:ui-monospace,Consolas,monospace;font-size:27px;font-weight:600;line-height:1.1;
+  font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.tile b small{font-size:14px;color:var(--ink-2);font-weight:500;margin-left:2px}
+.tile em{font-style:normal;font-size:12px;color:var(--ink-2)}
+
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);
+  padding:20px 22px;display:flex;flex-direction:column;gap:14px}
+.card h2{margin:0;font-size:15px;font-weight:660;letter-spacing:-.01em}
+.card h2 em{font-style:normal;font-weight:400;color:var(--ink-3);font-size:12.5px;margin-left:9px}
+.chartbox{position:relative;overflow-x:auto}
+svg{display:block;width:100%;min-width:640px}
+.legend{display:flex;flex-wrap:wrap;gap:7px 15px;align-items:center;font-size:12.5px;color:var(--ink-2)}
+.legend b{display:flex;align-items:center;gap:6px;font-weight:500;color:var(--ink)}
+.sw{width:16px;height:3px;border-radius:2px;flex:none}
+.legend .dim{color:var(--ink-3)}
+
+.tip{position:absolute;pointer-events:none;opacity:0;transform:translate(-50%,-100%);
+  background:var(--panel);border:1px solid var(--line-2);border-radius:8px;padding:9px 11px;
+  box-shadow:var(--shadow);font-size:12.5px;white-space:nowrap;z-index:4;min-width:150px}
+.tip.on{opacity:1}
+.tip h4{margin:0 0 6px;font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--ink-3);
+  letter-spacing:.08em}
+.tip .r{display:flex;align-items:center;gap:7px;justify-content:space-between;line-height:1.7}
+.tip .r i{width:9px;height:9px;border-radius:50%;flex:none;display:inline-block}
+.tip .r u{text-decoration:none;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.tip .r.sub{margin-top:-4px;line-height:1.4;font-size:11.5px;color:var(--ink-3)}
+
+.tablewrap{overflow:auto;max-height:620px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+table{border-collapse:collapse;width:100%;font-size:13px;font-variant-numeric:tabular-nums}
+th,td{padding:8px 11px;text-align:right;white-space:nowrap}
+thead th{background:var(--sunk);font-family:ui-monospace,Consolas,monospace;font-size:10.5px;
+  letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);font-weight:600;
+  border-bottom:1px solid var(--line-2);position:sticky;top:0}
+th.l,td.l{text-align:left}
+tbody td{border-bottom:1px solid var(--line)}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover td{background:var(--sunk)}
+td.rk{font-family:ui-monospace,Consolas,monospace;font-weight:600}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:-1px}
+tbody tr.flip td{border-top:1px solid var(--line-2)}
+tbody tr.flip td:first-child{font-weight:700;color:var(--ink)}
+td .up{color:var(--up);font-weight:600;font-variant-numeric:tabular-nums}
+/* 신고가 단계 — 소피증권 화면과 같은 색이다. */
+.t-ath{color:var(--t-ath);font-weight:700}
+.t-4y{color:var(--t-4y);font-weight:700}
+.t-120{color:var(--t-120);font-weight:700}
+.hs{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12.5px;margin:2px 0 0}
+.hs b{font-weight:700}.hs s{text-decoration:none;color:var(--ink-3);font-size:11px}
+.hnone{color:var(--ink-3);font-size:12.5px}
+
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:22px;
+  border-top:1px solid var(--line);padding-top:22px}
+.notes h3{margin:0 0 6px;font-family:ui-monospace,Consolas,monospace;font-size:10.5px;
+  letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
+.notes p{margin:0;font-size:13px;color:var(--ink-2);line-height:1.65}
+code{font-family:ui-monospace,Consolas,monospace;font-size:12px;background:var(--sunk);
+  padding:1px 5px;border-radius:4px;color:var(--ink)}
+@media (max-width:640px){.wrap{padding:26px 13px 48px;gap:22px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+.picker{display:flex;flex-wrap:wrap;gap:18px;align-items:flex-start;background:var(--panel);
+  border:1px solid var(--line);border-radius:10px;padding:14px 16px;box-shadow:var(--shadow)}
+.mon{display:flex;flex-direction:column;gap:6px}
+.mon h4{margin:0;font-family:ui-monospace,Consolas,monospace;font-size:10.5px;letter-spacing:.11em;
+  text-transform:uppercase;color:var(--ink-3);font-weight:600;text-align:center}
+.grid{display:grid;grid-template-columns:repeat(7,minmax(30px,1fr));gap:3px}
+.dow{font-family:ui-monospace,Consolas,monospace;font-size:9.5px;color:var(--ink-3);
+  text-align:center;padding-bottom:2px}
+.dow.sun{color:var(--up)}
+.cell{aspect-ratio:1;display:flex;align-items:center;justify-content:center;border-radius:6px;
+  font-family:ui-monospace,Consolas,monospace;font-size:12px;font-variant-numeric:tabular-nums;
+  border:1px solid transparent;color:var(--ink-3)}
+button.cell{background:var(--sunk);border-color:var(--line-2);color:var(--ink-2);cursor:pointer;
+  transition:background .12s,color .12s,border-color .12s}
+button.cell:hover{border-color:var(--ink-3);color:var(--ink)}
+button.cell[aria-pressed="true"]{background:var(--ink);color:var(--ground);border-color:var(--ink);font-weight:700}
+button.cell:focus-visible{outline:2px solid var(--s1);outline-offset:2px}
+.legend-note{display:flex;flex-direction:column;gap:6px;font-size:12.5px;color:var(--ink-2);
+  padding-left:4px;min-width:160px}
+.legend-note b{color:var(--ink);font-weight:600}
+#picked{display:flex;flex-direction:column;gap:2px;font-size:13px}
+#picked span{color:var(--ink-2);font-size:12px}
+.nav{display:flex;gap:6px;margin-top:4px}
+.nav button{font-family:ui-monospace,Consolas,monospace;font-size:12px;border:1px solid var(--line-2);
+  background:var(--sunk);color:var(--ink-2);border-radius:7px;padding:4px 10px;cursor:pointer}
+.nav button:hover{border-color:var(--ink-3);color:var(--ink)}
+</style>
+
+<div class="wrap">
+  <div style="display:flex;align-items:center;gap:12px">
+    <img src="data:image/png;base64,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" alt="" width="40" height="40" style="border-radius:9px">
+    <div>
+      <div style="font-size:17px;font-weight:660;letter-spacing:-.01em">소피 증권</div>
+      <div style="font-size:12px;color:var(--ink-3)">장 시작 60분 순위 기록</div>
+    </div>
+  </div>
+  <div class="picker" id="picker"></div>
+  <header id="head"></header>
+  <div class="tiles" id="tiles"></div>
+
+  <section class="card">
+    <h2>기록된 날 <em>1위 점유가 길수록 하루가 한 테마로 굳은 날이다</em></h2>
+    <div class="tablewrap" style="max-height:none"><table id="days"></table></div>
+  </section>
+
+  <section class="card">
+    <h2>순위 이동 <em>위가 1위 · 색이 붙은 셋은 상위 3위에 가장 오래 머문 테마</em></h2>
+    <div class="chartbox">
+      <svg id="bump" viewBox="0 0 1120 430" role="img" aria-label="09시부터 10시까지 테마 순위 변화"></svg>
+      <div class="tip" id="tip"></div>
+    </div>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <section class="card">
+    <h2>점수 <em>순위를 만든 값 · 100점 만점</em></h2>
+    <div class="chartbox">
+      <svg id="score" viewBox="0 0 1120 300" role="img" aria-label="테마별 점수 변화"></svg>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>1분 단위 기록 <em>60개 시점 · 상위 5개 테마와 1위 테마의 대금 20위 종목 중 최고 상승</em></h2>
+    <div class="tablewrap"><table id="tbl"></table></div>
+  </section>
+
+  <div class="notes">
+    <div>
+      <h3>어떻게 만들었나</h3>
+      <p>그날 1분봉을 장중과 <b>같은 채점 코드</b>에 흘려 넣어 매분 순위를 다시 계산했다. 라이브에서는 09:01의 표를 다시 볼 수 없어서, 지나간 장을 되돌리려면 재생하는 수밖에 없다. <code>python rank_archive.py</code></p>
+    </div>
+    <div>
+      <h3>구독 200종목</h3>
+      <p>실제 화면과 같은 슬롯 배분을 썼다. 전일 종가와 20일 신고가는 <b>그날 기준</b>으로 다시 잡는다 — 오늘 기준 파일을 그대로 쓰면 과거 등락률이 통째로 틀린다.</p>
+    </div>
+    <div>
+      <h3>1위 테마 안 최고 상승 (대금 20위 한정)</h3>
+      <p id="gapnote">그 시각 <b>1위 테마의 구성종목 중 거래대금 상위 20에 든 종목</b>만 놓고 고른 등락률 1위다. 20위 밖 소형주가 +30%로 찍혀 테마를 대표하는 일을 막는다 — 대금 20위에 한 종목도 없으면 빈칸이다. 화면의 대장주는 <b>돈이 가장 몰린 종목</b>이라 서로 다를 수 있다.</p>
+    </div>
+    <div>
+      <h3>한계</h3>
+      <p>분봉이라 1분에 값 하나다. 실제 체결처럼 촘촘하지 않아 <b>유입속도(최근 1분 기준)는 그날 실시간 값과 다를 수 있다</b>. 순위와 추세를 보는 용도다.</p>
+    </div>
+  </div>
+</div>
+
+<script id="payload" type="application/json">__DATA__</script>
+<script>
+const ARCHIVE = JSON.parse(document.getElementById("payload").textContent);
+
+/* ---------- 신고가 ---------- */
+// 단계는 소피증권 화면과 같다. 색도 같은 값을 쓴다 — 두 화면이 다른 색을 쓰면
+// 같은 사건을 다른 것으로 읽게 된다.
+const tierCls = t => t === "역사적" ? "t-ath" : (t === "4년" ? "t-4y" : "t-120");
+function highLine(hs){
+  if (!hs.length) return `<p class="hnone">이날 120일 신고가를 낸 종목은 없었다.</p>`;
+  const n = { "역사적": 0, "4년": 0, "120일": 0 };
+  hs.forEach(h => n[h[1]]++);
+  const sum = ["역사적", "4년", "120일"].filter(k => n[k])
+    .map(k => `<span class="${tierCls(k)}">${k} ${n[k]}</span>`).join(" · ");
+  // 대금 순위가 앞선 것부터 12개까지. 다 실으면 헤더가 표만큼 길어진다.
+  const list = hs.slice(0, 12).map(h =>
+    `<span><b class="${tierCls(h[1])}">${h[0]}</b>` +
+    (h[2] ? ` <s>대금 ${h[2]}위</s>` : "") + `</span>`).join("");
+  return `<p class="lede" style="margin-top:14px">그날 신고가 <b>${hs.length}종목</b> — ${sum}</p>`
+       + `<div class="hs">${list}${hs.length > 12 ? `<span class="hnone">외 ${hs.length - 12}종목</span>` : ""}</div>`;
+}
+
+
+function render(DATA) {
+const CS = ["--s1","--s2","--s3"];   // all-pairs 통과 슬롯은 셋뿐이다
+const PICK = (() => {                               // 상위3 체류 시간 상위 3개
+  const c = {};
+  (window.__D || DATA).top5.forEach(row => row.slice(0, 3).forEach(r => { c[r[0]] = (c[r[0]] || 0) + 1; }));
+  return Object.entries(c).sort((a, b) => b[1] - a[1]).slice(0, 3).map(x => x[0]);
+})();
+const color = t => {
+  const i = PICK.indexOf(t);
+  return i >= 0 ? `var(${CS[i]})` : "var(--mute)";
+};
+DATA.featured = PICK;
+const featured = new Set(PICK);
+
+/* ---------- 헤더·타일: 값은 전부 데이터에서 계산한다 ---------- */
+(function () {
+  const first = i => DATA.top5[i] && DATA.top5[i][0] ? DATA.top5[i][0][0] : null;
+  const dwell = {};                                   // 1위 점유 분수
+  const top3 = {};                                    // 상위 3위 체류 분수
+  DATA.times.forEach((_, i) => {
+    const t = first(i);
+    if (t) dwell[t] = (dwell[t] || 0) + 1;
+    (DATA.top5[i] || []).slice(0, 3).forEach(r => { top3[r[0]] = (top3[r[0]] || 0) + 1; });
+  });
+  const champ = Object.entries(dwell).sort((a, b) => b[1] - a[1])[0] || ["–", 0];
+  // 처음 1위에 오른 시각. 마지막 탈환 시점을 쓰면 중간에 잠깐 뺏긴 날이
+  // "09:55에 1위를 잡았다"로 뒤집힌다 — 실제로는 09:01부터 거의 내내 1위였다.
+  const firstAt = DATA.times[DATA.times.findIndex((_, i) => first(i) === champ[0])] || DATA.times[0];
+  const flips = DATA.times.filter((_, i) => i && first(i) && first(i) !== first(i - 1)).length;
+  const swings = DATA.themes.map(t => {
+    const rs = DATA.rank[t].filter(r => r != null);
+    return rs.length ? { t, lo: Math.min(...rs), hi: Math.max(...rs), d: Math.max(...rs) - Math.min(...rs) } : null;
+  }).filter(Boolean).sort((a, b) => b.d - a.d)[0];
+  const sc = DATA.score[champ[0]] || [];
+  let best = { v: -1, t: "" };
+  sc.forEach((v, i) => { if (v != null && v > best.v) best = { v, t: DATA.times[i] }; });
+
+  const d = DATA.day, ymd = `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6)}`;
+  const t3 = Object.entries(top3).sort((a, b) => b[1] - a[1]).slice(0, 3)
+    .map(([k, v]) => `${k} ${v}`).join(" · ");
+  document.getElementById("head").innerHTML =
+    `<p class="eyebrow">${ymd} · ${DATA.times[0]} – ${DATA.times.at(-1)} · 1분 간격 ${DATA.times.length}개 시점</p>
+     <h1>${champ[0]}이 ${firstAt}에 1위에 올라 ${DATA.times.length}분 중 ${champ[1]}분을 지켰다</h1>
+     <p class="lede">장 시작 ${DATA.times.length}분 동안 테마 순위가 어떻게 움직였는지 1분 단위로 재생했다.
+      1위가 바뀐 건 ${flips}번, 상위 3위를 거쳐 간 테마는 ${Object.keys(top3).length}개다.
+      순위표에는 그 시각 1위 테마 안에서 가장 많이 오른 종목을 함께 실었다.</p>
+     ${highLine(DATA.highs || [])}`;
+
+  // 대장주와 최고 상승이 갈린 실제 사례를 그날 데이터에서 집어 온다.
+  // 차이가 가장 큰 시점을 고른다. 첫 시점을 그냥 쓰면 09:01처럼 +0.00%인 자리가
+  // 잡혀 "대장주와 최고 상승은 다르다"를 보여주지 못한다.
+  const gap = DATA.times.map((t, i) => {
+    const r = DATA.top5[i] && DATA.top5[i][0];
+    return r && r[2] && r[4] && r[2] !== r[4] && r[5] > 0
+      ? { t, theme: r[0], lead: r[2], top: r[4], pct: r[5], diff: r[5] - r[3] } : null;
+  }).filter(Boolean).sort((a, b) => b.diff - a.diff)[0];
+  const note = document.getElementById("gapnote");
+  if (note) {
+    // += 로 붙이면 날짜를 바꿀 때마다 문장이 쌓인다. 원문을 보관해두고 매번 덮어쓴다.
+    note.dataset.base = note.dataset.base || note.innerHTML;
+    note.innerHTML = note.dataset.base + (gap
+      ? ` — ${gap.t} ${gap.theme}은 대장주가 ${gap.lead}, 최고 상승은 ${gap.top} ${gap.pct >= 0 ? "+" : ""}${gap.pct.toFixed(2)}%였다.`
+      : "");
+  }
+
+  document.getElementById("tiles").innerHTML = `
+    <div class="tile"><span>1위 점유</span><b>${champ[1]}<small>/${DATA.times.length}분</small></b>
+      <em>${champ[0]} · ${firstAt} 첫 1위</em></div>
+    <div class="tile"><span>1위 교체</span><b>${flips}<small>회</small></b><em>상위 3 진입 ${t3}</em></div>
+    <div class="tile"><span>최대 순위 이동</span><b>${swings.d}<small>계단</small></b>
+      <em>${swings.t} ${swings.lo}위 → ${swings.hi}위</em></div>
+    <div class="tile"><span>${champ[0]} 점수</span><b>${best.v.toFixed(1)}</b>
+      <em>${best.t} 최고 · ${DATA.times[0]}에는 ${sc[0] != null ? sc[0].toFixed(1) : "–"}</em></div>`;
+})();
+const T = DATA.times, N = T.length, NT = DATA.themes.length;
+
+/* ---------- 순위 차트 (bump) ---------- */
+(function () {
+  const svg = document.getElementById("bump");
+  const W = 1120, H = 430, L = 44, R = 132, TOP = 18, B = 30;
+  const x = i => L + (W - L - R) * (i / (N - 1));
+  const y = r => TOP + (H - TOP - B) * ((r - 1) / (NT - 1));
+  let s = "";
+
+  for (let r = 1; r <= NT; r++) {
+    s += `<line x1="${L}" y1="${y(r)}" x2="${W - R}" y2="${y(r)}" stroke="var(--grid)" stroke-width="1"/>`;
+    s += `<text x="${L - 10}" y="${y(r) + 4}" fill="var(--ink-3)" font-size="11" text-anchor="end"
+            font-family="ui-monospace,Consolas,monospace">${r}</text>`;
+  }
+  T.forEach((t, i) => {
+    if (!t.endsWith("0") && !t.endsWith("5")) return;
+    if (i % 5) return;
+    s += `<line x1="${x(i)}" y1="${TOP}" x2="${x(i)}" y2="${H - B}" stroke="var(--grid)" stroke-width="1"/>`;
+    s += `<text x="${x(i)}" y="${H - B + 17}" fill="var(--ink-3)" font-size="11" text-anchor="middle"
+            font-family="ui-monospace,Consolas,monospace">${t}</text>`;
+  });
+
+  const order = [...DATA.themes].sort((a, b) => featured.has(a) - featured.has(b));
+  for (const th of order) {
+    const rk = DATA.rank[th];
+    const on = featured.has(th);
+    let d = "", open = false;
+    rk.forEach((r, i) => {
+      if (r == null) { open = false; return; }
+      d += (open ? "L" : "M") + x(i).toFixed(1) + " " + y(r).toFixed(1) + " ";
+      open = true;
+    });
+    s += `<path d="${d}" fill="none" stroke="${color(th)}" stroke-width="${on ? 2.4 : 1.2}"
+            stroke-opacity="${on ? 1 : .5}" stroke-linejoin="round" stroke-linecap="round"/>`;
+    const last = rk.reduce((acc, r, i) => (r != null ? i : acc), -1);
+    if (last >= 0) {
+      s += `<circle cx="${x(last)}" cy="${y(rk[last])}" r="${on ? 4 : 2.6}" fill="${color(th)}"
+              stroke="var(--panel)" stroke-width="2"/>`;
+      s += `<text x="${x(last) + 10}" y="${y(rk[last]) + 4}" font-size="${on ? 12.5 : 11.5}"
+              fill="${on ? "var(--ink)" : "var(--ink-3)"}" font-weight="${on ? 600 : 400}">${th}</text>`;
+    }
+  }
+  s += `<line id="cross" x1="0" y1="${TOP}" x2="0" y2="${H - B}" stroke="var(--line-2)"
+          stroke-width="1" stroke-dasharray="3 3" opacity="0"/>`;
+  svg.innerHTML = s;
+
+  const tip = document.getElementById("tip"), cross = svg.querySelector("#cross");
+  // 리스너가 날짜마다 겹쳐 붙으면 옛 프레임의 툴팁이 같이 뜬다. 노드를 통째로 교체해
+  // 이전 리스너를 떼어낸 뒤 새로 단다.
+  const old = svg.parentElement;
+  const box = old.cloneNode(false);
+  while (old.firstChild) box.appendChild(old.firstChild);
+  old.replaceWith(box);
+  const move = ev => {
+    const rect = svg.getBoundingClientRect();
+    const px = (ev.clientX - rect.left) / rect.width * W;
+    let i = Math.round((px - L) / (W - L - R) * (N - 1));
+    i = Math.max(0, Math.min(N - 1, i));
+    cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("opacity", "1");
+    const rows = DATA.themes
+      .filter(t => DATA.rank[t][i] != null)
+      .sort((a, b) => DATA.rank[a][i] - DATA.rank[b][i]).slice(0, 5);
+    const tops = Object.fromEntries((DATA.top5[i] || []).map(r => [r[0], r]));
+    tip.innerHTML = `<h4>${T[i]}</h4>` + rows.map(t => {
+      const g = tops[t];
+      const extra = g ? ` <u>${g[4]} ${g[5] >= 0 ? "+" : ""}${g[5].toFixed(1)}%</u>` : "";
+      return `<div class="r"><span><i style="background:${color(t)}"></i>${DATA.rank[t][i]}. ${t}</span>
+       <u>${DATA.score[t][i].toFixed(1)}</u></div>` + (g ? `<div class="r sub"><span></span>${extra}</div>` : "");
+    }).join("");
+    tip.classList.add("on");
+    tip.style.left = (x(i) / W * rect.width) + "px";
+    tip.style.top = (ev.clientY - rect.top - 14) + "px";
+  };
+  box.addEventListener("pointermove", move);
+  box.addEventListener("pointerleave", () => { tip.classList.remove("on"); cross.setAttribute("opacity", "0"); });
+
+  document.getElementById("legend").innerHTML =
+    DATA.featured.map(t => `<b><i class="sw" style="background:${color(t)}"></i>${t}</b>`).join("") +
+    `<span class="dim">나머지 9개는 회색 — 이름이 선 끝에 붙어 있다</span>`;
+})();
+
+/* ---------- 점수 차트 ---------- */
+(function () {
+  const svg = document.getElementById("score");
+  const W = 1120, H = 300, L = 44, R = 132, TOP = 16, B = 28;
+  const vals = DATA.featured.flatMap(t => DATA.score[t]).filter(v => v != null);
+  const hi = Math.ceil(Math.max(...vals) / 10) * 10;
+  const x = i => L + (W - L - R) * (i / (N - 1));
+  const y = v => TOP + (H - TOP - B) * (1 - v / hi);
+  let s = "";
+  for (let v = 0; v <= hi; v += 20) {
+    s += `<line x1="${L}" y1="${y(v)}" x2="${W - R}" y2="${y(v)}" stroke="var(--grid)" stroke-width="1"/>`;
+    s += `<text x="${L - 10}" y="${y(v) + 4}" fill="var(--ink-3)" font-size="11" text-anchor="end"
+            font-family="ui-monospace,Consolas,monospace">${v}</text>`;
+  }
+  T.forEach((t, i) => {
+    if (i % 15) return;
+    s += `<text x="${x(i)}" y="${H - B + 17}" fill="var(--ink-3)" font-size="11" text-anchor="middle"
+            font-family="ui-monospace,Consolas,monospace">${t}</text>`;
+  });
+  for (const th of DATA.featured) {
+    let d = "", open = false;
+    DATA.score[th].forEach((v, i) => {
+      if (v == null) { open = false; return; }
+      d += (open ? "L" : "M") + x(i).toFixed(1) + " " + y(v).toFixed(1) + " ";
+      open = true;
+    });
+    s += `<path d="${d}" fill="none" stroke="${color(th)}" stroke-width="2" stroke-linejoin="round"/>`;
+    const last = DATA.score[th].reduce((a, v, i) => (v != null ? i : a), -1);
+    if (last >= 0) {
+      s += `<circle cx="${x(last)}" cy="${y(DATA.score[th][last])}" r="4" fill="${color(th)}"
+              stroke="var(--panel)" stroke-width="2"/>`;
+      s += `<text x="${x(last) + 10}" y="${y(DATA.score[th][last]) + 4}" font-size="12.5"
+              fill="var(--ink)" font-weight="600">${th} ${DATA.score[th][last].toFixed(0)}</text>`;
+    }
+  }
+  svg.innerHTML = s;
+})();
+
+/* ---------- 1분 단위 표 ---------- */
+(function () {
+  // 5분 간격으로 접으면 순위가 언제 뒤집혔는지가 사라진다. 60행 전부 싣는다.
+  const head = `<thead><tr><th class="l">시각</th>
+    <th class="l">1위</th><th>점수</th>
+    <th class="l">2위</th><th class="l">3위</th><th class="l">4위</th><th class="l">5위</th>
+    <th class="l">1위 테마 최고 상승 (대금 20위)</th>
+    <th class="l">대금20 등락률 1등</th></tr></thead>`;
+  // 대금 20위 안의 등락률 1등. 2등과의 격차를 같이 보여준다 — 격차가 0.1%p 인
+  // 1등과 9%p 인 1등은 전혀 다른 상황인데 이름만 보면 구분이 안 된다.
+  const chgTopCell = i => {
+    const c = (DATA.chgtop || [])[i];
+    if (!c) return `<td class="l">–</td>`;
+    const gap = c[2] === null || c[2] === undefined ? "" :
+      `<span class="mute"> · 2등과 ${c[2].toFixed(2)}%p</span>`;
+    return `<td class="l">${c[0]} <b class="up">+${c[1].toFixed(2)}%</b>${gap}</td>`;
+  };
+  let prevTop = null, body = "";
+  DATA.times.forEach((t, i) => {
+    const row = DATA.top5[i] || [];
+    const b = row[0] ? [row[0][4], row[0][5]] : ["", 0];
+    const flip = row[0] && row[0][0] !== prevTop;
+    if (row[0]) prevTop = row[0][0];
+    const cell = j => {
+      const r = row[j];
+      if (!r) return `<td class="l">–</td>`;
+      return `<td class="l"><span class="dot" style="background:${color(r[0])}"></span>${r[0]}</td>`;
+    };
+    body += `<tr${flip ? ' class="flip"' : ""}><td class="l mono">${t}</td>` +
+      cell(0) + `<td class="rk">${row[0] ? row[0][1].toFixed(1) : "–"}</td>` +
+      cell(1) + cell(2) + cell(3) + cell(4) +
+      `<td class="l">${b[0] || "–"} <b class="up">${b[0] ? (b[1] >= 0 ? "+" : "") + b[1].toFixed(2) + "%" : ""}</b></td>` +
+      chgTopCell(i) + `</tr>`;
+  });
+  document.getElementById("tbl").innerHTML = head + `<tbody>${body}</tbody>`;
+})();
+}
+
+
+/* ---------- 날짜 선택 (달력) ---------- */
+const label = d => `${d.slice(4, 6)}/${d.slice(6)}`;
+let current = null;
+
+function show(day) {
+  current = day;
+  render(Object.assign({ day }, ARCHIVE.byDay[day]));
+  document.querySelectorAll("button.cell").forEach(b =>
+    b.setAttribute("aria-pressed", String(b.dataset.day === day)));
+  const info = document.getElementById("picked");
+  if (info) {
+    const rows = ARCHIVE.byDay[day].top5, cnt = {};
+    rows.forEach(r => { if (r[0]) cnt[r[0][0]] = (cnt[r[0][0]] || 0) + 1; });
+    const top = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0];
+    const d = day;
+    info.innerHTML = `<b>${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6)}</b>` +
+      (top ? `<span>1위 ${top[0]} · ${top[1]}/${rows.length}분</span>` : "");
+  }
+  history.replaceState(null, "", "#" + day);
+}
+
+(function buildCalendar() {
+  const have = new Set(ARCHIVE.days);
+  const months = [...new Set(ARCHIVE.days.map(d => d.slice(0, 6)))];
+  const dow = ["일", "월", "화", "수", "목", "금", "토"];
+  const cal = months.map(ym => {
+    const y = +ym.slice(0, 4), m = +ym.slice(4, 6);
+    const first = new Date(y, m - 1, 1), last = new Date(y, m, 0).getDate();
+    let cells = dow.map((n, i) => `<div class="dow${i === 0 ? " sun" : ""}">${n}</div>`).join("");
+    for (let i = 0; i < first.getDay(); i++) cells += `<div class="cell"></div>`;
+    for (let d = 1; d <= last; d++) {
+      const key = `${ym}${String(d).padStart(2, "0")}`;
+      // 장이 안 선 날과 분봉이 없는 날은 같은 칸이지만 누를 수 없다 — 눌러도 볼 게 없다.
+      cells += have.has(key)
+        ? `<button class="cell" data-day="${key}" aria-pressed="false">${d}</button>`
+        : `<div class="cell">${d}</div>`;
+    }
+    return `<div class="mon"><h4>${y}.${String(m).padStart(2, "0")}</h4>
+      <div class="grid">${cells}</div></div>`;
+  }).join("");
+
+  document.getElementById("picker").innerHTML = cal +
+    `<div class="legend-note" id="side">
+       <div id="picked"></div>
+       <span>거래일 ${ARCHIVE.days.length}일 · 진한 칸을 누르면 그날 09:00~10:00 기록이 뜬다</span>
+       <div class="nav"><button id="prev">← 이전</button><button id="next">다음 →</button></div>
+     </div>`;
+
+  document.querySelectorAll("button.cell").forEach(b =>
+    b.addEventListener("click", () => show(b.dataset.day)));
+  const step = n => {
+    const i = ARCHIVE.days.indexOf(current);
+    show(ARCHIVE.days[Math.max(0, Math.min(ARCHIVE.days.length - 1, i + n))]);
+  };
+  document.getElementById("prev").addEventListener("click", () => step(-1));
+  document.getElementById("next").addEventListener("click", () => step(1));
+  addEventListener("keydown", e => {
+    if (e.key === "ArrowLeft") step(-1);
+    if (e.key === "ArrowRight") step(1);
+  });
+})();
+
+
+/* 4분 연속 유지한 값 중 최고. 표본이 4분보다 짧으면 그냥 최댓값. */
+function sustainedPeak(values, window = 4) {
+  if (!values.length) return 0;
+  if (values.length < window) return Math.max(...values);
+  let best = -Infinity;
+  for (let i = 0; i + window <= values.length; i++) {
+    let low = Infinity;
+    for (let k = i; k < i + window; k++) low = Math.min(low, values[k]);
+    if (low > best) best = low;
+  }
+  return best;
+}
+
+/* ---------- 날짜별 요약 ---------- */
+(function daySummary() {
+  const rows = ARCHIVE.days.map(d => {
+    const t5 = ARCHIVE.byDay[d].top5;
+    const cnt = {};
+    t5.forEach(r => { if (r[0]) cnt[r[0][0]] = (cnt[r[0][0]] || 0) + 1; });
+    const [theme, hold] = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0] || ["–", 0];
+    const flips = t5.filter((r, i) => i && r[0] && t5[i - 1][0] && r[0][0] !== t5[i - 1][0][0]).length;
+    // 그 테마가 **4분 연속 유지한 값 중 최고**. 한 분만 튀어오른 값은 지킨 게 아니라
+    // 그 자리에서 이미 빠지고 있다 — "얼마까지 갔나"보다 "얼마를 지켰나"가 볼 값이다.
+    const peak = sustainedPeak((ARCHIVE.byDay[d].score[theme] || []).filter(v => v != null));
+    // 그날 1위 테마 안에서 **대금 20위에 든 종목 중** 가장 많이 오른 값 (최고 등락률 시점).
+    // r[0][4] 가 빈 문자열인 시점은 그때 1위 테마에 대금 20위 종목이 없었다는 뜻이라
+    // 건너뛴다 — 안 거르면 pct 0.0 이 최고값이 되어 이름 없는 칸이 찍힌다.
+    let best = { pct: -Infinity, name: "–" };
+    t5.forEach(r => { if (r[0] && r[0][4] && r[0][5] > best.pct) best = { pct: r[0][5], name: r[0][4] }; });
+    // 대금 순위가 가장 앞선 신고가 종목을 대표로 보여준다 — 목록 맨 앞이 그것이다.
+    const highs = ARCHIVE.byDay[d].highs || [];
+    return { d, theme, hold, flips, best, peak, highs };
+  }).reverse();                                    // 최근 날짜가 위로
+
+  document.getElementById("days").innerHTML =
+    `<thead><tr><th class="l">날짜</th><th class="l">1위 테마</th><th>최고 점수<span style="font-weight:400"> (4분)</span></th><th>점유</th>
+      <th>1위 교체</th><th class="l">그날 신고가</th>
+      <th class="l">그날 최고 상승 (대금 20위)</th></tr></thead><tbody>` +
+    rows.map(r => `<tr data-goto="${r.d}" style="cursor:pointer">
+      <td class="l mono">${r.d.slice(0, 4)}-${r.d.slice(4, 6)}-${r.d.slice(6)}</td>
+      <td class="l">${r.theme}</td>
+      <td class="rk">${r.peak ? r.peak.toFixed(1) : "–"}</td>
+      <td class="rk">${r.hold}<span style="color:var(--ink-3)">/60</span></td>
+      <td class="rk">${r.flips}</td>
+      <td class="l">${r.highs.length
+        ? `${r.highs.length}종목 <b class="${tierCls(r.highs[0][1])}">${r.highs[0][0]}</b>`
+          + (r.highs.length > 1 ? ` <span style="color:var(--ink-3)">외 ${r.highs.length - 1}</span>` : "")
+        : "<span style='color:var(--ink-3)'>–</span>"}</td>
+      <td class="l">${r.best.name} <b class="up">${r.best.pct > -Infinity ? (r.best.pct >= 0 ? "+" : "") + r.best.pct.toFixed(2) + "%" : ""}</b></td>
+    </tr>`).join("") + "</tbody>";
+
+  document.querySelectorAll("#days tr[data-goto]").forEach(tr =>
+    tr.addEventListener("click", () => {
+      show(tr.dataset.goto);
+      document.getElementById("picker").scrollIntoView({ behavior: "smooth", block: "start" });
+    }));
+})();
+
+const want = location.hash.replace("#", "");
+show(ARCHIVE.days.includes(want) ? want : ARCHIVE.days.at(-1));
+</script>
