@@ -101,20 +101,18 @@ claude rm <id>           # 삭제 (worktree 도 안전하면 같이)
 
 ## lead
 
-lead 는 **orca pane 이 아니라 orca 밖의 일반 claude 세션**이다. `orca-team.ps1` 에
-`lead` 를 넘겨 pane 을 하나 더 띄울 수도 있지만, 그러면 화면만 한 칸 잡아먹는다 —
-`orca-tell.ps1` 은 `.orca-team-handles.json` 의 에이전트↔handle 매핑만 보고 쏘기
-때문에 지시하는 쪽이 어디에 있든 상관없다. 지정할 설정값도 없다.
+팀은 **herdr pane** 에서 돈다(herdr 0.8.2). 기동은 `./herdr_team.sh`,
+지시·회수는 `herdr agent prompt|read|wait <이름>` 이다. 자세한 건 `.claude/skills/herd/SKILL.md`.
 
-```powershell
-.\orca-tell.ps1 risk-agent "..."          # 지시
-.\orca-tell.ps1 risk-agent -Read          # 화면 읽기
-.\orca-tell.ps1 risk-agent -Read -Cursor 42   # 그 뒤 새 출력만
+```bash
+herdr agent prompt risk-agent "..."      # 지시
+herdr agent read   risk-agent --source recent-unwrapped --lines 60
+herdr agent wait   risk-agent --until idle --timeout 300000
 ```
 
-`.orca-team-handles.json` 은 `orca-team.ps1` 이 pane 을 만들 때만 덮어쓴다. pane 을
-수동으로 닫으면 기록이 남아 `orca-tell.ps1` 이 죽은 handle 로 쏜다 — 정리는
-`.\orca-team.ps1 -Close` 로.
+**핸들 파일은 없다.** herdr 는 에이전트를 이름으로 지목한다.
+예전 `orca-tell.ps1`/`orca-team.ps1`/`.orca-team-handles.json` 은 2026-08-31 에
+`.archive/orca_20260831/` 로 옮겼다 — 죽은 핸들에 쏘면서 에러도 안 내고 있었다.
 
 ## 담당 분담 — 두 저장소
 
