@@ -6,6 +6,7 @@
 클릭해 갈아끼운다. 하루치가 20KB 남짓이라 30일이면 600KB — 아티팩트 16MB 한도 안이다.
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -54,7 +55,11 @@ def new_highs(days: list[str]) -> dict[str, list]:
     hi = f"{last[:4]}-{last[4:6]}-{last[6:]}"
     uni = pd.read_csv(ROOT / "kospi-theme-engine" / "data" / "reference" / "universe.csv",
                       dtype=str)
-    name_of = dict(zip(uni["code"], uni["name"]))
+    # 이름은 universe.csv 가 먼저다(화면과 같은 표기). 일봉은 그보다 넓게 있으므로
+    # 없는 종목은 themes.csv 로 메운다 — 안 그러면 신고가 표에 종목코드가 그대로 뜬다.
+    themes = pd.read_csv(ROOT / "data" / "themes.csv", dtype=str)
+    name_of = dict(zip(themes["stock_code"].str.strip(), themes["name"]))
+    name_of.update(zip(uni["code"], uni["name"]))
     daily_dir, month_dir = ROOT / "data" / "stocks" / "daily", ROOT / "data" / "stocks" / "monthly"
     if not daily_dir.is_dir():
         return {}
@@ -117,8 +122,10 @@ def new_highs(days: list[str]) -> dict[str, list]:
 
 
 def main() -> None:
-    days = sorted(p.stem.replace("rank_timeline_", "")
-                  for p in RAW.glob("rank_timeline_*.json"))
+    # YYYYMMDD 만 날짜로 받는다. 같은 폴더에 rank_timeline_full_*.json 처럼 변형이
+    # 섞여 있으면 "full_20260701" 이 하루로 잡혀 달력에 끼어든다.
+    days = sorted(d for p in RAW.glob("rank_timeline_*.json")
+                  if re.fullmatch(r"\d{8}", d := p.stem.replace("rank_timeline_", "")))
     if not days:
         print("계산된 날이 없습니다 — rank_archive.py 를 먼저 돌리세요")
         return
