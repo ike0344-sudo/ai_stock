@@ -1,0 +1,59 @@
+# 콘솔 리다이렉트(파이프/파일) 시 cp949로 stdout이 열려 한글/특수문자에서
+# UnicodeEncodeError로 죽을 수 있는 스크립트 목록 (sys.stdout.reconfigure 없음).
+# 생성: 2026-08-30, data-agent. 기준: print()에 한글이 있고 reconfigure가 없는 .py
+# (__pycache__/build/dist 제외). 총 48개.
+#
+# 이미 고침(실제로 .ps1에서 파이프로 호출되는 것만): scripts/prepare.py,
+# scripts/fetch_minute.py, backup_logs.py — 이 목록에는 없음(고쳤으므로 제외됨).
+# 아래는 전부 "아직 안 고침" — 현재 .ps1/.bat 자동화에서 파이프로 불리는 것은
+# 없는 것으로 확인됨(수동/대화형 실행 스크립트들). subprocess로 서로 호출하는
+# 경우까지는 검사 안 함 — 필요하면 추가 확인.
+
+./atr_stop_ab.py
+./backtesting/daily_walk_forward.py
+./backtesting/daily_walk_forward_benchmark.py
+./backtesting/dashboard_monitor.py
+./backtesting/dashboard_server.py
+./backtesting/gate_ab_check.py
+./backtesting/live_monitor.py
+./backtesting/nasdaq_drop_monitor.py
+./backtesting/new_high_swing_side_effects.py
+./backtesting/oversold_trading_loop.py
+./backtesting/regime_filter_ab.py
+./backtesting/report.py
+./backtesting/sell_all_job.py
+./backtesting/sell_order.py
+./backtesting/telegram_order_bot.py
+./backtesting/top25_rank1_ab.py
+./backtesting/trading_loop.py
+./backtesting/validate_strategy1.py
+./backtesting/validate_strategy2.py
+./build_high120.py
+./buy_once.py
+./dow_mobile.py
+./dow_mobile_serve.py
+./dow_signal.py
+./evolve.py
+./fetch_009150_combined_minute.py
+./fetch_combined_15min.py
+./fetch_themes.py
+./grid_tp_zones.py
+./investor0782/investor_flow.py
+./investor0782/krx.py
+./kospi-theme-engine/app/hts_link.py
+./kospi-theme-engine/app/main.py
+./kospi-theme-engine/score_forward.py
+./kospi-theme-engine/scripts/fill_daily.py
+./kospi-theme-engine/test_rebase.py
+./krx_short_balance.py
+./samsung_em_envelope_guide.py
+./short_check.py
+./sk_hynix_envelope_correlation.py
+./sk_hynix_envelope_integrated.py
+./sk_hynix_report_pdf.py
+./state/auto_develop/tmp/diag2.py
+./state/auto_develop/tmp/diagnose.py
+./state/auto_develop/tmp/eval26b.py
+./state/auto_develop/tmp/eval26d.py
+./state/auto_develop/tmp/eval26e.py
+./state/auto_develop/tmp/eval_tvr.py

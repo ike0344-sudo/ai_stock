@@ -1,0 +1,575 @@
+<title>낙폭 5% 이내 +20% 도달 케이스</title>
+<style>
+:root{
+  --bg:#F1F3F5; --surface:#FFFFFF; --surface-2:#F7F8FA;
+  --ink:#14171C; --ink-2:#5B6473; --ink-3:#8B94A3;
+  --line:#E0E4EA; --line-2:#CDD3DC;
+  --up:#B23A2E; --cool:#2C5F8A;
+  --d1:#7FA8C9; --d2:#C9A227; --d3:#C97B3A; --d4:#B23A2E;
+  --chip:#EEF1F5; --chip-on:#14171C; --chip-on-ink:#FFFFFF;
+  --shadow:0 1px 2px rgba(20,23,28,.06),0 8px 24px -16px rgba(20,23,28,.25);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#111318; --surface:#191C22; --surface-2:#20242B;
+    --ink:#E7EAEF; --ink-2:#9AA3B2; --ink-3:#6E7787;
+    --line:#282D36; --line-2:#39404B;
+    --up:#E07A68; --cool:#7FB0DC;
+    --d1:#5E8FB5; --d2:#D8B948; --d3:#DE9257; --d4:#E07A68;
+    --chip:#23272F; --chip-on:#E7EAEF; --chip-on-ink:#111318;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -16px rgba(0,0,0,.8);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#111318; --surface:#191C22; --surface-2:#20242B;
+  --ink:#E7EAEF; --ink-2:#9AA3B2; --ink-3:#6E7787;
+  --line:#282D36; --line-2:#39404B;
+  --up:#E07A68; --cool:#7FB0DC;
+  --d1:#5E8FB5; --d2:#D8B948; --d3:#DE9257; --d4:#E07A68;
+  --chip:#23272F; --chip-on:#E7EAEF; --chip-on-ink:#111318;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -16px rgba(0,0,0,.8);
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI","Malgun Gothic","Apple SD Gothic Neo",sans-serif;
+  font-size:15px; line-height:1.55; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1320px;margin:0 auto;padding:40px 24px 72px;display:flex;flex-direction:column;gap:28px}
+.eyebrow{
+  font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);
+  font-weight:600;margin:0 0 10px;
+}
+h1{font-size:clamp(24px,3.4vw,34px);line-height:1.2;margin:0;font-weight:650;letter-spacing:-.02em;text-wrap:balance}
+.sub{margin:10px 0 0;color:var(--ink-2);max-width:62ch;font-size:14.5px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden;box-shadow:var(--shadow)}
+.tile{background:var(--surface);padding:16px 18px;display:flex;flex-direction:column;gap:2px}
+.tile b{font-family:ui-serif,Georgia,"Times New Roman",serif;font-size:30px;font-weight:500;letter-spacing:-.01em;font-variant-numeric:tabular-nums;line-height:1.1}
+.tile b small{font-size:15px;color:var(--ink-2);margin-left:2px;font-family:inherit}
+.tile span{font-size:11.5px;color:var(--ink-3);letter-spacing:.06em;text-transform:uppercase;font-weight:600}
+.tile em{font-style:normal;font-size:12.5px;color:var(--ink-2)}
+.bar{
+  position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);
+  backdrop-filter:blur(8px);border:1px solid var(--line);border-radius:10px;
+  padding:12px 14px;display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;
+}
+.grp{display:flex;align-items:center;gap:7px}
+.grp>label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
+.chip{
+  border:1px solid var(--line-2);background:var(--chip);color:var(--ink-2);
+  font:inherit;font-size:12.5px;padding:4px 11px;border-radius:99px;cursor:pointer;
+  font-variant-numeric:tabular-nums;transition:background .12s,color .12s,border-color .12s;
+}
+.chip:hover{border-color:var(--ink-3);color:var(--ink)}
+.chip[aria-pressed="true"]{background:var(--chip-on);color:var(--chip-on-ink);border-color:var(--chip-on)}
+.chip:focus-visible,input:focus-visible{outline:2px solid var(--cool);outline-offset:2px}
+input[type="search"]{
+  font:inherit;font-size:13.5px;padding:5px 11px;border-radius:7px;
+  border:1px solid var(--line-2);background:var(--surface);color:var(--ink);min-width:150px;
+}
+.count{margin-left:auto;font-size:13px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.count b{color:var(--ink);font-weight:650}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--surface);box-shadow:var(--shadow)}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+thead th{
+  position:sticky;top:0;background:var(--surface-2);z-index:2;
+  font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);font-weight:650;
+  padding:10px 8px;text-align:right;white-space:nowrap;cursor:pointer;user-select:none;
+  border-bottom:1px solid var(--line-2);
+}
+thead th:first-child,thead th.l{text-align:left}
+thead th:hover{color:var(--ink)}
+thead th .ar{opacity:0;margin-left:4px;font-size:9px}
+thead th[data-dir] .ar{opacity:1}
+tbody td{
+  padding:8px;text-align:right;border-bottom:1px solid var(--line);
+  font-size:13px;white-space:nowrap;
+}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover td{background:var(--surface-2)}
+td.l{text-align:left}
+td.day{color:var(--ink-2);font-variant-numeric:tabular-nums;font-size:13px}
+td.nm{font-weight:600;letter-spacing:-.01em}
+.up{color:var(--up)}
+.dn{color:var(--cool)}
+.mut{color:var(--ink-3)}
+.strong{font-weight:700}
+.pstats{grid-template-columns:repeat(5,1fr)}
+.ddcell{display:flex;align-items:center;justify-content:flex-end;gap:9px}
+.ddbar{height:5px;border-radius:3px;background:var(--dc);width:var(--w)}
+.ddnum{font-weight:600;min-width:34px}
+.rk{display:inline-block;min-width:20px;padding:1px 5px;border-radius:5px;background:var(--chip);color:var(--ink-2);font-size:12px;font-weight:600}
+.empty{padding:40px;text-align:center;color:var(--ink-3)}
+.panels{display:grid;grid-template-columns:1.6fr 1fr;gap:20px}
+@media (max-width:820px){.panels{grid-template-columns:1fr}}
+.panel{border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:16px 18px;box-shadow:var(--shadow)}
+.panel h2{margin:0 0 14px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);font-weight:650;display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.panel h2 em{font-style:normal;letter-spacing:0;text-transform:none;font-size:11.5px;color:var(--ink-2);font-weight:500;font-variant-numeric:tabular-nums}
+.months{display:flex;align-items:flex-end;gap:6px;height:96px}
+.mo{flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;min-width:0}
+.mo .col{width:100%;background:var(--cool);border-radius:3px 3px 0 0;opacity:.85;min-height:1px;transition:height .18s ease}
+.mo .v{font-size:11px;color:var(--ink-2);font-variant-numeric:tabular-nums;min-height:15px}
+.mo .lb{font-size:10px;color:var(--ink-3);font-variant-numeric:tabular-nums;white-space:nowrap}
+.freq{display:flex;flex-direction:column;gap:7px}
+.fr{display:grid;grid-template-columns:5.5em 1fr 1.6em;align-items:center;gap:9px;font-size:13px}
+.fr span{color:var(--ink);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fr i{height:7px;border-radius:4px;background:var(--up);opacity:.8;display:block}
+.fr b{font-variant-numeric:tabular-nums;color:var(--ink-2);font-weight:600;text-align:right;font-size:12px}
+tbody tr.newmo td{border-top:1px solid var(--line-2)}
+tbody tr{cursor:pointer}
+tbody tr:focus-visible{outline:2px solid var(--cool);outline-offset:-2px}
+.peek{position:fixed;right:18px;bottom:18px;z-index:40;width:min(900px,calc(100vw - 36px));
+  background:var(--surface);border:1px solid var(--line-2);border-radius:12px;padding:14px 16px 12px;
+  box-shadow:0 20px 50px -18px rgba(0,0,0,.45);pointer-events:none}
+.peek[hidden]{display:none}
+.phead h3{margin:0;font-size:16px;font-weight:650;letter-spacing:-.01em}
+.phead h3 i{font-style:normal;color:var(--ink-3);font-weight:400;font-size:12px;margin-left:7px}
+.phead p{margin:2px 0 10px;font-size:12px;color:var(--ink-2)}
+.pstats{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--line);
+  border:1px solid var(--line);border-radius:7px;overflow:hidden;margin-bottom:12px}
+.pstats div{background:var(--surface-2);padding:6px 9px;display:flex;flex-direction:column;gap:0}
+.pstats span{font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
+.pstats b{font-size:14px;font-weight:650;font-variant-numeric:tabular-nums}
+canvas{display:block;width:100%;height:340px}
+.plegend{margin:9px 0 0;font-size:11px;color:var(--ink-3);display:flex;flex-wrap:wrap;gap:11px;align-items:center}
+.plegend i{display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:4px;vertical-align:middle}
+#pclose{display:none;border:1px solid var(--line-2);background:var(--chip);color:var(--ink-2);
+  font:inherit;font-size:12.5px;padding:4px 11px;border-radius:99px;cursor:pointer;pointer-events:auto}
+.phead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+@media (max-width:1000px){
+  .peek{left:8px;right:8px;bottom:8px;width:auto;pointer-events:auto;padding:12px 12px 10px;
+    max-height:78vh;overflow:auto}
+  #pclose{display:block}
+  canvas{height:230px}
+  .pstats{grid-template-columns:repeat(3,1fr)}
+  .plegend{display:none}
+}
+.notouch .peek{pointer-events:none}
+
+.legend{display:flex;flex-wrap:wrap;gap:16px;font-size:12.5px;color:var(--ink-2);align-items:center}
+.legend span{display:flex;align-items:center;gap:6px}
+.sw{width:22px;height:5px;border-radius:3px}
+.notes{border-top:1px solid var(--line);padding-top:20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:22px}
+.notes h3{margin:0 0 6px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);font-weight:650}
+.notes p{margin:0;font-size:13px;color:var(--ink-2);line-height:1.6}
+.notes a{color:var(--cool);font-weight:600;text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--cool) 40%,transparent)}
+.notes a:hover{border-bottom-color:var(--cool)}
+.notes a:focus-visible{outline:2px solid var(--cool);outline-offset:2px}
+.notes code{font-family:ui-monospace,"Cascadia Code",Consolas,monospace;font-size:12px;background:var(--chip);padding:1px 5px;border-radius:4px;color:var(--ink)}
+@media (max-width:640px){.wrap{padding:24px 14px 48px}.tile b{font-size:25px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+<div class="wrap">
+  <header>
+    <p class="eyebrow">거래대금 상위 10 · 시가갭 15% 미만 · __PERIOD__ · 데이터 기준 __ASOF__</p>
+    <h1>고점 대비 5%를 안 깨고 +20%까지 간 __TITLECNT__</h1>
+    <p class="sub">10시 장중 누적대금 순위 10위 이내 종목 중 당일 +20%를 찍고, 09:00부터 최초 +20% 터치까지의 경로 최대낙폭(러닝 고점 대비)이 5% 이내였던 사례. 낙폭은 09:00 첫 1분봉의 저가를 빼고 잰다. 시가갭 15% 이상은 시초에 이미 +20% 근처라 경로가 성립하지 않아 제외했다. <b>행에 마우스를 올리면(모바일은 탭하면) 그날 1분봉과 거래량이 뜬다.</b></p>__EXNOTE__
+  </header>
+
+  <div class="tiles">
+    <div class="tile"><span>케이스</span><b>__N__<small>건</small></b><em>갭 15% 이상 __NGAP__건 제외 후</em></div>
+    <div class="tile"><span>최대낙폭</span><b>__MED_DD__<small>%</small></b><em>중앙값 · 첫 봉 저가 제외</em></div>
+    <div class="tile"><span>+20%까지</span><b>__MED_M__<small>분</small></b><em>중앙값 · 10시 이전 __EARLY__건</em></div>
+    <div class="tile"><span>당일 종가</span><b>__MED_E__<small>%</small></b><em>중앙값 · +20% 지킨 날 __HELD__건</em></div>
+    <div class="tile"><span>종목 수</span><b>__NSTOCK__<small>개</small></b><em>최다 __TOPNAME__ __TOPCNT__회</em></div>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <h2>월별 발생 <em id="mnote"></em></h2>
+      <div class="months" id="months"></div>
+    </div>
+    <div class="panel">
+      <h2>반복 등장 종목 <em id="fnote"></em></h2>
+      <div class="freq" id="freq"></div>
+    </div>
+  </div>
+
+  <div class="bar">
+    <div class="grp">
+      <input type="search" id="q" placeholder="종목명 · 코드" aria-label="종목 검색">
+    </div>
+    <div class="grp" role="group" aria-label="경로 최대낙폭 상한">
+      <label>낙폭</label>
+      <button class="chip" data-dd="99" aria-pressed="true">전체</button>
+      <button class="chip" data-dd="4.5" aria-pressed="false">≤4.5%</button>
+      <button class="chip" data-dd="4" aria-pressed="false">≤4%</button>
+      <button class="chip" data-dd="3.5" aria-pressed="false">≤3.5%</button>
+    </div>
+    <div class="grp" role="group" aria-label="도달 시각">
+      <label>도달</label>
+      <button class="chip" data-t="all" aria-pressed="true">전체</button>
+      <button class="chip" data-t="early" aria-pressed="false">10시 이전</button>
+      <button class="chip" data-t="late" aria-pressed="false">10시 이후</button>
+    </div>
+    <div class="grp">
+      <button class="chip" id="nogap" aria-pressed="false">갭 직행 제외</button>
+    </div>
+    <p class="count"><b id="shown">__N__</b> / __N__건</p>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th class="l" data-k="d" data-dir="desc">날짜<span class="ar">▼</span></th>
+          <th class="l" data-k="n">종목<span class="ar">▲</span></th>
+          <th data-k="g">시가갭<span class="ar">▲</span></th>
+          <th data-k="r">10시 등락<span class="ar">▲</span></th>
+          <th data-k="p">10시 눌림<span class="ar">▲</span></th>
+          <th data-k="dd">최대낙폭<span class="ar">▲</span></th>
+          <th data-k="e">종가<span class="ar">▲</span></th>
+          <th data-k="t">도달<span class="ar">▲</span></th>
+          <th data-k="m">소요<span class="ar">▲</span></th>
+          <th data-k="k">대금순위<span class="ar">▲</span></th>
+          <th data-k="x">코스피60<span class="ar">▲</span></th>
+        </tr>
+      </thead>
+      <tbody id="tb"></tbody>
+    </table>
+    <p class="empty" id="empty" hidden>조건에 맞는 케이스가 없습니다.</p>
+  </div>
+
+  <div class="legend">
+    <span><i class="sw" style="background:var(--d1)"></i>≤3%</span>
+    <span><i class="sw" style="background:var(--d2)"></i>3~4%</span>
+    <span><i class="sw" style="background:var(--d3)"></i>4~4.5%</span>
+    <span><i class="sw" style="background:var(--d4)"></i>4.5~5%</span>
+    <span class="mut">막대 길이 = 낙폭 크기 · 헤더 클릭 시 정렬 · 소요 3분 이하 = 갭 직행</span>
+  </div>
+
+  <div class="notes">
+    <div>
+      <h3>최대낙폭</h3>
+      <p>09:00부터 최초 +20% 터치까지, 1분봉 러닝 고점 대비 최대 하락률. 09:00 첫 봉의 저가는 제외하되 고가는 러닝 고점에 반영한다. 손절선을 이 값보다 넓게 잡았다면 +20%까지 버틸 수 있었다는 뜻.</p>
+    </div>
+    <div>
+      <h3>10시 눌림</h3>
+      <p>09:00~10:00 구간만의 러닝 고점 대비 최대 하락률. 낙폭보다 큰 행은 +20%를 10시 전에 찍고 그 뒤 밀린 케이스.</p>
+    </div>
+    <div>
+      <h3>3배제 — 빼는 조건</h3>
+      <p>모집단에서 <b>탈락시키는</b> 규칙이다. 백테스트에서 실제 손익을 개선한 건 이쪽이다.</p>
+      <p><b>① 10시까지 눌림 &gt;5%</b> 손절폭을 이미 다 쓴 자리<br>
+      <b>② 첫 5분 대금비중 &gt;0.15</b> 09:00~09:05에 오전 대금이 몰림 = 시초 한 방<br>
+      <b>③ 10시 레인지 위치 &lt;0.7</b> 위에서 맞고 내려온 것</p>
+      <p class="mut">여기에 모집단 제한 두 개가 깔린다 — 10시 이전에 이미 +20%(살 수 없음), 시가갭 ≥15%.</p>
+    </div>
+    <div>
+      <h3>코스피60</h3>
+      <p>09:00~+20% 도달까지 코스피 15분봉 종가가 60봉 이평 위였던 비율. <b>위</b>=내내 위, <b>아래</b>=내내 아래, 그 사이는 도중에 교차했다는 뜻. 이평은 장 사이를 건너뛰고 거래시간 봉만 이어 계산해 60봉 ≈ 2.3거래일이다.</p>
+      <p><a href="https://claude.ai/code/artifact/697fbfa4-eb6c-40b3-bb7d-a8ec6bcb0651">위·교차·아래 국면별 프로파일 →</a><br>세 국면에서 나오는 종목의 성격이 어떻게 갈리는지(주가 1.1만원 vs 7.8만원, 소요 15분 vs 128분)와 국면별 손절 폭.</p>
+    </div>
+    <div>
+      <h3>재현</h3>
+      <p><code>python clean20_list.py --dd=5 --all</code> · 갭 상한은 <code>--maxgap</code> · 원본 <code>results/clean20_dd5_list.csv</code></p>
+    </div>
+  </div>
+</div>
+
+<div class="peek" id="peek" hidden aria-hidden="true">
+  <div class="phead">
+    <div>
+      <h3 id="ptitle"></h3>
+      <p id="psub"></p>
+    </div>
+    <button id="pclose" aria-label="차트 닫기">닫기</button>
+  </div>
+  <div class="pstats" id="pstats"></div>
+  <canvas id="cv"></canvas>
+  <p class="plegend">
+    <span><i style="background:var(--up)"></i>상승봉</span>
+    <span><i style="background:var(--cool)"></i>하락봉</span>
+    <span><i style="background:var(--ink-3)"></i>러닝 고점</span>
+    <span><i style="background:var(--up)"></i>+20% 선 · 최대낙폭</span>
+    <span>세로 점선 = 10:00</span>
+  </p>
+</div>
+
+<script>
+const RAW = __RAW__;
+const CH = __CH__;
+const tb = document.getElementById('tb'), empty = document.getElementById('empty'), shown = document.getElementById('shown');
+const peek = document.getElementById('peek'), cv = document.getElementById('cv');
+let state = { q:'', dd:99, t:'all', nogap:false, k:'d', dir:'desc' };
+
+const ddColor = v => v <= 3 ? 'var(--d1)' : v <= 4 ? 'var(--d2)' : v <= 4.5 ? 'var(--d3)' : 'var(--d4)';
+const sign = v => v > 0 ? 'up' : v < 0 ? 'dn' : 'mut';
+const fmt = v => (v > 0 ? '+' : '') + v.toFixed(1);
+const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const k60 = x => x == null ? '<span class="mut">·</span>'
+  : x === 1 ? '<span class="up strong">위</span>'
+  : x === 0 ? '<span class="dn">아래</span>'
+  : `<span class="mut">교차 ${Math.round(x * 100)}%</span>`;
+const hhmm = m => String(m / 60 | 0).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+
+function render() {
+  const q = state.q.trim().toLowerCase();
+  let list = RAW.filter(r =>
+    r.dd <= state.dd &&
+    (!state.nogap || r.m > 3) &&
+    (state.t === 'all' || (state.t === 'late' ? r.t > '10:00' : r.t <= '10:00')) &&
+    (!q || r.n.toLowerCase().includes(q) || r.c.includes(q))
+  );
+  const k = state.k, mul = state.dir === 'asc' ? 1 : -1;
+  list.sort((a, b) => {
+    const x = a[k], y = b[k];
+    if (x === y) return a.d < b.d ? -1 : 1;
+    return (x < y ? -1 : 1) * mul;
+  });
+
+  let mo = '';
+  tb.innerHTML = list.map(r => {
+    const nm = state.k === 'd' && r.d.slice(0, 7) !== mo;
+    if (state.k === 'd') mo = r.d.slice(0, 7);
+    return `
+    <tr class="${nm ? 'newmo' : ''}" data-key="${r.d}|${r.c}" tabindex="0">
+      <td class="l day">${r.d.slice(2)}</td>
+      <td class="l nm">${r.n}</td>
+      <td class="${sign(r.g)}">${fmt(r.g)}</td>
+      <td class="${sign(r.r)}">${fmt(r.r)}</td>
+      <td class="mut">${r.p.toFixed(1)}</td>
+      <td><span class="ddcell"><i class="ddbar" style="--w:${(r.dd / 5 * 46).toFixed(1)}px;--dc:${ddColor(r.dd)}"></i><span class="ddnum">${r.dd.toFixed(1)}</span></span></td>
+      <td class="${r.e >= 20 ? 'up strong' : sign(r.e)}">${fmt(r.e)}</td>
+      <td>${r.t}</td>
+      <td class="mut">${r.m}분</td>
+      <td><span class="rk">${r.k}</span></td>
+      <td>${k60(r.x)}</td>
+    </tr>`;
+  }).join('');
+  shown.textContent = list.length;
+  empty.hidden = list.length > 0;
+  panels(list);
+}
+
+const MONTHS = [...new Set(RAW.map(r => r.d.slice(0, 7)))].sort();
+function panels(list) {
+  const cnt = {};
+  MONTHS.forEach(m => cnt[m] = 0);
+  const names = {};
+  list.forEach(r => {
+    cnt[r.d.slice(0, 7)]++;
+    names[r.n] = (names[r.n] || 0) + 1;
+  });
+  const mx = Math.max(1, ...MONTHS.map(m => cnt[m]));
+  document.getElementById('months').innerHTML = MONTHS.map(m =>
+    `<div class="mo"><span class="v">${cnt[m] || ''}</span>` +
+    `<i class="col" style="height:${(cnt[m] / mx * 64).toFixed(0)}px"></i>` +
+    `<span class="lb">${m.slice(2, 4)}.${m.slice(5)}</span></div>`).join('');
+  document.getElementById('mnote').textContent = `최다 ${mx}건`;
+
+  const top = Object.entries(names).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 7);
+  document.getElementById('freq').innerHTML = top.length
+    ? top.map(([n, c]) =>
+        `<div class="fr"><span>${n}</span><i style="width:${(c / top[0][1] * 100).toFixed(0)}%"></i><b>${c}</b></div>`).join('')
+    : '<p class="mut" style="font-size:13px;margin:0">해당 없음</p>';
+  document.getElementById('fnote').textContent = `${Object.keys(names).length}종목`;
+}
+
+function draw(row) {
+  const ch = CH[row.d + '|' + row.c];
+  if (!ch) return;
+  const mins = [ch.s];
+  ch.d.forEach(x => mins.push(mins[mins.length - 1] + x));
+  const O = ch.o.map(v => v / 10), H = ch.h.map(v => v / 10),
+        L = ch.l.map(v => v / 10), C = ch.c.map(v => v / 10), V = ch.v;
+
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, Ht = cv.clientHeight;
+  cv.width = W * dpr; cv.height = Ht * dpr;
+  const g = cv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, W, Ht);
+
+  const pad = { l: 44, r: 12, t: 12, b: 22 };
+  const volH = 50, gapH = 12;
+  const plotW = W - pad.l - pad.r, priceBot = Ht - pad.b - volH - gapH;
+
+  const step = 1;  // 1분봉 그대로 (묶지 않는다)
+  const K = [];
+  for (let i = 0; i < mins.length; i += step) {
+    const j = Math.min(i + step, mins.length);
+    let hi = -1e9, lo = 1e9, v = 0;
+    for (let q = i; q < j; q++) { hi = Math.max(hi, H[q]); lo = Math.min(lo, L[q]); v += V[q]; }
+    K.push({ t: mins[i], o: O[i], h: hi, l: lo, c: C[j - 1], v: v, i0: i });
+  }
+  const vmaxK = Math.max(1, ...K.map(k => k.v));
+
+  const lo = Math.min(0, ...K.map(k => k.l)) - 1.5, hi = Math.max(20.5, ...K.map(k => k.h)) + 1.5;
+  const bw = Math.max(1, plotW / K.length * 0.7);
+  const px = i => pad.l + (i + 0.5) / K.length * plotW;
+  const py = v => pad.t + (hi - v) / (hi - lo) * (priceBot - pad.t);
+
+  const ink = tok('--ink'), ink3 = tok('--ink-3');
+  const line = tok('--line'), up = tok('--up'), cool = tok('--cool');
+
+  // 가로 격자 + y축
+  g.font = '10.5px system-ui, sans-serif'; g.textAlign = 'right'; g.textBaseline = 'middle';
+  const gstep = hi - lo > 40 ? 10 : 5;
+  for (let v = Math.ceil(lo / gstep) * gstep; v <= hi; v += gstep) {
+    g.strokeStyle = line; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(pad.l, py(v) + .5); g.lineTo(W - pad.r, py(v) + .5); g.stroke();
+    g.fillStyle = ink3; g.fillText((v > 0 ? '+' : '') + v + '%', pad.l - 7, py(v));
+  }
+  // 정시 눈금
+  g.textAlign = 'center'; g.textBaseline = 'top';
+  let lastHour = -1;
+  K.forEach((k, i) => {
+    const h = k.t / 60 | 0;
+    if (h !== lastHour && k.t % 60 < step) {
+      lastHour = h;
+      g.fillStyle = ink3; g.fillText(hhmm(h * 60), px(i), Ht - pad.b + 4);
+    }
+  });
+  // 10:00
+  const i10 = K.findIndex(k => k.t >= 600);
+  if (i10 > 0) {
+    g.strokeStyle = ink3; g.setLineDash([3, 3]); g.lineWidth = 1;
+    g.beginPath(); g.moveTo(px(i10), pad.t); g.lineTo(px(i10), Ht - pad.b); g.stroke();
+    g.setLineDash([]);
+  }
+
+  // 기준선
+  g.strokeStyle = up; g.lineWidth = 1.4; g.setLineDash([5, 4]);
+  g.beginPath(); g.moveTo(pad.l, py(20)); g.lineTo(W - pad.r, py(20)); g.stroke(); g.setLineDash([]);
+  g.strokeStyle = ink3; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(pad.l, py(0)); g.lineTo(W - pad.r, py(0)); g.stroke();
+
+  // 러닝 고점 + 최대낙폭은 원본 1분봉으로 계산한다
+  let t20 = H.findIndex(v => v >= 20);
+  if (t20 < 0) t20 = H.length - 1;
+  let peak = -1e9, worst = { dd: -1, i: 0, p: 0 };
+  for (let i = 0; i <= t20; i++) {
+    peak = Math.max(peak, H[i]);
+    if (i > 0) {
+      const v = (peak - L[i]) / (100 + peak) * 100;
+      if (v > worst.dd) worst = { dd: v, i: i, p: peak };
+    }
+  }
+  const kEnd = Math.min(K.length - 1, Math.floor(t20 / step));
+  g.strokeStyle = ink3; g.lineWidth = 1.2; g.setLineDash([2, 3]); g.beginPath();
+  let kp = -1e9;
+  for (let i = 0; i <= kEnd; i++) {
+    kp = Math.max(kp, K[i].h);
+    i ? g.lineTo(px(i), py(kp)) : g.moveTo(px(i), py(kp));
+  }
+  g.stroke(); g.setLineDash([]);
+
+  // 봉
+  for (let i = 0; i < K.length; i++) {
+    const k = K[i], rise = k.c >= k.o, col = rise ? up : cool;
+    const x = px(i);
+    g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(x, py(k.h)); g.lineTo(x, py(k.l)); g.stroke();
+    const yo = py(k.o), yc = py(k.c);
+    const top = Math.min(yo, yc), h = Math.max(1, Math.abs(yc - yo));
+    if (rise) g.fillRect(x - bw / 2, top, bw, h);
+    else { g.fillRect(x - bw / 2, top, bw, h); }
+  }
+
+  // 최대낙폭 구간
+  if (worst.dd > 0) {
+    const x = px(Math.floor(worst.i / step));
+    g.strokeStyle = up; g.lineWidth = 2.5; g.globalAlpha = .75;
+    g.beginPath(); g.moveTo(x, py(worst.p)); g.lineTo(x, py(L[worst.i])); g.stroke();
+    g.globalAlpha = 1;
+    g.fillStyle = up; g.font = '600 10.5px system-ui, sans-serif';
+    g.textAlign = 'left'; g.textBaseline = 'bottom';
+    g.fillText('-' + worst.dd.toFixed(1) + '%', x + 5, py(L[worst.i]) + 13);
+  }
+  // +20% 최초 터치
+  if (H[t20] >= 20) {
+    g.fillStyle = up; g.beginPath(); g.arc(px(Math.floor(t20 / step)), py(20), 3.5, 0, 7); g.fill();
+  }
+
+  // 거래량
+  const vTop = priceBot + gapH, vBot = Ht - pad.b;
+  g.strokeStyle = line; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(pad.l, vBot + .5); g.lineTo(W - pad.r, vBot + .5); g.stroke();
+  for (let i = 0; i < K.length; i++) {
+    const h = K[i].v / vmaxK * (vBot - vTop);
+    g.fillStyle = K[i].c >= K[i].o ? up : cool;
+    g.globalAlpha = .6;
+    g.fillRect(px(i) - bw / 2, vBot - h, bw, h);
+  }
+  g.globalAlpha = 1;
+  g.fillStyle = ink3; g.font = '10px system-ui, sans-serif';
+  g.textAlign = 'right'; g.textBaseline = 'top';
+  g.fillText('거래량', pad.l - 7, vTop);
+  // 봉 단위 표시
+  g.textAlign = 'left'; g.textBaseline = 'top';
+  g.fillText(step + '분봉', pad.l + 4, pad.t + 1);
+}
+
+let current = null, timer = null;
+function show(row) {
+  if (!row || row === current) return;
+  current = row;
+  document.getElementById('ptitle').innerHTML = row.n + '<i>' + row.c + '</i>';
+  document.getElementById('psub').textContent =
+    row.d + ' · 대금 ' + row.k + '위 · +20% ' + row.t + ' (' + row.m + '분)';
+  document.getElementById('pstats').innerHTML = [
+    ['시가갭', fmt(row.g) + '%', sign(row.g)],
+    ['10시 등락', fmt(row.r) + '%', sign(row.r)],
+    ['10시 눌림', row.p.toFixed(1) + '%', 'mut'],
+    ['최대낙폭', row.dd.toFixed(1) + '%', 'up'],
+    ['종가', fmt(row.e) + '%', sign(row.e)],
+  ].map(x => '<div><span>' + x[0] + '</span><b class="' + x[2] + '">' + x[1] + '</b></div>').join('');
+  peek.hidden = false;
+  draw(row);
+}
+function hide() { peek.hidden = true; current = null; }
+const findRow = k => RAW.find(r => r.d + '|' + r.c === k);
+
+const canHover = matchMedia('(hover: hover)').matches;
+if (canHover) document.documentElement.classList.add('notouch');
+tb.addEventListener('mouseover', e => {
+  if (!canHover) return;
+  const tr = e.target.closest('tr[data-key]');
+  if (!tr) return;
+  clearTimeout(timer);
+  timer = setTimeout(() => show(findRow(tr.dataset.key)), 40);
+});
+tb.addEventListener('click', e => {
+  const tr = e.target.closest('tr[data-key]');
+  if (tr) show(findRow(tr.dataset.key));
+});
+document.getElementById('pclose').onclick = hide;
+tb.addEventListener('focusin', e => {
+  const tr = e.target.closest('tr[data-key]');
+  if (tr) show(findRow(tr.dataset.key));
+});
+document.querySelector('.tablewrap').addEventListener('mouseleave', () => {
+  if (!canHover) return;
+  clearTimeout(timer); hide();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hide(); });
+window.addEventListener('resize', () => { if (current) draw(current); });
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (current) draw(current); });
+
+document.querySelectorAll('[data-dd]').forEach(b => b.onclick = () => {
+  state.dd = +b.dataset.dd;
+  document.querySelectorAll('[data-dd]').forEach(o => o.setAttribute('aria-pressed', o === b));
+  render();
+});
+document.querySelectorAll('[data-t]').forEach(b => b.onclick = () => {
+  state.t = b.dataset.t;
+  document.querySelectorAll('[data-t]').forEach(o => o.setAttribute('aria-pressed', o === b));
+  render();
+});
+document.getElementById('nogap').onclick = e => {
+  state.nogap = !state.nogap;
+  e.currentTarget.setAttribute('aria-pressed', state.nogap);
+  render();
+};
+document.getElementById('q').oninput = e => { state.q = e.target.value; render(); };
+document.querySelectorAll('th[data-k]').forEach(th => th.onclick = () => {
+  const k = th.dataset.k;
+  state.dir = (state.k === k && state.dir === 'asc') ? 'desc' : 'asc';
+  state.k = k;
+  document.querySelectorAll('th[data-k]').forEach(o => o.removeAttribute('data-dir'));
+  th.setAttribute('data-dir', state.dir);
+  th.querySelector('.ar').textContent = state.dir === 'asc' ? '▲' : '▼';
+  render();
+});
+render();
+</script>

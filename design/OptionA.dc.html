@@ -1,0 +1,210 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    :root{
+      --bg:#000000; --surface:#060606; --surface-2:#0d0d0d; --surface-hover:#161514;
+      --border:#3a3020; --border-soft:#23201a;
+      --text:#e8e6e0; --text-dim:#9a9587; --text-faint:#5c584e;
+      --accent:#ff9f1c; --accent-soft:#2a1e0a;
+      --up:#ff4d4d; --up-soft:#2e1010; --down:#29b6ff; --down-soft:#0a2230;
+      --ok:#4be07f; --ok-soft:#0e2417; --danger:#ff5c5c; --danger-soft:#2e1010;
+      --warn:#ffcc4d; --warn-soft:#2e2408;
+    }
+    body{
+      margin:0; background:var(--bg); color:var(--text);
+      font-family:"SF Mono","Consolas","IBM Plex Mono","Malgun Gothic",monospace;
+      font-size:12.5px; line-height:1.45; -webkit-font-smoothing:antialiased;
+      padding:0 18px 24px;
+    }
+    a{color:var(--accent);} a:hover{color:#ffb84d;}
+    table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;}
+    th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--border-soft);font-size:0.76rem;}
+    th{color:var(--text-faint);font-weight:700;font-size:0.66rem;text-transform:uppercase;
+       letter-spacing:0.04em;padding-top:2px;padding-bottom:6px;border-bottom:1px solid var(--border);}
+    tbody tr:last-child td{border-bottom:none;}
+    .panel{background:var(--surface);border:1px solid var(--border-soft);border-radius:2px;padding:12px 14px;}
+    .ph{font-size:0.7rem;font-weight:700;color:var(--text-faint);margin:0 0 9px;padding-bottom:6px;
+      border-bottom:1px solid var(--border-soft);display:flex;align-items:center;
+      justify-content:space-between;gap:10px;text-transform:uppercase;letter-spacing:0.05em;}
+    .btn{border:1px solid var(--border);background:var(--surface-2);color:var(--text);border-radius:2px;
+      padding:5px 12px;font-size:0.72rem;font-weight:700;font-family:inherit;text-transform:uppercase;
+      letter-spacing:0.03em;cursor:pointer;}
+    .btn-ok{background:var(--ok-soft);color:var(--ok);border-color:transparent;}
+    .btn-danger{background:var(--danger-soft);color:var(--danger);border-color:transparent;}
+    .badge{padding:3px 9px;border-radius:2px;font-weight:700;font-size:0.72rem;background:var(--surface-2);
+      border:1px solid var(--border);color:var(--text-dim);font-variant-numeric:tabular-nums;}
+    .rate-up{color:var(--up);font-weight:700;} .rate-down{color:var(--down);font-weight:700;}
+    .empty{color:var(--text-faint);font-size:0.76rem;padding:10px 2px;}
+    .tab{padding:7px 14px;font-size:0.72rem;font-weight:700;text-transform:uppercase;
+      letter-spacing:0.04em;color:var(--text-faint);border-bottom:2px solid transparent;cursor:pointer;}
+    .tab-on{color:var(--accent);border-bottom-color:var(--accent);}
+  </style>
+</helmet>
+
+<div>
+
+  <!-- 헤더: 정체성 + 전환 + 시각. 상태값은 전부 아래 타일로 내려감 -->
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;margin:0 -18px 14px;padding:11px 18px;background:var(--bg);border-bottom:2px solid var(--accent)">
+    <div style="display:flex;align-items:center;gap:20px">
+      <h1 style="font-size:0.95rem;font-weight:700;letter-spacing:0.03em;text-transform:uppercase;margin:0;display:flex;align-items:center;gap:8px;color:var(--accent)">
+        <span style="width:7px;height:7px;background:var(--accent)"></span>trading-dashboard
+      </h1>
+      <div style="display:flex;align-items:center;gap:8px;background:var(--surface-2);border:1px solid var(--border);border-radius:2px;padding:4px 10px">
+        <span style="font-size:0.7rem;color:var(--text-faint);text-transform:uppercase;letter-spacing:0.04em">전략</span>
+        <span style="font-size:0.78rem">전략 1번 · 신고가추세 ▾</span>
+      </div>
+      <div style="display:flex;gap:14px;font-size:0.76rem;color:var(--text-dim);font-variant-numeric:tabular-nums">
+        <span>KOSPI 3,241.08 <span class="rate-down">-0.62%</span></span>
+        <span>KOSDAQ 812.44 <span class="rate-up">+0.31%</span></span>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px">
+      <span style="display:flex;align-items:center;gap:6px;font-size:0.72rem;color:var(--text-faint);text-transform:uppercase;letter-spacing:0.03em">
+        <span style="width:6px;height:6px;border-radius:50%;background:var(--ok)"></span>14:02:11
+      </span>
+    </div>
+  </div>
+
+  <!-- 1층: 지금 당장 봐야 하는 4개. 화면에서 가장 큰 글자 -->
+  <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-bottom:6px">
+
+    <div class="panel" style="padding:14px">
+      <div style="font-size:0.66rem;color:var(--text-faint);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">당일 실현손익</div>
+      <div style="font-size:2rem;font-weight:700;line-height:1;font-variant-numeric:tabular-nums;color:var(--text)">0<span style="font-size:0.9rem;color:var(--text-dim);margin-left:4px">원</span></div>
+      <div style="font-size:0.7rem;color:var(--text-faint);margin-top:8px">한도 3,000,000원 · 사용 0%</div>
+      <div style="height:3px;background:var(--surface-2);margin-top:5px"><div style="width:0%;height:100%;background:var(--ok)"></div></div>
+    </div>
+
+    <div class="panel" style="padding:14px">
+      <div style="font-size:0.66rem;color:var(--text-faint);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">슬롯 사용</div>
+      <div style="font-size:2rem;font-weight:700;line-height:1;font-variant-numeric:tabular-nums">0<span style="font-size:1rem;color:var(--text-faint)">/5</span></div>
+      <div style="display:flex;gap:4px;margin-top:11px">
+        <span style="flex:1;height:6px;background:var(--surface-2);border:1px solid var(--border-soft)"></span>
+        <span style="flex:1;height:6px;background:var(--surface-2);border:1px solid var(--border-soft)"></span>
+        <span style="flex:1;height:6px;background:var(--surface-2);border:1px solid var(--border-soft)"></span>
+        <span style="flex:1;height:6px;background:var(--surface-2);border:1px solid var(--border-soft)"></span>
+        <span style="flex:1;height:6px;background:var(--surface-2);border:1px solid var(--border-soft)"></span>
+      </div>
+      <div style="font-size:0.7rem;color:var(--text-faint);margin-top:6px">종목당 2,000,000원</div>
+    </div>
+
+    <div class="panel" style="padding:14px;background:var(--danger-soft);border-color:var(--danger)">
+      <div style="font-size:0.66rem;color:var(--danger);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">매매 상태</div>
+      <div style="font-size:1.5rem;font-weight:700;line-height:1.1;color:var(--danger)">수동 중단됨</div>
+      <div style="font-size:0.7rem;color:#e09a9a;margin-top:6px">07-27 17:25부터 · 진입 차단 중</div>
+      <button class="btn btn-ok" style="margin-top:10px;width:100%">수동 재개</button>
+    </div>
+
+    <div class="panel" style="padding:14px">
+      <div style="font-size:0.66rem;color:var(--text-faint);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">장 국면</div>
+      <div style="display:flex;align-items:baseline;gap:9px">
+        <span style="width:11px;height:11px;background:var(--ok)"></span>
+        <span style="font-size:1.5rem;font-weight:700;line-height:1;color:var(--ok)">상승</span>
+      </div>
+      <div style="font-size:0.7rem;color:var(--text-dim);margin-top:9px;font-variant-numeric:tabular-nums">이격 +1.84 <span style="color:var(--up)">▲0.21</span></div>
+      <div style="font-size:0.7rem;color:var(--text-dim);margin-top:3px">진입 방식: 눌림목</div>
+    </div>
+  </div>
+
+  <!-- 2층: 내 돈이 걸린 것 (넓게) + 시장 (좁게) -->
+  <div style="display:grid;grid-template-columns:minmax(0,1.85fr) minmax(0,1fr);gap:6px;margin-bottom:6px">
+
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div class="panel">
+        <div class="ph">
+          <span>보유종목 · 실시간</span>
+          <span style="display:flex;gap:6px"><button class="btn btn-ok">시작</button><button class="btn btn-danger">중지</button><button class="btn btn-danger">일괄 매도</button></span>
+        </div>
+        <table>
+          <thead><tr><th>종목</th><th style="text-align:center">수량</th><th style="text-align:center">평균단가</th><th style="text-align:center">현재가</th><th style="text-align:center">평가손익</th><th style="text-align:center">잔여</th><th></th></tr></thead>
+          <tbody>
+            <tr>
+              <td>한화오션 <span style="color:var(--text-faint)">042660</span></td>
+              <td style="text-align:center">28</td><td style="text-align:center">71,400</td><td style="text-align:center">73,900</td>
+              <td style="text-align:center;color:var(--up);font-weight:700">+70,000 (+3.50%)</td>
+              <td style="text-align:center">50%</td>
+              <td style="text-align:right"><span class="btn btn-danger" style="padding:3px 9px;font-size:0.68rem">매도</span></td>
+            </tr>
+            <tr>
+              <td>삼성전기 <span style="color:var(--text-faint)">009150</span></td>
+              <td style="text-align:center">14</td><td style="text-align:center">142,500</td><td style="text-align:center">140,100</td>
+              <td style="text-align:center;color:var(--down);font-weight:700">-33,600 (-1.68%)</td>
+              <td style="text-align:center">100%</td>
+              <td style="text-align:right"><span class="btn btn-danger" style="padding:3px 9px;font-size:0.68rem">매도</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <div class="ph"><span>최근 활동</span><span style="font-size:0.68rem;color:var(--text-faint);text-transform:none;letter-spacing:0">신호 · 체결 통합</span></div>
+        <table>
+          <tbody>
+            <tr><td style="width:64px;color:var(--text-faint)">14:01</td><td style="width:72px"><span style="color:var(--up);font-weight:700">매수</span></td><td>한화오션</td><td style="text-align:right">71,400 × 28</td><td style="width:96px;text-align:right;color:var(--text-dim)">신호 0.62</td></tr>
+            <tr><td style="color:var(--text-faint)">13:47</td><td><span style="color:var(--down);font-weight:700">매도</span></td><td>현대로템</td><td style="text-align:right">38,900 × 25</td><td style="text-align:right;color:var(--text-dim)">1차 익절</td></tr>
+            <tr><td style="color:var(--text-faint)">13:12</td><td><span style="color:var(--text-faint);font-weight:700">신호</span></td><td>삼성전기</td><td style="text-align:right">142,500</td><td style="text-align:right;color:var(--text-dim)">확률 0.58</td></tr>
+            <tr><td style="color:var(--text-faint)">10:33</td><td><span style="color:var(--text-faint);font-weight:700">신호</span></td><td>LS ELECTRIC</td><td style="text-align:right">218,000</td><td style="text-align:right;color:var(--text-faint)">0.41 미달</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="ph"><a href="#" style="color:inherit;text-decoration:none">거래대금 상위 20</a><span style="font-size:0.68rem;color:var(--text-faint);text-transform:none;letter-spacing:0">14:02</span></div>
+      <table>
+        <thead><tr><th style="width:34px;text-align:center">#</th><th>종목명</th><th style="text-align:right">등락률</th><th style="text-align:right">억원</th></tr></thead>
+        <tbody>
+          <tr><td style="text-align:center;color:var(--text-faint)">1</td><td>SK하이닉스</td><td style="text-align:right" class="rate-down">-2.60</td><td style="text-align:right">18,420</td></tr>
+          <tr><td style="text-align:center;color:var(--text-faint)">2</td><td>삼성전자</td><td style="text-align:right" class="rate-down">-2.44</td><td style="text-align:right">12,108</td></tr>
+          <tr style="background:var(--accent-soft)"><td style="text-align:center;color:var(--accent)">3</td><td style="color:var(--accent)">삼성전기</td><td style="text-align:right" class="rate-up">+3.25</td><td style="text-align:right;color:var(--accent)">8,940</td></tr>
+          <tr style="background:var(--accent-soft)"><td style="text-align:center;color:var(--accent)">4</td><td style="color:var(--accent)">한화오션</td><td style="text-align:right" class="rate-up">+7.12</td><td style="text-align:right;color:var(--accent)">7,215</td></tr>
+          <tr><td style="text-align:center;color:var(--text-faint)">5</td><td>현대로템</td><td style="text-align:right" class="rate-up">+1.08</td><td style="text-align:right">6,880</td></tr>
+          <tr><td style="text-align:center;color:var(--text-faint)">6</td><td>LG에너지솔루션</td><td style="text-align:right" class="rate-down">-0.44</td><td style="text-align:right">5,402</td></tr>
+          <tr><td style="text-align:center;color:var(--text-faint)">7</td><td>LS ELECTRIC</td><td style="text-align:right" class="rate-up">+4.90</td><td style="text-align:right">4,930</td></tr>
+          <tr><td style="text-align:center;color:var(--text-faint)">8</td><td>두산에너빌리티</td><td style="text-align:right" class="rate-up">+2.14</td><td style="text-align:right">4,410</td></tr>
+          <tr><td style="text-align:center;color:var(--text-faint)">9</td><td>기아</td><td style="text-align:right" class="rate-down">-1.02</td><td style="text-align:right">3,870</td></tr>
+          <tr><td style="text-align:center;color:var(--text-faint)">10</td><td>NAVER</td><td style="text-align:right" class="rate-up">+0.55</td><td style="text-align:right">3,244</td></tr>
+        </tbody>
+      </table>
+      <div style="font-size:0.68rem;color:var(--text-faint);margin-top:8px;display:flex;align-items:center;gap:6px">
+        <span style="width:8px;height:8px;background:var(--accent-soft);border:1px solid var(--accent)"></span>보유 중인 종목
+      </div>
+    </div>
+  </div>
+
+  <!-- 3층: 지금 안 봐도 되는 것 — 탭 뒤로 -->
+  <div class="panel" style="padding:0">
+    <div style="display:flex;gap:2px;border-bottom:1px solid var(--border-soft);padding:0 6px">
+      <span class="tab tab-on">손익 추이</span>
+      <span class="tab">전략 로직</span>
+      <span class="tab">계좌 · 실행조건</span>
+      <span class="tab">백테스트</span>
+    </div>
+    <div style="padding:12px 14px">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+        <span style="display:inline-flex;gap:1px;background:var(--surface-2);border:1px solid var(--border);border-radius:2px;padding:2px">
+          <span class="btn" style="background:var(--accent-soft);color:var(--accent);border:none;padding:4px 10px">일별</span>
+          <span class="btn" style="background:transparent;border:none;color:var(--text-dim);padding:4px 10px">주간</span>
+          <span class="btn" style="background:transparent;border:none;color:var(--text-dim);padding:4px 10px">월별</span>
+        </span>
+      </div>
+      <div style="height:132px;background:#000;border:1px solid var(--border-soft);border-radius:2px;position:relative;overflow:hidden">
+        <div style="position:absolute;left:0;right:0;top:50%;border-top:1px dashed var(--border-soft)"></div>
+        <svg viewBox="0 0 800 132" preserveAspectRatio="none" style="width:100%;height:100%;display:block">
+          <polyline points="0,72 80,66 160,78 240,60 320,64 400,44 480,52 560,36 640,42 720,26 800,30"
+            fill="none" stroke="#ff9f1c" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+        </svg>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
