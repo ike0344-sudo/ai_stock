@@ -5,6 +5,41 @@
   <title>거래대금 상위 — [0184] 스타일</title>
   <link rel="stylesheet" href="/style.css">
   <style>
+    /* 이 창(exe)만 밝은 테마로 — style.css는 메인 대시보드와 공용이라 건드리지 않고
+       변수만 여기서 덮어쓴다. 검은 배경에서 빨간 등락률이 안 읽힌다는 실사용 피드백. */
+    #filters { margin: .6rem 0 0; }
+
+    .chip {
+      font: inherit; font-size: .78em; cursor: pointer; border-radius: 999px;
+      border: 1px solid var(--surface-2); background: var(--surface); color: inherit;
+      padding: .25em .7em;
+    }
+    .chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+
+    :root {
+      --bg: #ffffff;
+      --surface: #f7f7f5;
+      --surface-2: #f0efec;
+      --surface-hover: #e8e6e1;
+      --inset: #ffffff;
+      --border: #c9c4b8;
+      --border-soft: #e2ded4;
+      --text: #14120e;
+      --text-dim: #5c584e;
+      --text-faint: #8d887c;
+      --accent: #b35c00;
+      --accent-soft: #fdefdc;
+      --up: #c62828;
+      --up-soft: #fbe3e3;
+      --down: #0b63a8;
+      --down-soft: #e0eefa;
+      --ok: #1b7a3f;
+      --ok-soft: #e2f3e8;
+      --danger: #c62828;
+      --danger-soft: #fbe3e3;
+      --warn: #8a6100;
+      --warn-soft: #fbf0d2;
+    }
     body { padding: 18px; }
     header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
     header h1 { font-size: 1rem; margin: 0; }
@@ -38,6 +73,11 @@
 
   <p id="preflight-error" class="empty hidden" style="color: var(--danger);"></p>
 
+  <div id="filters">
+    <button id="only-strong" class="chip" aria-pressed="false">+5% 이상만</button>
+    <button id="sort-by-rate" class="chip" aria-pressed="false">등락률순</button>
+  </div>
+
   <table id="ranking-table">
     <thead>
       <tr>
@@ -50,6 +90,7 @@
 
   <script>
     const POLL_INTERVAL_MS = 3000;
+    const preflightError = new URLSearchParams(location.search).get("error");
     let currentWindow = "extended";
 
     function clearChildren(el) {
@@ -84,46 +125,79 @@
         const data = await res.json();
         const rows = data.rows || [];
 
+        // 조회 실패 사유(예: 키움 API 오류)를 화면에 그대로 — 다른 PC에서 "그냥 안 됨"만
+        // 보고받고 원인을 특정 못 하는 상황을 막는다.
+        const errorEl = document.getElementById("preflight-error");
+        if (data.error) {
+          errorEl.textContent = "⚠ " + data.error;
+          errorEl.classList.remove("hidden");
+        } else if (!preflightError) {
+          errorEl.classList.add("hidden");
+        }
+
         document.getElementById("as-of").textContent = data.as_of ? `${data.as_of} 기준` : "-";
         document.getElementById("ranking-empty").textContent = EMPTY_MESSAGES[currentWindow];
         document.getElementById("ranking-empty").classList.toggle("hidden", !(!data.active && rows.length === 0));
         document.getElementById("ranking-table").classList.toggle("hidden", !data.active && rows.length === 0);
 
-        const tbody = document.getElementById("ranking-tbody");
-        clearChildren(tbody);
-        for (const [index, item] of rows.entries()) {
-          const row = document.createElement("tr");
-          const rateClass = item.change_rate > 0 ? "rate-up" : item.change_rate < 0 ? "rate-down" : "rate-flat";
-
-          const cells = [
-            [index + 1, null],
-            [item.name, null],
-            [Math.round(item.current_price).toLocaleString("ko-KR"), null],
-            [formatChangeRate(item.change_rate), rateClass],
-            [formatTradingValueEok(item.trading_value), null],
-          ];
-          for (const [text, cls] of cells) {
-            const td = document.createElement("td");
-            td.textContent = text;
-            if (cls) td.classList.add(cls);
-            row.appendChild(td);
-          }
-          tbody.appendChild(row);
-        }
+        lastRows = rows.map((item, index) => ({ ...item, _rank: index + 1 }));
+        renderTable();
       } catch (err) {
         // 다음 폴링에서 자연히 재시도됨.
+      }
+    }
+
+    let lastRows = [];
+    let strongOnly = false;            // "+5% 이상만" 토글
+    let sortByRate = false;            // 끄면 거래대금 순(원래 순위), 켜면 등락률 높은 순
+    const STRONG_RATE = 5;
+
+    function renderTable() {
+      const tbody = document.getElementById("ranking-tbody");
+      clearChildren(tbody);
+      const shown = lastRows.filter((item) => !strongOnly || item.change_rate >= STRONG_RATE);
+      // 정렬을 바꿔도 순위 칸은 거래대금 기준 원래 등수(_rank)를 그대로 보여준다
+      if (sortByRate) shown.sort((a, b) => (b.change_rate ?? -Infinity) - (a.change_rate ?? -Infinity));
+      for (const item of shown) {
+        const row = document.createElement("tr");
+        const rateClass = item.change_rate > 0 ? "rate-up" : item.change_rate < 0 ? "rate-down" : "rate-flat";
+        const cells = [
+          [item._rank, null],
+          [item.name, null],
+          [Math.round(item.current_price).toLocaleString("ko-KR"), null],
+          [formatChangeRate(item.change_rate), rateClass],
+          [formatTradingValueEok(item.trading_value), null],
+        ];
+        for (const [text, cls] of cells) {
+          const td = document.createElement("td");
+          td.textContent = text;
+          if (cls) td.classList.add(cls);
+          row.appendChild(td);
+        }
+        tbody.appendChild(row);
       }
     }
 
     // 서버 시작 시 키움 토큰 발급을 미리 시도해본 결과(dashboard_client.py의
     // _preflight_error) — 실패했으면 원인을 화면에 그대로 보여준다. 그래야 다른
     // PC에서 "그냥 안 됨"만 보고 원인을 특정할 수 없는 상황을 피할 수 있다.
-    const preflightError = new URLSearchParams(location.search).get("error");
     if (preflightError) {
       const el = document.getElementById("preflight-error");
       el.textContent = "⚠ " + preflightError;
       el.classList.remove("hidden");
     }
+
+    document.getElementById("sort-by-rate").addEventListener("click", (e) => {
+      sortByRate = !sortByRate;
+      e.currentTarget.setAttribute("aria-pressed", String(sortByRate));
+      renderTable();
+    });
+
+    document.getElementById("only-strong").addEventListener("click", (e) => {
+      strongOnly = !strongOnly;
+      e.currentTarget.setAttribute("aria-pressed", String(strongOnly));
+      renderTable();
+    });
 
     document.getElementById("window-regular-button").addEventListener("click", () => setWindow("regular"));
     document.getElementById("window-extended-button").addEventListener("click", () => setWindow("extended"));

@@ -28,7 +28,23 @@ $targets = @(
     # "앱이 꺼져 있나요?"라고 답할 뿐 봇 자체는 계속 돈다.
     # 롱폴링 한 바퀴가 최대 50초라 하트비트를 폴링 **앞에서** 찍는다 — 뒤에 두면
     # 기동 직후 이 워치독이 표식을 못 보고 죽은 것으로 판단해 다시 띄운다.
-    @{ Type = "Heartbeat"; Match = "sophie_bot"; Args = @("kospi-theme-engine\sophie_bot.py"); LogName = "sophie_bot"; HeartbeatPath = "state\sophie_bot\heartbeat.json" }
+    @{ Type = "Heartbeat"; Match = "sophie_bot"; Args = @("kospi-theme-engine\sophie_bot.py"); LogName = "sophie_bot"; HeartbeatPath = "state\sophie_bot\heartbeat.json" },
+    # 소피증권 급등 알림 조건을 밖에서 재현·기록하는 감시기. 예전엔 사람이 손으로
+    # Start-Process 로 띄웠는데, 그 계보(내 도구 세션의 자식)가 watchdog·sophie_bot처럼
+    # 완전히 detach되지 않아 알 수 없는 시점에 조용히 죽었다(2026-08-29). 여기 등록하면
+    # watchdog 자신의 계보에서 뜨고, 죽어도 5분 내 자동 복구된다.
+    @{ Type = "Heartbeat"; Match = "watch_surge"; Args = @("kospi-theme-engine\watch_surge.py"); LogName = "watch_surge"; HeartbeatPath = "state\watch_surge\heartbeat.json" },
+    # 편지함(state/agent_mail/)에 안 읽은 편지가 있는 에이전트 pane 만 깨운다. claude
+    # 세션은 반응형이라 편지가 와도 입력이 없으면 안 읽는다 — 파이썬이 아니라 ps1이라
+    # FilePath 를 명시한다(기본값은 python).
+    @{ Type = "Heartbeat"; Match = "agent-poke"; FilePath = "powershell.exe"
+       Args = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "agent-poke.ps1", "-Loop")
+       LogName = "agent_poke"; HeartbeatPath = "state\agent_poke\heartbeat.json" },
+    # 소피증권 실시간 체결 웹소켓이 실제로 데이터를 받는지(포트 응답이 아니라 엔진
+    # 틱 카운터·로그 갱신)를 본다. 2026-08-30 실측: 8770 포트는 응답하는데 피드가
+    # 6일간 죽어있었고 아무 알림도 없었다 — monitor-nasdaq-drop/dashboard와 달리
+    # 프로세스 생존 확인만으로는 이 사고를 못 잡는다(결과 기준 감시가 필요했던 이유).
+    @{ Type = "Heartbeat"; Match = "monitor-sophie-feed"; Args = @("-m", "backtesting.cli", "monitor-sophie-feed"); LogName = "sophie_feed_monitor"; HeartbeatPath = "state\sophie_feed_monitor\heartbeat.json" }
 )
 
 # 두 대상의 폴링 주기(15초/30초)보다 훨씬 여유있게, 그러나 이 watchdog 자신의 점검
@@ -176,11 +192,10 @@ function Invoke-BaselineVerifyOnce {
     try {
         $procs = Get-CimInstance Win32_Process -Filter "Name='python.exe'"
         $dupDash = ($procs | Where-Object { $_.CommandLine -match "cli dashboard(\s|$)" } | Measure-Object).Count
-        $dupS4 = ($procs | Where-Object { $_.CommandLine -match "monitor-signals.*strategy_4" } | Measure-Object).Count
-        if ($dupDash -le 1 -and $dupS4 -le 1) {
-            $lines += "PASS 중복 프로세스 없음 (dashboard=$dupDash, strategy_4=$dupS4)"
+        if ($dupDash -le 1) {
+            $lines += "PASS 중복 프로세스 없음 (dashboard=$dupDash)"
         } else {
-            $lines += "FAIL 중복 프로세스 있음 (dashboard=$dupDash, strategy_4=$dupS4)"
+            $lines += "FAIL 중복 프로세스 있음 (dashboard=$dupDash)"
         }
     } catch {
         $lines += "FAIL 프로세스 확인 오류 - $_"
@@ -300,8 +315,20 @@ function Test-MinuteRefreshDue {
     }
 }
 
+$watchdogHeartbeatPath = Join-Path $repoRoot "state\watchdog\heartbeat.json"
+
 while ($true) {
     try {
+        # 워치독 자신이 살아있다는 증거. "powershell.exe 프로세스가 떠있다"는 걸로는
+        # 이 루프가 멈췄는지(예: 위 함수 중 하나가 무한 대기) 판단할 수 없다.
+        New-Item -ItemType Directory -Force -Path (Split-Path $watchdogHeartbeatPath) | Out-Null
+        (@{ updated_at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() } | ConvertTo-Json) |
+            Out-File -FilePath $watchdogHeartbeatPath -Encoding utf8
+
+        # investor.jsonl/surge.jsonl은 재수집 불가한 시계열이라 매 사이클 백업한다.
+        # 멱등적(오늘자 파일을 최신 누적본으로 덮어쓰기)이라 5분마다 불러도 무해하다.
+        try { & python (Join-Path $repoRoot "kospi-theme-engine\backup_logs.py") 2>&1 | Out-Null } catch {}
+
         if (Test-MinuteRefreshDue) {
             Start-Process -FilePath "powershell.exe" `
                 -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $minuteRefreshScript, "-Now") `
@@ -319,19 +346,21 @@ while ($true) {
             Invoke-BaselineVerifyOnce
         }
 
-        $pythonProcesses = Get-CimInstance Win32_Process -Filter "Name='python.exe'"
+        # python.exe 뿐 아니라 powershell.exe 대상(agent-poke.ps1)도 있어 둘 다 훑는다.
+        $candidateProcesses = Get-CimInstance Win32_Process -Filter "Name='python.exe' or Name='powershell.exe'"
         foreach ($target in $targets) {
             if (Test-TargetAlive $target) { continue }
 
             # 죽었거나 멈췄으면 같은 커맨드라인의 기존 프로세스가 남아있을 수 있으니
             # 먼저 정리한다 — 안 그러면 멈춘 프로세스와 새로 띄운 프로세스가 동시에 돌면서
             # (대시보드는 포트 충돌, 감시는 텔레그램 알림 중복 발송) 문제가 생긴다.
-            $stuck = $pythonProcesses | Where-Object { $_.CommandLine -match $target.Match }
+            $stuck = $candidateProcesses | Where-Object { $_.CommandLine -match $target.Match }
             foreach ($proc in $stuck) {
                 try { Stop-Process -Id $proc.ProcessId -Force } catch {}
             }
 
-            Start-Process -FilePath "python" -ArgumentList $target.Args `
+            $exe = if ($target.FilePath) { $target.FilePath } else { "python" }
+            Start-Process -FilePath $exe -ArgumentList $target.Args `
                 -WorkingDirectory $repoRoot -WindowStyle Hidden `
                 -RedirectStandardOutput (Join-Path $repoRoot "$($target.LogName).log") `
                 -RedirectStandardError (Join-Path $repoRoot "$($target.LogName).err.log")

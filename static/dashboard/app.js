@@ -16,11 +16,15 @@ function strategyQuery() {
 function renderStrategyStatus(strategies, running) {
   const container = document.getElementById("strategy-status-list");
   clearChildren(container);
+  // 9개를 요약칩 하나로 접었다가 되돌렸다 — 어느 것이 죽었는지 한눈에 보여야 한다.
+  // 대신 자기 줄을 통째로 쓰게 해(style.css .strategy-status-list) 폭이 줄어도
+  // 다른 항목 사이에 끼어들며 헤더 높이를 널뛰게 하지 않는다.
   for (const name of strategies) {
     const badge = document.createElement("span");
     const isRunning = Boolean(running && running[name]);
-    badge.className = "badge " + (isRunning ? "badge-ok" : "badge-danger");
+    badge.className = "badge badge-mini " + (isRunning ? "badge-ok" : "badge-danger");
     badge.textContent = name;
+    badge.title = name + (isRunning ? " 실행 중" : " 중지됨");
     container.appendChild(badge);
   }
 }
@@ -46,6 +50,7 @@ async function loadStrategies() {
     select.value = currentStrategy;
     renderStrategyStatus(data.strategies, data.running);
     const currentlyRunning = Boolean(data.running && data.running[currentStrategy]);
+    document.getElementById("trading-state-sub").textContent = currentlyRunning ? "실행 중" : "루프 중지";
     document.getElementById("strategy-start-button").disabled = currentlyRunning;
     document.getElementById("strategy-stop-button").disabled = !currentlyRunning;
   } catch (err) {
@@ -114,10 +119,67 @@ async function pollMarketSnapshot() {
   }
 }
 
+const REGIME_BADGE_CLASS = { good: "badge-ok", warn: "badge-warn", bad: "badge-danger" };
+
+function renderRegimeSignal(data) {
+  const badge = document.getElementById("regime-signal-badge");
+  const style = document.getElementById("entry-style-badge");
+  const spread = document.getElementById("regime-spread-badge");
+  if (!data || !data.ok) {
+    badge.className = "stat-value";
+    badge.textContent = "-";
+    badge.title = data && data.error ? data.error : "국면 판정 불가";
+    style.className = "stat-chip";
+    style.textContent = "진입 -";
+    spread.className = "stat-chip";
+    spread.textContent = "이격 -";
+    return;
+  }
+  const sp = data.spread_pct >= 0 ? `+${data.spread_pct}` : `${data.spread_pct}`;
+  const arrow = data.slope_pct > 0 ? "▲" : data.slope_pct < 0 ? "▼" : "-";
+  spread.textContent = `이격 ${sp}% ${arrow}${Math.abs(data.slope_pct).toFixed(2)}`;
+  // 과열이면서 좁혀지기 시작한 칸만 붉게 — 건별 손익에서 부호가 뒤집힌 유일한 조합이다.
+  spread.className = "stat-chip " + (data.hot_fading ? "badge-danger" : data.hot ? "badge-warn" : "badge-ok");
+  spread.title = `60선 ${data.ma60} · 120선 ${data.ma120} (코스피 ${data.index})
+`
+    + `이격 ${sp}%${data.hot ? " — 과열" : ""} · 2시간 전 대비 ${data.slope_pct >= 0 ? "+" : ""}${data.slope_pct}%p (${data.widening ? "벌어지는 중" : "좁혀지는 중"})
+`
+    + `과열 구간에서 확대 중이면 평균 +1.86%, 축소 시작이면 -1.85% (각 8건/6건 — 표본 작음)
+`
+    + `기준 ${data.as_of}`;
+  style.className = "stat-chip " + (data.breakout_day ? "badge-breakout" : "badge-ok");
+  style.textContent = data.breakout_day ? "오늘은 돌파의 날" : "진입: 전량 시장가";
+  style.title = `${data.style_reason}
+트레일 -5% 공통`
+    + `
+근거: 역배열+60선 아래 칸만 돌파가 3분기 연속 이겼다 (누적 126% -> 150%)`;
+  badge.className = "stat-value " + REGIME_BADGE_CLASS[data.grade];
+  badge.textContent = data.label;
+  // 추세/분위기와 근거 수치는 툴팁으로 — 값 칸에 다 붙이면 한눈에 읽히지 않는다
+  badge.title = `${data.trend} · ${data.mood}
+${data.reason}
+`
+    + `코스피 ${data.index} · 60선 ${data.ma60} · 120선 ${data.ma120}
+`
+    + `60/120 이격 ${data.spread_pct >= 0 ? "+" : ""}${data.spread_pct}%${data.hot ? " (과열)" : ""}
+`
+    + `기준 ${data.as_of}`;
+}
+
+async function pollRegimeSignal() {
+  try {
+    const res = await fetch("/api/regime-signal");
+    if (res.ok) renderRegimeSignal(await res.json());
+  } catch (err) {
+    // 다음 폴링에서 자연히 재시도됨.
+  }
+}
+
 function renderNasdaqDropMonitorStatus(running) {
   const badge = document.getElementById("nasdaq-drop-monitor-badge");
-  badge.className = "badge " + (running ? "badge-ok" : "badge-danger");
-  badge.textContent = "나스닥 급락 감시";
+  badge.className = "badge badge-mini " + (running ? "badge-ok" : "badge-danger");
+  badge.textContent = "나스닥";
+  badge.title = "나스닥 급락 감시 " + (running ? "정상" : "중지됨");
 }
 
 async function pollNasdaqDropMonitorStatus() {
@@ -131,8 +193,9 @@ async function pollNasdaqDropMonitorStatus() {
 
 function renderDashboardMonitorStatus(running) {
   const badge = document.getElementById("dashboard-monitor-badge");
-  badge.className = "badge " + (running ? "badge-ok" : "badge-danger");
-  badge.textContent = "대시보드 감시";
+  badge.className = "badge badge-mini " + (running ? "badge-ok" : "badge-danger");
+  badge.textContent = "모니터";
+  badge.title = "대시보드 감시 " + (running ? "정상" : "중지됨");
 }
 
 async function pollDashboardMonitorStatus() {
@@ -205,7 +268,15 @@ function renderRanking(windowKey, data) {
     row.appendChild(changeTd);
 
     const nameTd = document.createElement("td");
-    nameTd.textContent = item.name;
+    if (item.is_high_120) {
+      // 120거래일 신고가 — 종목명 앞에 별표. title에 기준 고가를 넣어 마우스로 확인 가능.
+      const star = document.createElement("span");
+      star.textContent = "★";
+      star.className = "high120-star";
+      star.title = `120일 신고가 (직전 최고 ${formatKrw(item.high_120)})`;
+      nameTd.appendChild(star);
+    }
+    nameTd.appendChild(document.createTextNode(item.name));
     row.appendChild(nameTd);
 
     const valueTd = document.createElement("td");
@@ -295,17 +366,22 @@ async function triggerSellOne(code, name, quantity) {
 
 function renderState(state) {
   const pnlBadge = document.getElementById("pnl-badge");
-  pnlBadge.textContent = "당일손익: " + formatKrw(state.realized_pnl_krw);
+  pnlBadge.textContent = formatKrw(state.realized_pnl_krw);
   pnlBadge.classList.toggle("badge-negative", state.realized_pnl_krw < 0);
   pnlBadge.classList.toggle("badge-positive", state.realized_pnl_krw >= 0);
+  document.getElementById("pnl-limit-sub").textContent =
+    headerLimits.maxDailyLoss ? "한도 " + formatKrw(headerLimits.maxDailyLoss) : "";
 
   const killSwitchBadge = document.getElementById("kill-switch-badge");
+  killSwitchBadge.title = state.kill_switch_active
+    ? "킬스위치 작동 중 — 신규 진입이 차단된다"
+    : "정상 운영 중";
   if (state.kill_switch_active) {
-    killSwitchBadge.textContent = "거래 중단 (kill switch)";
+    killSwitchBadge.textContent = "중단됨";
     killSwitchBadge.classList.remove("badge-ok");
     killSwitchBadge.classList.add("badge-danger");
   } else {
-    killSwitchBadge.textContent = "정상 운영";
+    killSwitchBadge.textContent = "정상";
     killSwitchBadge.classList.remove("badge-danger");
     killSwitchBadge.classList.add("badge-ok");
   }
@@ -313,6 +389,12 @@ function renderState(state) {
   const tbody = document.getElementById("positions-tbody");
   clearChildren(tbody);
   const positions = state.open_positions || [];
+  const slot = document.getElementById("slot-usage");
+  slot.textContent = headerLimits.maxPositions
+    ? `${positions.length}/${headerLimits.maxPositions}`
+    : String(positions.length);
+  slot.classList.toggle("badge-warn", Boolean(headerLimits.maxPositions) && positions.length >= headerLimits.maxPositions);
+  document.getElementById("slot-sub").textContent = positions.length === 0 ? "비어 있음" : "";
   document.getElementById("positions-empty").classList.toggle("hidden", positions.length > 0);
   document.getElementById("positions-table").classList.toggle("hidden", positions.length === 0);
 
@@ -353,7 +435,13 @@ function formatConfigValue(key, value) {
   return String(value);
 }
 
+let headerLimits = { maxPositions: null, maxDailyLoss: null };
+
 function renderConfig(config) {
+  headerLimits = {
+    maxPositions: config.max_concurrent_positions ?? null,
+    maxDailyLoss: config.max_daily_loss_krw ?? null,
+  };
   const tbody = document.getElementById("config-tbody");
   clearChildren(tbody);
   const entries = CONFIG_FIELD_LABELS.filter(([key]) => config[key] !== undefined);
@@ -406,7 +494,7 @@ function renderSignals(signals) {
       signal.stock_code,
       signal.signal_time,
       formatKrw(signal.price),
-      signal.proba != null ? signal.proba.toFixed(2) : "-",  // strategy3_scalp처럼 ML 게이트가 없는 전략은 proba 필드 자체가 없음
+      signal.proba != null ? signal.proba.toFixed(2) : "-",  // ML 게이트가 없는 전략은 proba 필드가 아예 없다
     ];
     for (const value of cells) {
       const td = document.createElement("td");
@@ -821,12 +909,14 @@ pollSellAllStatus();
 pollAllRankings();
 pollNasdaqDropMonitorStatus();
 pollDashboardMonitorStatus();
+pollRegimeSignal();
 setInterval(pollOnce, POLL_INTERVAL_MS);
 setInterval(pollTop35Status, TOP35_POLL_INTERVAL_MS);
 setInterval(pollKillSwitchOverrideStatus, TOP35_POLL_INTERVAL_MS);
 setInterval(pollNasdaqDropMonitorStatus, MARKET_POLL_INTERVAL_MS);
 setInterval(pollDashboardMonitorStatus, MARKET_POLL_INTERVAL_MS);
 setInterval(pollMarketSnapshot, MARKET_POLL_INTERVAL_MS);
+setInterval(pollRegimeSignal, MARKET_POLL_INTERVAL_MS);
 setInterval(pollAccountSnapshot, POLL_INTERVAL_MS);
 setInterval(pollSellAllStatus, TOP35_POLL_INTERVAL_MS);
 setInterval(pollAllRankings, POLL_INTERVAL_MS);
