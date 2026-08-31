@@ -9,14 +9,10 @@ STRATEGY_DESCRIPTIONS에 등록만 하면 대시보드가 자동으로 노출한
 """
 from .final_strategy import describe_strategy_1
 from .oversold_strategy import describe_strategy_2
-from .strategy3_scalp import describe_strategy_3
-from .strategy4_rank_watch import describe_strategy_4
 
 STRATEGY_DESCRIPTIONS = {
     "strategy_1": describe_strategy_1,
     "strategy_2": describe_strategy_2,
-    "strategy_3": describe_strategy_3,
-    "strategy_4": describe_strategy_4,
 }
 
 

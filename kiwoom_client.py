@@ -20,6 +20,27 @@ def _is_invalid_token_response(payload: dict) -> bool:
     return payload.get("return_code") not in (0, None) and INVALID_TOKEN_ERROR_CODE in str(payload.get("return_msg", ""))
 
 
+def raise_if_error(payload: dict) -> None:
+    """return_code!=0인 응답을 그대로 흘려보내면, "페이지가 끝났다"고 해석하는 곳
+    (아래 _paginate, 또는 수동으로 cont-yn/next-key를 도는 호출부)에서 진짜 오류를
+    "더 이상 과거 데이터가 없다"와 구분 못 한다(실측: 2026-08-30 ka10079 79종목이
+    이렇게 빈 채로 "완료"로 잘못 처리됨 — tick_collect_803_828.py).
+
+    request_tr 자체에는 이 체크를 넣지 않는다 — kt00005(계좌평가)가 모의투자에서
+    return_code=20("RC9000:모의투자에서는 지원하지 않는 기능")을 정상적으로 돌려주고
+    호출부가 그 값을 보고 직접 분기하는 게 이미 의도된 동작이자 회귀 테스트로
+    고정돼 있다(test_request_tr_does_not_reissue_token_on_other_api_errors). 반면
+    상장폐지·존재하지 않는 종목코드는 return_code=0 그대로 오고 목록에 빈 값 한 줄이
+    들어오는 방식이라(실측: 999999, 309710) 이 체크와 충돌하지 않는다 — "데이터 없음"과
+    "API 오류"는 애초에 다른 신호로 구분된다.
+
+    호출부에서 직접 페이지네이션을 도는 경우(예: 틱 수집처럼 _paginate를 안 쓰는
+    경우)도 이 함수를 그대로 재사용해 같은 기준을 쓴다."""
+    rc = payload.get("return_code")
+    if rc is not None and rc != 0:
+        raise RuntimeError(f"API 오류 - return_code={rc} {payload.get('return_msg', '')}".strip())
+
+
 class KiwoomClient:
     def __init__(self, appkey: str, secretkey: str, is_mock: bool = True, min_request_interval: float = 1.1):
         self.appkey = appkey
@@ -151,6 +172,7 @@ class KiwoomClient:
 
         for _ in range(max_pages):
             payload = self.request_tr(api_id, body, path=path, cont_yn=cont_yn, next_key=next_key)
+            raise_if_error(payload)
             pages.append(payload)
             if self.last_cont_yn != "Y" or not self.last_next_key:
                 break
@@ -172,6 +194,17 @@ class KiwoomClient:
         base_date = base_date or date.today().strftime("%Y%m%d")
         body = {"stk_cd": stock_code, "base_dt": base_date, "upd_stkpc_tp": "1"}
         return self._paginate("ka10081", body, path="/api/dostk/chart", max_pages=max_pages)
+
+    def get_monthly_chart_pages(self, stock_code: str, base_date: str = "", max_pages: int = 2) -> list[dict]:
+        """주식월봉차트조회요청 (ka10083). 역사적 신고가처럼 **상장 이후 전체**가 필요할 때 쓴다.
+
+        실측 1페이지 = 240행 = 20년. 일봉으로 같은 기간을 받으려면 종목당 10페이지가
+        필요해 전 종목이면 몇 시간이 걸린다 — 월봉은 1~2페이지로 끝난다.
+        upd_stkpc_tp="1"이라 액면분할이 반영된 수정주가다(옛 고가와 그대로 비교 가능).
+        """
+        base_date = base_date or date.today().strftime("%Y%m%d")
+        body = {"stk_cd": stock_code, "base_dt": base_date, "upd_stkpc_tp": "1"}
+        return self._paginate("ka10083", body, path="/api/dostk/chart", max_pages=max_pages)
 
     def get_minute_chart(self, stock_code: str, tic_scope: str = "1", exchange: str | None = None) -> dict:
         """주식분봉차트조회요청 (ka10080). tic_scope: 1/3/5/10/15/30/45/60분. 첫 페이지만 반환.
@@ -290,6 +323,12 @@ class KiwoomClient:
         result = self.request_tr(api_id, body, path="/api/dostk/ordr")
         self._submitted_orders[order_id] = result
         return result
+
+    def seed_submitted_order(self, client_order_id: str, response: dict) -> None:
+        """멱등성 캐시(_submitted_orders)에 과거 place_order 응답을 재주입한다.
+        이 캐시는 프로세스 메모리뿐이라 재시작하면 비는데(위 주석), order_execution.
+        load_recent_orders()가 디스크 로그로 재시작 후 복원할 때 쓴다."""
+        self._submitted_orders[client_order_id] = response
 
     def cancel_order(self, order_no: str, stock_code: str, quantity: int, exchange: str | None = None) -> dict:
         """주식 취소주문 (kt10003). quantity=0이면 잔량 전부 취소.

@@ -56,35 +56,47 @@ def _combo_task(packed):
     (params, strategy, stock_code, split_idx, start, end, interval, data_dir,
      commission_rate, slippage_rate, initial_capital, tax_rate) = packed
     c = _candles(stock_code, start, end, interval, data_dir)
-    return _one_combo((params, strategy, c.iloc[:split_idx], c.iloc[split_idx:], stock_code,
+    return _one_combo((params, strategy, c, split_idx, stock_code,
                        commission_rate, slippage_rate, initial_capital, tax_rate))
 
 
 def _one_combo(packed):
-    """파라미터 조합 하나. 순차 경로와 **같은 코드**를 부르도록 여기 한 번만 적는다."""
-    (params, strategy, in_sample, out_of_sample, stock_code,
+    """파라미터 조합 하나. 순차 경로와 **같은 코드**를 부르도록 여기 한 번만 적는다.
+
+    IS/OOS를 따로 evaluate+simulate하지 않는다 — 예전엔 candles.iloc[:split_idx]와
+    candles.iloc[split_idx:]를 독립적으로 돌렸는데, 그러면 두 문제가 생긴다(둘 다
+    daily_walk_forward.py 최적화 중 실측으로 확인한 것과 같은 계열의 문제):
+    (1) split 경계에서 아직 안 닫힌 포지션이 있으면 OOS 쪽이 그걸 모르고 자기 구간
+    안의 신호를 또 새 진입으로 잡을 수 있다(폴드 독립 실행과 같은 이중진입 버그).
+    (2) OOS만 잘라 evaluate하면 롤링 지표가 워밍업 없이 시작돼 초반 며칠의 신호가
+    죽는다(다일봉 보유·긴 롤링윈도 전략일수록 심함, 예: n_day_high=60 스윙류).
+    그래서 전체 캔들을 한 번만 evaluate+simulate하고, 거래를 entry_date로 IS/OOS에
+    사후 배정한다 — 판단 로직(신호 조건)은 그대로, 나누는 시점만 바뀐다.
+    """
+    (params, strategy, candles, split_idx, stock_code,
      commission_rate, slippage_rate, initial_capital, tax_rate) = packed
     try:
-        signals_is = strategy.evaluate(in_sample, params)
-        signals_oos = strategy.evaluate(out_of_sample, params)
+        signals = strategy.evaluate(candles, params)
     except ValueError:
         return None            # 잘못된 파라미터 조합 (예: short_window >= long_window)
 
-    trades_is = simulator.run(
-        in_sample, signals_is, commission_rate, slippage_rate, initial_capital, stock_code,
+    trades = simulator.run(
+        candles, signals, commission_rate, slippage_rate, initial_capital, stock_code,
         tax_rate=tax_rate,
     )
-    trades_oos = simulator.run(
-        out_of_sample, signals_oos, commission_rate, slippage_rate, initial_capital, stock_code,
-        tax_rate=tax_rate,
-    )
+
+    split_date = candles.index[split_idx].date()
+    trades_is = [t for t in trades if t.entry_date < split_date]
+    trades_oos = [t for t in trades if t.entry_date >= split_date]
+    in_sample, out_of_sample = candles.iloc[:split_idx], candles.iloc[split_idx:]
+
     return GridSearchResult(
         stock_code=stock_code,
         strategy_name=strategy.name,
         params=params,
         in_sample=metrics.compute(trades_is, in_sample, initial_capital),
         out_of_sample=metrics.compute(trades_oos, out_of_sample, initial_capital),
-        trades=trades_is + trades_oos,
+        trades=trades,
         benchmark_is_return_pct=metrics.buy_and_hold_return_pct(in_sample),
         benchmark_oos_return_pct=metrics.buy_and_hold_return_pct(out_of_sample),
     )
@@ -158,9 +170,8 @@ def run_rule_based(
         return results
 
     for stock_code, candles, split_idx in loaded:
-        in_sample, out_of_sample = candles.iloc[:split_idx], candles.iloc[split_idx:]
         for params in combos:
-            r = _one_combo((params, strategy, in_sample, out_of_sample, stock_code,
+            r = _one_combo((params, strategy, candles, split_idx, stock_code,
                             commission_rate, slippage_rate, initial_capital, tax_rate))
             if r is not None:
                 results.append(r)

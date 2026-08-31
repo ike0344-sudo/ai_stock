@@ -192,6 +192,36 @@ def test_paginate_stops_at_max_pages_even_if_cont_yn_still_y(monkeypatch):
     assert len(pages) == 2
 
 
+def test_paginate_raises_on_nonzero_return_code(monkeypatch):
+    # 회귀 테스트 — 2026-08-30 ka10079(틱) 수집에서 return_code!=0 페이지를 "더 이상
+    # 과거 데이터 없음"으로 오인해 79종목이 빈 채로 완료 처리된 사고. _paginate가
+    # 조용히 넘어가지 않고 예외를 던지는지 확인한다(실제 API 호출 없이 mock으로).
+    client, _ = _client_with_stub_request(
+        monkeypatch,
+        pages_by_call=[{"return_code": 3, "return_msg": "일시적 오류"}],
+        cont_yns=["N"],
+    )
+
+    try:
+        client._paginate("ka10079", {"a": 1}, path="/api/dostk/chart", max_pages=10)
+        assert False, "return_code!=0인데 예외 없이 조용히 반환됨"
+    except RuntimeError as exc:
+        assert "return_code=3" in str(exc)
+
+
+def test_paginate_does_not_raise_when_return_code_absent(monkeypatch):
+    # 위 테스트가 기존 픽스처(return_code 필드 자체가 없는 테스트용 payload)를
+    # 깨뜨리지 않는지 확인 — payload에 return_code가 아예 없으면(테스트 픽스처 등)
+    # 통과시킨다.
+    client, calls = _client_with_stub_request(
+        monkeypatch, pages_by_call=[{"p": 1}, {"p": 2}], cont_yns=["Y", "N"]
+    )
+
+    pages = client._paginate("ka99999", {"a": 1}, path="/api/dostk/chart", max_pages=10)
+
+    assert len(pages) == 2
+
+
 def test_get_daily_chart_pages_uses_ka10081(monkeypatch):
     client, calls = _client_with_stub_request(monkeypatch, pages_by_call=[{"p": 1}], cont_yns=["N"])
 
@@ -199,6 +229,15 @@ def test_get_daily_chart_pages_uses_ka10081(monkeypatch):
 
     assert calls[0]["api_id"] == "ka10081"
     assert calls[0]["body"] == {"stk_cd": "005930", "base_dt": "20260716", "upd_stkpc_tp": "1"}
+
+
+def test_get_monthly_chart_pages_uses_ka10083(monkeypatch):
+    client, calls = _client_with_stub_request(monkeypatch, pages_by_call=[{"p": 1}], cont_yns=["N"])
+
+    client.get_monthly_chart_pages("005930", base_date="20260821", max_pages=2)
+
+    assert calls[0]["api_id"] == "ka10083"
+    assert calls[0]["body"] == {"stk_cd": "005930", "base_dt": "20260821", "upd_stkpc_tp": "1"}
 
 
 def test_get_stock_list_returns_list_field(monkeypatch):

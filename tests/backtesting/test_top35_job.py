@@ -186,3 +186,75 @@ def test_finished_successfully_today_false_when_done_status_is_from_a_previous_d
 def test_finished_successfully_today_false_when_idle():
     status = {"status": "idle", "finished_at": None}
     assert _finished_successfully_today(status, "2026-07-25") is False
+
+
+# ---- 실패 알림 ----
+
+def _summary_with_one_failure():
+    return pd.DataFrame([
+        {"stock_code": "000660", "name": "SK하이닉스", "status": "ok"},
+        {"stock_code": "005930", "name": "삼성전자", "status": "실패: DNS 해석 실패"},
+    ])
+
+
+@pytest.fixture
+def notify_calls(monkeypatch):
+    calls = []
+    monkeypatch.setattr(top35_job, "notify_top35_failed",
+                        lambda *args: calls.append(args) or True)
+    monkeypatch.setattr(top35_job, "_bot_token", "token")
+    monkeypatch.setattr(top35_job, "_chat_id", "chat")
+    return calls
+
+
+def test_partial_failure_sends_telegram_alert(monkeypatch, notify_calls):
+    # 일부 종목만 실패한 날은 status가 "done"이라 스케줄러가 재시도하지 않는다 —
+    # 알림이 유일한 발견 수단이라 반드시 나가야 한다.
+    monkeypatch.setattr(top35_job, "update_top35",
+                        lambda client, data_dir, market, on_progress=None: _summary_with_one_failure())
+
+    start_job("key", "secret", True)
+
+    assert _wait_until(lambda: get_status()["status"] == "done")
+    assert _wait_until(lambda: len(notify_calls) == 1)
+    fail_count, total, failures, bot_token, chat_id = notify_calls[0]
+    assert (fail_count, total, bot_token, chat_id) == (1, 2, "token", "chat")
+    assert failures[0][0] == "005930" and "DNS" in failures[0][2]
+
+
+def test_all_ok_sends_nothing(monkeypatch, notify_calls):
+    monkeypatch.setattr(top35_job, "update_top35",
+                        lambda client, data_dir, market, on_progress=None:
+                        pd.DataFrame([{"stock_code": "000660", "name": "SK하이닉스", "status": "ok"}]))
+
+    start_job("key", "secret", True)
+
+    assert _wait_until(lambda: get_status()["status"] == "done")
+    assert notify_calls == []
+
+
+def test_job_exception_sends_alert(monkeypatch, notify_calls):
+    def blow_up(client, data_dir, market, on_progress=None):
+        raise RuntimeError("토큰 발급 실패")
+
+    monkeypatch.setattr(top35_job, "update_top35", blow_up)
+
+    start_job("key", "secret", True)
+
+    assert _wait_until(lambda: get_status()["status"] == "error")
+    assert _wait_until(lambda: len(notify_calls) == 1)
+    assert "토큰 발급 실패" in notify_calls[0][2][0][2]
+
+
+def test_no_alert_without_recipient(monkeypatch):
+    calls = []
+    monkeypatch.setattr(top35_job, "notify_top35_failed", lambda *args: calls.append(args))
+    monkeypatch.setattr(top35_job, "_bot_token", "")
+    monkeypatch.setattr(top35_job, "_chat_id", "")
+    monkeypatch.setattr(top35_job, "update_top35",
+                        lambda client, data_dir, market, on_progress=None: _summary_with_one_failure())
+
+    start_job("key", "secret", True)
+
+    assert _wait_until(lambda: get_status()["status"] == "done")
+    assert calls == []

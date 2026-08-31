@@ -49,6 +49,7 @@ from .risk_manager import (
     record_position_added_to,
     record_position_closed,
     record_position_opened,
+    risk_state_lock,
     roll_to_new_day_if_needed,
     save_state,
 )
@@ -261,6 +262,7 @@ def run_oversold_trading_loop(
     kill_switch_override_path: str = DEFAULT_KILL_SWITCH_OVERRIDE_PATH,
     use_realtime_feed: bool = True,
     stop_flag_path: str | None = None,
+    state_dir: str | None = None,
 ) -> None:
     """정규장 동안 반복: kill switch 확인 → 60선/현재가 갱신 → 청산 조건 확인(항상,
     킬스위치와 무관) → 신규/추가 분할매수 확인(킬스위치 아닐 때만) → 상태 저장.
@@ -269,11 +271,16 @@ def run_oversold_trading_loop(
     — PDF 권장 배정비중(20~30%)에 맞게 run-trading 실행 시 총자산의 20~30%만 넣는다.
     3단 분할이므로 티어 1회당 total_capital_krw/3만큼 매수한다.
 
+    state_dir: heartbeat/중지플래그를 쓸 전략별 폴더 — risk_state_path(계좌 전체 공유,
+    risk-agent.md 계좌 단일화)와 분리한다. 미지정 시 risk_state_path의 폴더로 폴백한다
+    (기존 호출부와의 하위호환용; cli.py는 항상 state/strategy_2/를 명시로 넘긴다).
+
     stop_flag_path: 대시보드 "중지" 버튼의 우아한 종료 플래그(stop_control.py) — trading_loop.
-    run_trading_loop과 동일한 규칙(미지정 시 risk_state_path와 같은 폴더, 시작 시 자동 clear)."""
-    stop_flag_path = stop_flag_path or os.path.join(os.path.dirname(risk_state_path), "stop_requested.json")
+    run_trading_loop과 동일한 규칙(미지정 시 state_dir 밑, 시작 시 자동 clear)."""
+    state_dir = state_dir or os.path.dirname(risk_state_path)
+    stop_flag_path = stop_flag_path or os.path.join(state_dir, "stop_requested.json")
     clear_stop_flag(stop_flag_path)
-    write_heartbeat(os.path.dirname(risk_state_path))  # 백필 완료 전에도 "실행 중"으로 즉시 보이게(trading_loop.py와 동일 이유)
+    write_heartbeat(state_dir)  # 백필 완료 전에도 "실행 중"으로 즉시 보이게(trading_loop.py와 동일 이유)
 
     risk_state = roll_to_new_day_if_needed(load_state(risk_state_path), pnl_history_path=pnl_history_path)
     episode = load_episode_state(risk_state_path)
@@ -313,10 +320,6 @@ def run_oversold_trading_loop(
 
     try:
         while is_extended_market_open(datetime.now()) and not is_stop_requested(stop_flag_path):
-            risk_state = roll_to_new_day_if_needed(risk_state, pnl_history_path=pnl_history_path)
-            if is_kill_switch_requested(kill_switch_override_path):
-                risk_state.kill_switch_active = True
-
             today_1min = feed.get_minute_df(STOCK_CODE) if feed is not None else pd.DataFrame()
             ma_value = compute_current_ma(historical_1min, today_1min)
             current_price = feed.get_latest_price(STOCK_CODE) if feed is not None else None
@@ -330,34 +333,43 @@ def run_oversold_trading_loop(
                     current_price = _parse_quote_price(quote["buy_fpr_bid"])
                 except Exception as exc:
                     notify_error(STRATEGY_NAME, f"{STOCK_CODE} 현재가 조회 실패", exc, bot_token, chat_id)
-                    write_heartbeat(os.path.dirname(risk_state_path))
+                    write_heartbeat(state_dir)
                     time.sleep(poll_interval_seconds)
                     continue
 
             if ma_value is not None:
-                was_open = episode.filled_tier_count > 0
-                episode = process_oversold_exit_once(
-                    client, risk_state, episode, ma_value, current_price, max_daily_loss_krw,
-                    bot_token, chat_id, order_log_path=order_log_path, today=today,
-                )
-                just_closed = was_open and episode.filled_tier_count == 0
-                # 하드스톱 발동가(평단*0.8)는 항상 다음 미체결 밴드가(60선*0.91 이상)보다
-                # 낮아, 방금 청산과 같은 current_price로 진입을 확인하면 그 자리에서 곧바로
-                # 재매수(휩쏘)돼버린다 — 이번 폴링에서 막 청산됐으면 진입 확인을 건너뛰고
-                # 다음 폴링(새 가격)부터 다시 신규 진입을 본다.
-                if not risk_state.kill_switch_active and not just_closed:
-                    episode = process_oversold_entry_once(
-                        client, risk_state, episode, ma_value, current_price, tier_capital_krw,
-                        bot_token, chat_id, total_capital_krw, order_log_path=order_log_path,
-                    )
+                # 계좌 전체가 공유하는 risk_state.json을 매 사이클 락 밑에서 새로 읽어
+                # 반영·저장한다 — trading_loop.py(전략1)와 동시에 떠 있어도 서로 상대가
+                # 방금 쓴 킬스위치/포지션/손익을 덮어쓰지 않는다(risk-agent.md 계좌 단일화).
+                with risk_state_lock(risk_state_path):
+                    risk_state = roll_to_new_day_if_needed(load_state(risk_state_path), pnl_history_path=pnl_history_path)
+                    if is_kill_switch_requested(kill_switch_override_path):
+                        risk_state.kill_switch_active = True
 
-            save_state(risk_state, risk_state_path)
+                    was_open = episode.filled_tier_count > 0
+                    episode = process_oversold_exit_once(
+                        client, risk_state, episode, ma_value, current_price, max_daily_loss_krw,
+                        bot_token, chat_id, order_log_path=order_log_path, today=today,
+                    )
+                    just_closed = was_open and episode.filled_tier_count == 0
+                    # 하드스톱 발동가(평단*0.8)는 항상 다음 미체결 밴드가(60선*0.91 이상)보다
+                    # 낮아, 방금 청산과 같은 current_price로 진입을 확인하면 그 자리에서 곧바로
+                    # 재매수(휩쏘)돼버린다 — 이번 폴링에서 막 청산됐으면 진입 확인을 건너뛰고
+                    # 다음 폴링(새 가격)부터 다시 신규 진입을 본다.
+                    if not risk_state.kill_switch_active and not just_closed:
+                        episode = process_oversold_entry_once(
+                            client, risk_state, episode, ma_value, current_price, tier_capital_krw,
+                            bot_token, chat_id, total_capital_krw, order_log_path=order_log_path,
+                        )
+                    save_state(risk_state, risk_state_path)
+
             save_episode_state(episode, risk_state_path)
-            write_heartbeat(os.path.dirname(risk_state_path))
+            write_heartbeat(state_dir)
             time.sleep(poll_interval_seconds)
     finally:
         if feed is not None:
             feed.stop()
 
-    save_state(risk_state, risk_state_path)
+    with risk_state_lock(risk_state_path):
+        save_state(risk_state, risk_state_path)
     save_episode_state(episode, risk_state_path)

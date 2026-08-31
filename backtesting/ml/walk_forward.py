@@ -26,6 +26,10 @@ def split(
 
     분할이 end를 넘어서면 중단한다. 달력일 기준 근사치이며 실제 거래일과는 다를 수 있다.
     """
+    assert step_days >= test_days, (
+        f"step_days({step_days}) < test_days({test_days}) 면 연속 폴드의 OOS 구간이 "
+        "겹친다 — 같은 거래가 여러 폴드에서 중복 검증돼 통계가 부풀려진다."
+    )
     splits: list[WalkForwardSplit] = []
     train_start = start
 

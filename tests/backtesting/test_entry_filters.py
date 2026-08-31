@@ -6,9 +6,11 @@ from backtesting.entry_filters import (
     day_return_ceiling_filter,
     day_return_filter,
     intraday_new_high_filter,
+    intraday_new_high_filter_batch_duckdb,
     market_regime_filter,
     n_day_high_filter,
     no_prior_drawdown_filter,
+    no_prior_drawdown_filter_batch_duckdb,
     time_of_day_filter,
 )
 
@@ -127,6 +129,38 @@ def test_intraday_new_high_filter_does_not_leak_across_day_boundary():
     assert list(result) == [True, True]
 
 
+def test_intraday_new_high_filter_batch_duckdb_matches_pandas_version(tmp_path):
+    """배치 DuckDB 버전이 종목별 pandas 버전과 완전히 같은 결과를 내는지 - 여러
+    종목·이틀치(당일 리셋 포함)로 확인한다. 다르면 이 함수를 쓰지 않는다."""
+    minute_dir = tmp_path / "stocks" / "minute"
+    minute_dir.mkdir(parents=True)
+
+    # A: 기존 단일종목 pandas 테스트와 같은 값(신고가/비신고가 섞임, 하루치)
+    a_combined = _minute_hlc(
+        "2026-01-01", ["09:00", "09:01", "09:02", "09:03"],
+        highs=[100, 105, 103, 106], closes=[100, 105, 103, 106],
+    )
+    # B: 이틀치 - 둘째날 첫봉이 전날보다 낮아도 당일 리셋으로 신고가여야 함
+    b_combined = pd.concat([
+        _minute_hlc("2026-01-01", ["09:00"], highs=[200], closes=[200]),
+        _minute_hlc("2026-01-02", ["09:00"], highs=[100], closes=[100]),
+    ])
+
+    for code, combined in [("A", a_combined), ("B", b_combined)]:
+        csv_index = combined.index.copy()
+        csv_index.name = "date"
+        combined.set_axis(csv_index).to_csv(minute_dir / f"{code}.csv")
+
+    expected = {"A": intraday_new_high_filter(a_combined), "B": intraday_new_high_filter(b_combined)}
+    result = intraday_new_high_filter_batch_duckdb(str(tmp_path))
+
+    assert set(result.keys()) == {"A", "B"}
+    for code in ("A", "B"):
+        pd.testing.assert_series_equal(
+            result[code], expected[code], check_names=False, check_freq=False
+        )
+
+
 def test_no_prior_drawdown_filter_true_when_pullback_stays_under_threshold():
     minute = _minute_hlc(
         "2026-01-01", ["09:00", "09:01", "09:02"],
@@ -147,6 +181,39 @@ def test_no_prior_drawdown_filter_becomes_false_and_stays_false_after_trigger():
     result = no_prior_drawdown_filter(minute, drawdown_threshold=0.05)
 
     assert list(result) == [True, True, False, False]
+
+
+def test_no_prior_drawdown_filter_batch_duckdb_matches_pandas_version(tmp_path):
+    """배치 DuckDB 버전이 종목별 pandas 버전과 완전히 같은 결과를 내는지 - 발동 전/
+    발동 후 sticky 유지/날짜경계 리셋 세 시나리오를 종목 3개로 재구성해 확인한다."""
+    minute_dir = tmp_path / "stocks" / "minute"
+    minute_dir.mkdir(parents=True)
+
+    a_combined = _minute_hlc(
+        "2026-01-01", ["09:00", "09:01", "09:02", "09:03"],
+        highs=[100, 96, 94, 99], closes=[100, 96, 94, 99],
+    )  # 발동 후 계속 False
+    b_combined = pd.concat([
+        _minute_hlc("2026-01-01", ["09:00", "09:01"], highs=[100, 93], closes=[100, 93]),  # -7% 발동
+        _minute_hlc("2026-01-02", ["09:00"], highs=[80], closes=[80]),  # 새 날짜는 리셋
+    ])
+
+    for code, combined in [("A", a_combined), ("B", b_combined)]:
+        csv_index = combined.index.copy()
+        csv_index.name = "date"
+        combined.set_axis(csv_index).to_csv(minute_dir / f"{code}.csv")
+
+    expected = {
+        "A": no_prior_drawdown_filter(a_combined, drawdown_threshold=0.05),
+        "B": no_prior_drawdown_filter(b_combined, drawdown_threshold=0.05),
+    }
+    result = no_prior_drawdown_filter_batch_duckdb(str(tmp_path), drawdown_threshold=0.05)
+
+    assert set(result.keys()) == {"A", "B"}
+    for code in ("A", "B"):
+        pd.testing.assert_series_equal(
+            result[code], expected[code], check_names=False, check_freq=False
+        )
 
 
 def test_no_prior_drawdown_filter_resets_across_day_boundary():

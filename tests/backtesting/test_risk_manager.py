@@ -1,4 +1,7 @@
 import json
+import os
+import threading
+import time
 
 import pytest
 
@@ -7,6 +10,8 @@ from backtesting.risk_manager import (
     OrderRequest,
     PortfolioState,
     RiskState,
+    _lock_owner_alive,
+    _should_reclaim_lock,
     can_open_new_position,
     check_order,
     get_position_size,
@@ -15,6 +20,7 @@ from backtesting.risk_manager import (
     record_position_added_to,
     record_position_closed,
     record_position_opened,
+    risk_state_lock,
     roll_to_new_day_if_needed,
     save_state,
 )
@@ -63,6 +69,34 @@ def test_record_position_opened_appends_position():
 
     assert len(state.open_positions) == 1
     assert state.open_positions[0].code == "005930"
+
+
+def test_record_position_opened_merges_duplicate_code_instead_of_creating_second_position():
+    """process_entries_once가 같은 code로 두 번 매수 신호를 체결시켜
+    record_position_opened를 두 번 부르는 경우(재신호 재진입) — 예전엔 OpenPosition이
+    두 개 쌓여 첫 번째가 완전청산되는 순간 record_partial_exit가 "code 일치 전부"를
+    지워 두 번째 물량이 손익 반영 없이 사라졌다. 이제는 두 번째 호출이
+    record_position_added_to로 병합돼 포지션이 하나만 남고, 분할청산까지 정확히
+    반영돼야 한다."""
+    state = RiskState(trading_date="2026-07-20")
+    record_position_opened(state, "005930", "t1", allocated_capital=1_000_000, entry_price=100.0, total_quantity=10)
+    record_position_opened(state, "005930", "t2", allocated_capital=1_000_000, entry_price=120.0, total_quantity=10)
+
+    assert len(state.open_positions) == 1  # 중복 포지션이 생기지 않음
+    position = state.open_positions[0]
+    assert position.total_quantity == 20
+    assert position.allocated_capital == 2_000_000
+    avg_entry = (100.0 * 10 + 120.0 * 10) / 20
+    assert position.entry_price == pytest.approx(avg_entry)
+
+    record_partial_exit(state, "005930", exit_price=121, sold_fraction=0.5, max_daily_loss_krw=10_000_000)
+    assert len(state.open_positions) == 1  # 아직 슬롯 점유 중 — 조용히 사라지지 않음
+
+    record_partial_exit(state, "005930", exit_price=121, sold_fraction=0.5, max_daily_loss_krw=10_000_000)
+
+    assert state.open_positions == []
+    expected_pnl = 2_000_000 * (121 - avg_entry) / avg_entry
+    assert state.realized_pnl_krw == pytest.approx(expected_pnl)
 
 
 def test_record_position_added_to_averages_entry_price_and_accumulates_quantity():
@@ -234,6 +268,175 @@ def test_save_and_load_state_round_trip_preserves_kill_switch(tmp_path):
     assert can_open_new_position(restored, max_concurrent=5) is False  # 재시작해도 여전히 차단
 
 
+def test_lock_owner_alive_true_for_own_pid():
+    token = f"{os.getpid()}:1:abc".encode()
+    assert _lock_owner_alive(token) is True
+
+
+def test_lock_owner_alive_false_for_definitely_dead_pid():
+    # 실제로 존재할 가능성이 거의 없는 큰 pid 번호 — psutil.pid_exists가 False를 줘야 함.
+    token = b"999999999:1:abc"
+    assert _lock_owner_alive(token) is False
+
+
+def test_lock_owner_alive_none_for_unparseable_token():
+    assert _lock_owner_alive(b"") is None
+    assert _lock_owner_alive(b"other-process-token") is None  # 콜론 없음 -> int() 실패
+
+
+def test_should_reclaim_lock_false_when_owner_alive_even_if_old(tmp_path):
+    """2026-08-30 정적분석으로 찾은 원래 결함의 핵심 방어 — 소유자가 확실히 살아있으면
+    락이 아무리 오래돼도(LOCK_STALE_SECONDS를 훨씬 넘겨도) 훔치면 안 된다. 실제로
+    600초를 기다리지 않고 mtime을 과거로 조작해 결정적으로 검증한다."""
+    lock_path = str(tmp_path / "risk_state.json.lock")
+    with open(lock_path, "wb") as f:
+        f.write(f"{os.getpid()}:1:abc".encode())
+    old = time.time() - 10_000  # LOCK_STALE_SECONDS(600초)를 훨씬 넘긴 과거
+    os.utime(lock_path, (old, old))
+
+    assert _should_reclaim_lock(lock_path) is False
+
+
+def test_should_reclaim_lock_true_immediately_when_owner_dead_even_if_fresh(tmp_path):
+    """소유자가 확실히 죽었으면 LOCK_STALE_SECONDS를 기다릴 필요 없이 즉시 회수한다
+    (2026-08-30 PID 생존확인 승격의 핵심 이득 — 크래시 복구 속도)."""
+    lock_path = str(tmp_path / "risk_state.json.lock")
+    with open(lock_path, "wb") as f:
+        f.write(b"999999999:1:abc")
+    # mtime을 지금으로 둬도(=시간 기준으로는 전혀 stale이 아님) 죽은 pid면 즉시 회수해야 함.
+    os.utime(lock_path, (time.time(), time.time()))
+
+    assert _should_reclaim_lock(lock_path) is True
+
+
+def test_should_reclaim_lock_falls_back_to_time_when_owner_unknown(tmp_path):
+    """토큰을 못 읽어 생존 판단이 안 될 때만(옛 형식 등) 시간 기준 백업으로 판단한다."""
+    lock_path = str(tmp_path / "risk_state.json.lock")
+    with open(lock_path, "wb") as f:
+        f.write(b"")  # 파싱 불가 -> None
+    old = time.time() - 10_000
+    os.utime(lock_path, (old, old))
+    assert _should_reclaim_lock(lock_path) is True  # 시간 기준으로는 stale
+
+    os.utime(lock_path, (time.time(), time.time()))
+    assert _should_reclaim_lock(lock_path) is False  # 시간 기준으로도 아직 안 stale
+
+
+def test_risk_state_lock_prevents_lost_updates_between_concurrent_writers(tmp_path):
+    """두 전략 프로세스가 같은 risk_state.json을 동시에 read-modify-write하면, 락이
+    없으면 나중에 저장하는 쪽이 상대가 방금 추가한 포지션을 덮어써 조용히 사라진다
+    (계좌 단일화의 핵심 위험 — 실거래에서 조용히 깨지면 포지션 추적 유실로 이어짐).
+    실제 프로세스 두 개 대신 스레드 두 개로 흉내낸다 — risk_state_lock은 파일 락이라
+    프로세스/스레드 경계와 무관하게 같은 방식으로 상호배제해야 하므로 유효한 대체
+    검증이다. 각 스레드가 load→추가→save를 N번 반복한 뒤 최종 포지션 수가 정확히
+    2N이어야 한다 — 하나라도 유실되면 락이 깨진 것.
+
+    join(timeout=30)만 쓰고 그 결과로 바로 개수를 확인했던 첫 버전은 간헐적으로
+    실패했다(2026-08-30, 대규모 pytest 스위트 동시 실행 중 CPU 경합 상황에서 1회
+    재현·확인) — 원인은 락이 아니라 이 테스트 자체였다: join이 타임아웃으로
+    반환됐을 뿐 워커 스레드가 아직 안 끝난 상태에서 개수를 확인해, "느린 환경"과
+    "유실"을 구분 못 했다. 이제 join 이후 각 스레드가 실제로 끝났는지(`is_alive()`)를
+    먼저 명시적으로 확인해 두 실패 모드를 분리한다 — 타임아웃은 넉넉히 늘려
+    (실제 작업량 대비 수십 배 여유) 정상 환경에서는 절대 걸리지 않게 하고, 그래도
+    안 끝나면 "환경이 느려서 시간 안에 확인 못 함"이라고 명확히 실패하지, 유실
+    여부를 잘못 판정하지 않는다.
+
+    iterations는 2026-08-30에 40→12로 낮췄다 — 스레드 수 대신 반복 횟수를 줄여
+    락파일 생성/삭제 총량을 줄인 것(전체 스위트와 같이 돌 때 Windows에서 파일
+    생성/삭제가 잦으면 백신 실시간 검사 등으로 개별 파일 I/O가 느려지는 사례를
+    관찰함 — 상호배제 검증에는 몇 회면 충분하고 굳이 80회씩 돌 필요가 없었다)."""
+    path = str(tmp_path / "risk_state.json")
+    save_state(RiskState(trading_date="2026-07-20"), path)
+
+    iterations = 12
+    errors: list = []
+
+    def worker(prefix: str) -> None:
+        try:
+            for i in range(iterations):
+                with risk_state_lock(path):
+                    state = load_state(path)
+                    record_position_opened(
+                        state, f"{prefix}{i:03d}", "2026-07-20T09:00:00", 1_000_000, 10_000.0,
+                    )
+                    save_state(state, path)
+        except Exception as exc:  # 스레드 안 예외는 조용히 삼켜지므로 명시적으로 수집
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(p,)) for p in ("A", "B")]
+    for t in threads:
+        t.start()
+    # 정상 환경에서 80회 load+save 왕복은 수백 ms면 끝난다 — 300초는 교착(진짜 락 버그)
+    # 감지용 안전장치일 뿐, "느린 환경이라 타임아웃" 자체가 이 값 때문에 나서는 안 된다.
+    for t in threads:
+        t.join(timeout=300)
+    for t in threads:
+        assert not t.is_alive(), (
+            "워커 스레드가 300초 안에 안 끝남 — 락이 교착됐거나 이 환경이 비정상적으로 "
+            "느린 것. 아래 포지션 개수 검증과는 별개 문제이니, 이 assert가 실패하면 "
+            "먼저 CPU 경합/데드락부터 의심할 것(유실 판정 이전 단계)."
+        )
+
+    assert errors == []
+    final = load_state(path)
+    assert len(final.open_positions) == iterations * 2  # 하나도 안 사라졌어야 함
+    assert len({p.code for p in final.open_positions}) == iterations * 2  # 중복 코드 없음(유실의 다른 징후)
+
+
+def test_risk_state_lock_retries_on_transient_permission_error(tmp_path, monkeypatch):
+    """2026-08-30 CPU 경합 부하테스트(8스레드로 GIL 다투게 해 재현)에서 실제로 잡힌
+    버그: Windows(NTFS)는 락 파일이 막 삭제된 직후 같은 이름으로 다시 만들려 하면
+    FileExistsError 대신 PermissionError를 던지는 경우가 있는데, risk_state_lock이
+    이걸 못 잡아서 워커가 그대로 죽었다(실거래라면 run_trading_loop 전체가 죽는
+    것과 같다). os.open을 모킹해 그 상황을 결정적으로 재현 — 타이밍/부하에 기대지
+    않고 매번 같은 방식으로 검증한다(원래 버그는 CPU 부하가 있어야만 확률적으로
+    재현됐다 — 이 테스트는 그 확률성을 없앤다)."""
+    lock_path = str(tmp_path / "risk_state.json") + ".lock"
+    real_open = os.open
+    call_count = {"n": 0}
+
+    def flaky_open(path, flags, *a, **k):
+        if path == lock_path:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise PermissionError(13, "simulated transient Windows ACCESS_DENIED")
+        return real_open(path, flags, *a, **k)
+
+    monkeypatch.setattr(os, "open", flaky_open)
+
+    with risk_state_lock(str(tmp_path / "risk_state.json")):
+        pass  # 첫 시도는 PermissionError로 실패해야 하고, 재시도로 결국 성공해야 함
+
+    assert call_count["n"] >= 2  # 최소 1번 실패 + 1번 성공(재시도가 실제로 일어남)
+    assert not os.path.exists(lock_path)  # 정상 해제됨
+
+
+def test_risk_state_lock_release_does_not_delete_foreign_lock(tmp_path):
+    """2026-08-30 정적분석으로 찾은 결함: LOCK_STALE_SECONDS(원래 120초)를 넘겨 아직
+    살아서 일하는 중인 보유자의 락을, 다른 대기자가 죽은 줄 알고 stale로 훔쳐 자기
+    락으로 새로 만들 수 있다 — 이러면 원래 보유자가 나중에 작업을 마치고 finally에서
+    "그 자리의 파일"을 무조건 지우던 예전 코드는, 사실 자기 락이 아니라 그 도둑의
+    아직 진행 중인 락을 지워버려 세 번째 대기자가 끼어드는 연쇄를 만든다. 부하나
+    120초 대기 없이, 우리가 락을 쥔 사이 파일 내용을 직접 남의 토큰으로 바꿔치기해
+    이 훔침 직후 상태를 결정적으로 흉내낸다 — 근본 원인(120초 초과 자체)이 아니라
+    그 결과(엉뚱한 락 삭제)만 검증하는 것이지만, 이게 바로 finally의 토큰 검증이
+    막아야 하는 대상이다."""
+    path = str(tmp_path / "risk_state.json")
+    lock_path = path + ".lock"
+
+    with risk_state_lock(path):
+        # 우리가 여전히 임계구역 안에 있는 사이, 다른 프로세스가 우리 락을 stale로
+        # 오판해 훔쳐서 자기 토큰으로 락 파일을 새로 만들었다고 가정.
+        with open(lock_path, "wb") as f:
+            f.write(b"other-process-token")
+
+    # 우리 finally는 토큰이 안 맞으니 지우면 안 된다 — 지우면 그 "다른 프로세스"의
+    # 아직 진행 중인 임계구역을 몰래 풀어버리는 것과 같다.
+    assert os.path.exists(lock_path)
+    with open(lock_path, "rb") as f:
+        assert f.read() == b"other-process-token"
+
+
 def test_roll_to_new_day_appends_previous_day_pnl_to_history(tmp_path):
     history_path = str(tmp_path / "pnl_history.jsonl")
     state = RiskState(trading_date="2026-07-19", realized_pnl_krw=35_000.0)
@@ -391,6 +594,57 @@ def test_check_order_rejects_when_symbol_weight_exceeds_limit():
 
     assert decision.approved is False
     assert decision.rule_id == "max_symbol_weight_pct"
+
+
+def test_check_order_default_limits_reject_symbol_weight_above_25_percent():
+    """risk_limits.yaml의 실제 max_symbol_weight_pct=0.25(2026-08-30 사용자 결정)가
+    limits를 안 넘길 때(check_order 기본 경로, 실거래와 동일)도 강제되는지 확인 —
+    limits=BASE_LIMITS로 덮어쓰지 않고 모듈 기본값(_LIMITS, risk_limits.yaml에서 로드)을
+    그대로 쓴다."""
+    order = OrderRequest(code="005930", side="buy", quantity=100, price=26000, stop=25000)  # 2,600,000/10,000,000=26%
+
+    decision = check_order(order, _portfolio())
+
+    assert decision.approved is False
+    assert decision.rule_id == "max_symbol_weight_pct"
+
+
+def test_check_order_default_limits_approve_symbol_weight_at_25_percent():
+    order = OrderRequest(code="005930", side="buy", quantity=100, price=25000, stop=24000)  # 2,500,000/10,000,000=25%
+
+    decision = check_order(order, _portfolio())
+
+    assert decision.approved is True
+
+
+def test_check_order_combines_existing_position_capital_with_new_order_for_symbol_weight():
+    """계좌 단일화 이전엔 각 전략 프로세스가 자기 risk_state만 봐서, 다른 프로세스가
+    이미 담아둔 같은 종목 물량을 몰랐다. 이제 risk_state가 계좌 공유 파일에서 로드되므로
+    "이미 보유한 포지션"이 어느 프로세스가 열었든 existing_capital에 합산돼 새 주문
+    승인/거부에 반영돼야 한다(그 값이 전략1이든 전략2든 이 함수 입장에서는 구분 안 함
+    — risk_state.open_positions 하나만 본다)."""
+    state = RiskState(trading_date="2026-07-20", open_positions=[
+        OpenPosition(code="005930", entry_time="t1", allocated_capital=2_000_000, entry_price=70000),  # 기존 20%
+    ])
+    order = OrderRequest(code="005930", side="buy", quantity=10, price=70000, stop=68000)  # +700,000 -> 27%
+
+    decision = check_order(order, _portfolio(risk_state=state))
+
+    assert decision.approved is False
+    assert decision.rule_id == "max_symbol_weight_pct"
+
+
+def test_check_order_allows_addition_when_combined_symbol_weight_stays_within_limit():
+    """25% 한도 밑이면 기존 포지션이 있어도 추가 매수가 승인된다 — 5슬롯 균등분할(20%)
+    범위 안의 정상 흐름까지 막지 않는지 확인(과잉 차단 방지 회귀)."""
+    state = RiskState(trading_date="2026-07-20", open_positions=[
+        OpenPosition(code="005930", entry_time="t1", allocated_capital=2_000_000, entry_price=70000),  # 기존 20%
+    ])
+    order = OrderRequest(code="005930", side="buy", quantity=5, price=70000, stop=68000)  # +350,000 -> 23.5%
+
+    decision = check_order(order, _portfolio(risk_state=state))
+
+    assert decision.approved is True
 
 
 def test_check_order_rejects_when_consecutive_losses_reach_limit():

@@ -1,5 +1,7 @@
 import os
 from argparse import Namespace
+from datetime import date, timedelta
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -486,39 +488,6 @@ def test_run_monitor_signals_skips_when_market_closed(monkeypatch, capsys):
     assert "통합장 시간이 아닙니다" in capsys.readouterr().out
 
 
-def test_run_monitor_signals_routes_strategy_3_to_scalp_loop_without_loading_model(monkeypatch, tmp_path):
-    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
-    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda: True)
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "TOKEN")
-    monkeypatch.setenv("TELEGRAM_CHAT_ID", "CHAT")
-
-    model_loads = []
-    monkeypatch.setattr(cli, "load_model", lambda path: model_loads.append(path))
-    scalp_calls = []
-    monkeypatch.setattr(
-        cli, "run_scalp_monitor_loop",
-        lambda client, bot_token, chat_id, output_path, top_n, poll_interval_seconds: scalp_calls.append(
-            (client, bot_token, chat_id, output_path, top_n, poll_interval_seconds)
-        ),
-    )
-
-    args = Namespace(
-        strategy="strategy_3", model_path="models/strategy_1/entry_filter_model.joblib", top_n=35,
-        proba_threshold=0.6, interval_seconds=30.0, data_dir="data", output="signals.jsonl",
-    )
-    cli._run_monitor_signals(args)
-
-    assert model_loads == []  # strategy_3은 ML 모델을 아예 로드하지 않음
-    assert len(scalp_calls) == 1
-    client, bot_token, chat_id, output_path, top_n, poll_interval_seconds = scalp_calls[0]
-    assert client == "client-obj"
-    assert bot_token == "TOKEN"
-    assert chat_id == "CHAT"
-    assert output_path == "state/strategy_3/signals.jsonl"  # --output 미지정 시 전략3 전용 경로로 대체
-    assert top_n == 35
-    assert poll_interval_seconds == 30.0
-
-
 def test_run_monitor_signals_loads_model_and_runs_loop_when_market_open(monkeypatch):
     monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
     monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda: True)
@@ -631,7 +600,167 @@ def test_run_trading_starts_loop_with_env_values_when_market_open(monkeypatch, c
     assert "모의투자" in capsys.readouterr().out
 
 
-def test_run_trading_warns_real_account_when_not_mock(monkeypatch, capsys):
+def test_run_trading_clamps_max_concurrent_positions_above_yaml_limit(monkeypatch, capsys):
+    """--max-concurrent-positions로 risk_limits.yaml 한도(5)보다 큰 값을 줘도
+    실제로는 yaml 값으로 낮춰 시작해야 한다 — 이 값은 슬롯 수 게이트뿐 아니라
+    슬롯당 배정자금(total_capital/N) 산정에도 쓰여, 완화를 그대로 통과시키면
+    한도 우회 경로가 된다(risk-agent.md §핵심원칙 4, 장중 한도 완화 금지)."""
+    monkeypatch.setattr(cli, "load_dotenv", lambda: None)
+    monkeypatch.setenv("MAX_DAILY_LOSS_KRW", "300000")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
+    monkeypatch.setenv("KIWOOM_IS_MOCK", "true")
+    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
+    monkeypatch.setattr(cli, "load_model", lambda path: "trained")
+    config_calls = []
+    monkeypatch.setattr(cli, "_write_strategy_config", lambda state_dir, config: config_calls.append(config))
+    calls = []
+    monkeypatch.setattr(cli, "run_trading_loop", lambda *a, **k: calls.append((a, k)))
+
+    cli._run_trading(_trading_args(max_concurrent_positions=20))
+
+    assert len(calls) == 1
+    _, kwargs = calls[0]
+    assert kwargs["max_concurrent_positions"] == 5  # yaml 한도로 낮춰짐, 요청한 20이 아님
+    assert config_calls[0]["max_concurrent_positions"] == 5  # 대시보드 스냅샷도 실제 적용값을 반영
+    assert "완화" in capsys.readouterr().out
+
+
+def test_run_trading_refuses_live_without_confirm_file(monkeypatch, capsys, tmp_path):
+    """이중 확인 게이트 핵심 시나리오(execution-agent.md, 2026-08-30) — KIWOOM_IS_MOCK=false
+    하나만으로는 실주문을 켜지 않는다. 확인 파일이 없으면 실거래 루프 자체가
+    호출되면 안 된다.
+
+    strategy="strategy_2"를 쓴다 — strategy_1은 폐기로 실거래가 그 전에 막히므로
+    (docs/STRATEGY1_RETIREMENT.md, 2026-08-30), 게이트 자체만 따로 확인하려면
+    막히지 않는 strategy_2로 시험해야 한다."""
+    monkeypatch.setattr(cli, "load_dotenv", lambda: None)
+    monkeypatch.setenv("MAX_DAILY_LOSS_KRW", "300000")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
+    monkeypatch.setenv("KIWOOM_IS_MOCK", "false")
+    monkeypatch.setattr(cli, "LIVE_TRADING_CONFIRM_PATH", str(tmp_path / "LIVE_TRADING_CONFIRMED"))  # 존재하지 않음
+    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
+    monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
+    calls = []
+    monkeypatch.setattr(cli, "run_oversold_trading_loop", lambda *a, **k: calls.append((a, k)))
+
+    cli._run_trading(_trading_args(strategy="strategy_2"))
+
+    assert calls == []  # 핵심: 확인 파일 없이는 실거래 루프가 아예 시작되지 않는다
+    assert "확인 파일이 없습니다" in capsys.readouterr().out
+
+
+def test_run_trading_refuses_live_with_wrong_confirm_content(monkeypatch, capsys, tmp_path):
+    """빈 파일을 실수로 touch하는 것만으로는 통과하면 안 된다 — 토큰+오늘 날짜
+    형식까지 정확히 맞아야 한다. missing과 다른 메시지("날짜가 오늘")가 떠야 한다."""
+    monkeypatch.setattr(cli, "load_dotenv", lambda: None)
+    monkeypatch.setenv("MAX_DAILY_LOSS_KRW", "300000")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
+    monkeypatch.setenv("KIWOOM_IS_MOCK", "false")
+    confirm_path = tmp_path / "LIVE_TRADING_CONFIRMED"
+    confirm_path.write_text("", encoding="utf-8")
+    monkeypatch.setattr(cli, "LIVE_TRADING_CONFIRM_PATH", str(confirm_path))
+    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
+    monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
+    calls = []
+    monkeypatch.setattr(cli, "run_oversold_trading_loop", lambda *a, **k: calls.append((a, k)))
+
+    cli._run_trading(_trading_args(strategy="strategy_2"))
+
+    assert calls == []
+    out = capsys.readouterr().out
+    assert "날짜가 오늘" in out
+    assert "확인 파일이 없습니다" not in out  # missing과 다른 메시지여야 한다
+
+
+def test_run_trading_refuses_live_with_yesterdays_date(monkeypatch, capsys, tmp_path):
+    """핵심 시나리오(2026-08-30 사용자 지적): 예전에 한 번 확인하고 지우는 걸 잊은
+    파일 — 날짜가 어제면 거부돼야 몇 달 뒤 설정 실수로 그대로 실주문이 나가는 사고를
+    막는다."""
+    monkeypatch.setattr(cli, "load_dotenv", lambda: None)
+    monkeypatch.setenv("MAX_DAILY_LOSS_KRW", "300000")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
+    monkeypatch.setenv("KIWOOM_IS_MOCK", "false")
+    confirm_path = tmp_path / "LIVE_TRADING_CONFIRMED"
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    confirm_path.write_text(f"{cli.LIVE_TRADING_CONFIRM_TOKEN} {yesterday}", encoding="utf-8")
+    monkeypatch.setattr(cli, "LIVE_TRADING_CONFIRM_PATH", str(confirm_path))
+    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
+    monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
+    calls = []
+    monkeypatch.setattr(cli, "run_oversold_trading_loop", lambda *a, **k: calls.append((a, k)))
+
+    cli._run_trading(_trading_args(strategy="strategy_2"))
+
+    assert calls == []
+    out = capsys.readouterr().out
+    assert "날짜가 오늘" in out
+    assert date.today().isoformat() in out  # 갱신 방법에 오늘 날짜가 그대로 나와야 함
+
+
+def test_run_trading_starts_live_and_shows_banner_when_confirmed_today(monkeypatch, capsys, tmp_path):
+    """확인 파일에 토큰+오늘 날짜가 정확히 있으면 그제서야 실거래 루프가 시작되고,
+    계좌/자본/한도/전략/실거래 사실을 담은 배너가 출력된다(같은 날 워치독 재시작도
+    이 경로로 통과해야 한다)."""
+    monkeypatch.setattr(cli, "load_dotenv", lambda: None)
+    monkeypatch.setenv("MAX_DAILY_LOSS_KRW", "300000")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
+    monkeypatch.setenv("KIWOOM_IS_MOCK", "false")
+    confirm_path = tmp_path / "LIVE_TRADING_CONFIRMED"
+    confirm_path.write_text(f"{cli.LIVE_TRADING_CONFIRM_TOKEN} {date.today().isoformat()}", encoding="utf-8")
+    monkeypatch.setattr(cli, "LIVE_TRADING_CONFIRM_PATH", str(confirm_path))
+    monkeypatch.setattr(cli, "_build_client", lambda: SimpleNamespace(base_url="https://api.kiwoom.com"))
+    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
+    monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
+    calls = []
+    monkeypatch.setattr(cli, "run_oversold_trading_loop", lambda *a, **k: calls.append((a, k)))
+
+    cli._run_trading(_trading_args(strategy="strategy_2"))
+
+    assert len(calls) == 1  # 실제로 시작됨
+    out = capsys.readouterr().out
+    assert "실계좌" in out
+    assert "총 배정자본" in out
+    assert "일일손실한도" in out
+    assert "전략: strategy_2" in out
+    assert "api.kiwoom.com" in out
+
+
+# --- 전략1 폐기 — 실거래 하드블록 (docs/STRATEGY1_RETIREMENT.md, 2026-08-30) ---
+
+def test_run_trading_blocks_strategy1_live_regardless_of_confirm_file(monkeypatch, capsys, tmp_path):
+    """전략1(기본 strategy)은 확인 파일이 완벽해도 실거래가 시작되면 안 된다 —
+    폐기 차단이 이중확인 게이트보다 먼저 걸려야 한다."""
+    monkeypatch.setattr(cli, "load_dotenv", lambda: None)
+    monkeypatch.setenv("MAX_DAILY_LOSS_KRW", "300000")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
+    monkeypatch.setenv("KIWOOM_IS_MOCK", "false")
+    confirm_path = tmp_path / "LIVE_TRADING_CONFIRMED"
+    confirm_path.write_text(f"{cli.LIVE_TRADING_CONFIRM_TOKEN} {date.today().isoformat()}", encoding="utf-8")
+    monkeypatch.setattr(cli, "LIVE_TRADING_CONFIRM_PATH", str(confirm_path))  # 완벽한 확인 파일이어도
+    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
+    calls = []
+    monkeypatch.setattr(cli, "run_trading_loop", lambda *a, **k: calls.append((a, k)))
+
+    cli._run_trading(_trading_args())  # 기본 strategy="strategy_1"
+
+    assert calls == []
+    assert "폐기" in capsys.readouterr().out
+
+
+def test_run_trading_blocks_any_non_strategy2_name_live(monkeypatch, capsys):
+    """이름표가 아니라 코드 경로로 막는다 — "strategy_1"이 아닌 다른 문자열이어도
+    strategy_2가 아니면 여전히 전략1 ML 로직이라 똑같이 막혀야 한다(우회 방지)."""
     monkeypatch.setattr(cli, "load_dotenv", lambda: None)
     monkeypatch.setenv("MAX_DAILY_LOSS_KRW", "300000")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
@@ -639,13 +768,78 @@ def test_run_trading_warns_real_account_when_not_mock(monkeypatch, capsys):
     monkeypatch.setenv("KIWOOM_IS_MOCK", "false")
     monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
     monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
+    calls = []
+    monkeypatch.setattr(cli, "run_trading_loop", lambda *a, **k: calls.append((a, k)))
+
+    cli._run_trading(_trading_args(strategy="strategy_9"))
+
+    assert calls == []
+    assert "폐기" in capsys.readouterr().out
+
+
+def test_run_trading_allows_strategy2_live_past_retirement_block(monkeypatch, capsys, tmp_path):
+    """전략2(오버솔드)는 폐기 대상이 아니므로 확인 파일만 맞으면 그대로 실거래가
+    시작돼야 한다 — 폐기 차단이 strategy_2까지 막으면 안 된다."""
+    monkeypatch.setattr(cli, "load_dotenv", lambda: None)
+    monkeypatch.setenv("MAX_DAILY_LOSS_KRW", "300000")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
+    monkeypatch.setenv("KIWOOM_IS_MOCK", "false")
+    confirm_path = tmp_path / "LIVE_TRADING_CONFIRMED"
+    confirm_path.write_text(f"{cli.LIVE_TRADING_CONFIRM_TOKEN} {date.today().isoformat()}", encoding="utf-8")
+    monkeypatch.setattr(cli, "LIVE_TRADING_CONFIRM_PATH", str(confirm_path))
+    monkeypatch.setattr(cli, "_build_client", lambda: SimpleNamespace(base_url="https://api.kiwoom.com"))
+    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
+    monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
+    calls = []
+    monkeypatch.setattr(cli, "run_oversold_trading_loop", lambda *a, **k: calls.append((a, k)))
+
+    cli._run_trading(_trading_args(strategy="strategy_2"))
+
+    assert len(calls) == 1
+    assert "폐기" not in capsys.readouterr().out
+
+
+def test_run_trading_does_not_block_strategy1_mock(monkeypatch, capsys):
+    """폐기 차단은 실거래에만 건다 — 모의투자는 전략1이어도 그대로 회귀테스트/
+    기준선 비교용으로 계속 돌아야 한다(docs/STRATEGY1_RETIREMENT.md)."""
+    monkeypatch.setattr(cli, "load_dotenv", lambda: None)
+    monkeypatch.setenv("MAX_DAILY_LOSS_KRW", "300000")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
+    monkeypatch.setenv("KIWOOM_IS_MOCK", "true")
+    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     monkeypatch.setattr(cli, "load_model", lambda path: "trained")
     monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
-    monkeypatch.setattr(cli, "run_trading_loop", lambda *a, **k: None)
+    calls = []
+    monkeypatch.setattr(cli, "run_trading_loop", lambda *a, **k: calls.append((a, k)))
+
+    cli._run_trading(_trading_args())  # 기본 strategy="strategy_1", 모의
+
+    assert len(calls) == 1
+    assert "폐기" not in capsys.readouterr().out
+
+
+def test_run_trading_does_not_touch_mock_path(monkeypatch, capsys):
+    """요구사항 4: 모의는 확인 파일 유무와 무관하게 지금처럼 그냥 돈다(가드는 실거래
+    전용)."""
+    monkeypatch.setattr(cli, "load_dotenv", lambda: None)
+    monkeypatch.setenv("MAX_DAILY_LOSS_KRW", "300000")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
+    monkeypatch.setenv("KIWOOM_IS_MOCK", "true")
+    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
+    monkeypatch.setattr(cli, "load_model", lambda path: "trained")
+    monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
+    calls = []
+    monkeypatch.setattr(cli, "run_trading_loop", lambda *a, **k: calls.append((a, k)))
 
     cli._run_trading(_trading_args())
 
-    assert "실계좌" in capsys.readouterr().out
+    assert len(calls) == 1
+    assert "실거래 확인 파일" not in capsys.readouterr().out
 
 
 def test_run_trading_derives_paths_from_strategy_when_not_explicit(monkeypatch):
@@ -660,21 +854,21 @@ def test_run_trading_derives_paths_from_strategy_when_not_explicit(monkeypatch):
     calls = []
     monkeypatch.setattr(cli, "run_trading_loop", lambda *a, **k: calls.append((a, k)))
 
-    # strategy_2는 오버솔드 전용 경로로 분기되므로(아래 test_run_trading_dispatches_*),
+    # strategy_9는 오버솔드 전용 경로로 분기되므로(아래 test_run_trading_dispatches_*),
     # 여기서는 일반적인(ML 기반) 향후 전략을 흉내내는 다른 이름으로 경로 유도 규칙만 검증한다.
     args = _trading_args(
-        strategy="strategy_3", model_path=None, risk_state_path=None,
+        strategy="strategy_9", model_path=None, risk_state_path=None,
         order_log_path=None, pnl_history_path=None, kill_switch_override_path=None,
     )
     cli._run_trading(args)
 
     assert len(calls) == 1
     trained_args, kwargs = calls[0]
-    assert trained_args[1] == "trained:models/strategy_3/entry_filter_model.joblib"
-    assert kwargs["risk_state_path"] == "state/strategy_3/risk_state.json"
-    assert kwargs["order_log_path"] == "state/strategy_3/orders.jsonl"
-    assert kwargs["pnl_history_path"] == "state/strategy_3/pnl_history.jsonl"
-    assert kwargs["kill_switch_override_path"] == "state/strategy_3/kill_switch_override.json"
+    assert trained_args[1] == "trained:models/strategy_9/entry_filter_model.joblib"
+    assert kwargs["risk_state_path"] == "state/risk_state.json"  # 계좌 전체 단일 파일 강제 — strategy로 안 갈라짐
+    assert kwargs["order_log_path"] == "state/strategy_9/orders.jsonl"
+    assert kwargs["pnl_history_path"] == "state/strategy_9/pnl_history.jsonl"
+    assert kwargs["kill_switch_override_path"] == "state/strategy_9/kill_switch_override.json"
 
 
 def test_run_trading_writes_strategy_config_snapshot(monkeypatch):
@@ -688,13 +882,13 @@ def test_run_trading_writes_strategy_config_snapshot(monkeypatch):
     monkeypatch.setattr(cli, "load_model", lambda path: "trained")
     monkeypatch.setattr(cli, "run_trading_loop", lambda *a, **k: None)
     config_calls = []
-    monkeypatch.setattr(cli, "_write_strategy_config", lambda risk_state_path, config: config_calls.append((risk_state_path, config)))
+    monkeypatch.setattr(cli, "_write_strategy_config", lambda state_dir, config: config_calls.append((state_dir, config)))
 
     cli._run_trading(_trading_args(strategy="strategy_1"))
 
     assert len(config_calls) == 1
-    risk_state_path, config = config_calls[0]
-    assert risk_state_path == "state/risk_state.json"
+    state_dir, config = config_calls[0]
+    assert state_dir == "state/strategy_1"  # config.json은 전략별 폴더 — risk_state.json(계좌 공유)과 분리
     assert config["strategy"] == "strategy_1"
     assert config["model_path"] == "models/strategy_1/entry_filter_model.joblib"
     assert config["top_n"] == 35
@@ -763,10 +957,10 @@ def test_run_trading_strategy_2_config_snapshot_has_no_ml_fields(monkeypatch):
     assert "started_at" in config
 
 
-def test_write_strategy_config_writes_json_next_to_risk_state(tmp_path):
-    risk_state_path = str(tmp_path / "state" / "strategy_1" / "risk_state.json")
+def test_write_strategy_config_writes_json_in_state_dir(tmp_path):
+    state_dir = str(tmp_path / "state" / "strategy_1")
 
-    cli._write_strategy_config(risk_state_path, {"strategy": "strategy_1", "top_n": 35})
+    cli._write_strategy_config(state_dir, {"strategy": "strategy_1", "top_n": 35})
 
     import json
     config_path = tmp_path / "state" / "strategy_1" / "config.json"
@@ -778,6 +972,8 @@ def test_run_dashboard_forwards_args_to_server(monkeypatch):
     monkeypatch.setenv("KIWOOM_APPKEY", "appkey123")
     monkeypatch.setenv("KIWOOM_SECRETKEY", "secret456")
     monkeypatch.setenv("KIWOOM_IS_MOCK", "true")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot789")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat789")
     calls = []
     monkeypatch.setattr(cli, "run_dashboard_server", lambda **kwargs: calls.append(kwargs))
 
@@ -792,6 +988,9 @@ def test_run_dashboard_forwards_args_to_server(monkeypatch):
         "kiwoom_is_mock": True,
         "port": 9999,
         "host": "127.0.0.1",
+        # top35 갱신 실패를 텔레그램으로 알리려면 대시보드 프로세스가 수신처를 알아야 한다
+        "telegram_bot_token": "bot789",
+        "telegram_chat_id": "chat789",
     }]
 
 

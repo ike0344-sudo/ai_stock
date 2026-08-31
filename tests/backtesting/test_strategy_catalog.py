@@ -15,20 +15,6 @@ def test_describe_strategy_returns_rules_for_strategy_2():
     assert len(description["entry"]) > 0
 
 
-def test_describe_strategy_returns_rules_for_strategy_3():
-    description = describe_strategy("strategy_3")
-
-    assert set(description.keys()) == {"entry", "exit", "operation", "exchange_basis"}
-    assert len(description["entry"]) > 0
-
-
-def test_describe_strategy_returns_rules_for_strategy_4():
-    description = describe_strategy("strategy_4")
-
-    assert set(description.keys()) == {"entry", "exit", "operation", "exchange_basis"}
-    assert len(description["entry"]) > 0
-
-
 def test_describe_strategy_returns_empty_dict_for_unknown_strategy():
     description = describe_strategy("strategy_99")
 

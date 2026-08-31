@@ -191,6 +191,11 @@ class _StubOrderClient:
             return {"ord_no": "", "return_code": 20, "return_msg": "주문 거부"}
         return {"ord_no": "1", "return_code": 0}
 
+    def get_pending_orders(self, stock_code=None, exchange_type="0"):
+        # 미체결 목록이 비어있음 -> check_fill이 즉시 전량체결로 판정(기존 테스트가
+        # 가정하던 "주문 응답 = 즉시 체결" 동작을 그대로 유지).
+        return {"return_code": 0, "list": []}
+
 
 def test_process_entries_once_places_buy_order_and_updates_risk_state(monkeypatch):
     client = _StubOrderClient()
@@ -208,7 +213,11 @@ def test_process_entries_once_places_buy_order_and_updates_risk_state(monkeypatc
 
     assert len(executed) == 1
     assert client.orders == [{"code": "005930", "side": "buy", "quantity": 28}]  # 2,000,000 // 70000
-    assert client.order_kwargs == [{"price": 70000, "order_type": "0"}]  # 지정가(슬리피지 통제)
+    # client_order_id는 submit_order가 매번 새로 uuid4로 발급해 값이 매번 달라진다
+    # (order_execution.py submit_order) — 나머지 키만 확인한다.
+    assert client.order_kwargs[0]["price"] == 70000
+    assert client.order_kwargs[0]["order_type"] == "0"  # 지정가(슬리피지 통제)
+    assert "client_order_id" in client.order_kwargs[0]
     assert len(risk_state.open_positions) == 1
     assert risk_state.open_positions[0].total_quantity == 28
 
@@ -444,6 +453,9 @@ class _StubQuoteClient:
             return {"ord_no": "", "return_code": 20, "return_msg": "주문 거부"}
         return {"ord_no": "1", "return_code": 0}
 
+    def get_pending_orders(self, stock_code=None, exchange_type="0"):
+        return {"return_code": 0, "list": []}
+
 
 def test_process_exits_once_sells_all_on_stop_loss(monkeypatch):
     client = _StubQuoteClient(price=97.5)  # entry=100 -> net_pct 약 -3.6%(수수료 포함) -> 손절선 이하
@@ -455,7 +467,8 @@ def test_process_exits_once_sells_all_on_stop_loss(monkeypatch):
     assert len(executed) == 1
     assert executed[0]["reason"] == "stop_loss"
     assert client.orders == [{"code": "005930", "side": "sell", "quantity": 20}]
-    assert client.order_kwargs == [{"price": 97.5, "order_type": "3"}]  # 시장가(체결확인 인프라 없어 되돌림)
+    assert client.order_kwargs[0]["price"] == 97.5
+    assert client.order_kwargs[0]["order_type"] == "3"  # 시장가(체결확인은 submit_order/check_fill이 확인)
     assert risk_state.open_positions == []  # 전량 청산 -> 슬롯 해제
 
 
@@ -553,8 +566,62 @@ def test_run_trading_loop_polls_until_market_closes_and_saves_state(monkeypatch,
     assert __import__("os").path.exists(state_path)
 
 
+def test_run_trading_loop_defers_regime_until_regular_session(monkeypatch, tmp_path):
+    """코스피 지수 분봉은 09:00부터 생성되므로 통합장 시작(08:00)에 레짐을 계산하면
+    오늘 봉이 0개라 무조건 '하락'으로 굳고, 장중 재평가가 없어 그날 진입이 100%
+    차단된다(실측: 8/20까지 매수신호 0건). 09시 이후 첫 사이클에서 딱 한 번
+    확정하는지 검증한다."""
+    import pandas as pd
+    from datetime import datetime as real_datetime
+
+    watchlist = pd.DataFrame([{"stock_code": "005930", "name": "A"}])
+    monkeypatch.setattr(trading_loop, "top_by_trading_value", lambda client, top_n: watchlist)
+
+    class _Clock:
+        t = real_datetime(2026, 8, 28, 8, 30)   # 통합장 시작 직후, 정규장 전
+
+        @classmethod
+        def now(cls):
+            return cls.t
+
+    monkeypatch.setattr(trading_loop, "datetime", _Clock)
+
+    # 실제 fetch_today_regime의 동작을 그대로 흉내낸다 — 09시 전에는 오늘 지수 봉이
+    # 없어 .get(today, False)가 False를 돌려준다. 시각과 무관하게 True를 주는 mock을
+    # 쓰면 수정 전 코드에서도 이 테스트가 통과해버려 회귀를 못 잡는다.
+    regime_calls = []
+    monkeypatch.setattr(
+        trading_loop, "fetch_today_regime",
+        lambda client, data_dir: (regime_calls.append(1), _Clock.t.hour >= 9)[1],
+    )
+
+    open_flags = iter([True, True, False])
+    def fake_open(now):
+        _Clock.t = real_datetime(2026, 8, 28, 9, 10)   # 첫 사이클은 정규장 중
+        return next(open_flags)
+
+    monkeypatch.setattr(trading_loop, "is_extended_market_open", fake_open)
+    monkeypatch.setattr(trading_loop.time, "sleep", lambda s: None)
+
+    seen_regime = []
+    monkeypatch.setattr(trading_loop, "process_exits_once", lambda *a, **k: [])
+    monkeypatch.setattr(
+        trading_loop, "process_entries_once",
+        lambda *a, **k: seen_regime.append(a[3]) or [],
+    )
+
+    run_trading_loop(
+        object(), trained=None, bot_token="", chat_id="", max_daily_loss_krw=500_000,
+        risk_state_path=str(tmp_path / "risk_state.json"),
+        poll_interval_seconds=1.0, use_realtime_feed=False,
+    )
+
+    assert len(regime_calls) == 1, "레짐은 09시 이후에 딱 한 번만 계산돼야 한다"
+    assert seen_regime == [True, True], f"장전 False로 굳어버림: {seen_regime}"
+
+
 def test_run_trading_loop_refreshes_watchlist_each_cycle_and_picks_up_new_entrant(monkeypatch, tmp_path):
-    # strategy3_scalp에서 실측된 것과 같은 문제(장중 새로 top_n 진입한 종목이 재시작
+    # 감시 전용 전략에서 먼저 실측된 문제(장중 새로 top_n 진입한 종목이 재시작
     # 전까진 영영 감시 대상이 아니었던 것) — 전략1도 같은 구조라 동일하게 겪는다.
     import pandas as pd
 
@@ -911,6 +978,9 @@ class _FakeRealtimeFeed:
     def get_latest_bid(self, code):
         return None
 
+    def get_feed_age_seconds(self):
+        return None  # 아직 틱 없음 — 끊김 판정 대상이 아니다
+
 
 def test_run_trading_loop_builds_and_starts_realtime_feed_by_default(monkeypatch, tmp_path):
     import pandas as pd
@@ -976,3 +1046,52 @@ def test_run_trading_loop_stops_feed_even_if_loop_raises(monkeypatch, tmp_path):
         )
 
     assert _FakeRealtimeFeed.instances[0].stopped is True
+
+
+def test_is_feed_stale_ignores_no_tick_yet_and_off_hours():
+    """구독 직후(None)와 정규장 밖은 끊김이 아니다 — 둘 다 매일 오탐이 날 지점이다."""
+    from datetime import datetime as dt
+    regular, premarket = dt(2026, 8, 28, 10, 0), dt(2026, 8, 28, 8, 30)
+
+    assert trading_loop.is_feed_stale(None, regular) is False
+    assert trading_loop.is_feed_stale(trading_loop.FEED_STALE_SECONDS + 1, premarket) is False
+    assert trading_loop.is_feed_stale(trading_loop.FEED_STALE_SECONDS + 1, regular) is True
+    assert trading_loop.is_feed_stale(trading_loop.FEED_STALE_SECONDS - 1, regular) is False
+
+
+def test_reconcile_mismatch_blocks_new_entries_but_keeps_exits(monkeypatch, tmp_path):
+    """대사 불일치면 신규 진입만 막고 청산 감시는 계속 돈다 — 여기서 청산까지 멈추면
+    보유 포지션이 손절 없이 방치되므로 오히려 위험하다."""
+    import pandas as pd
+
+    monkeypatch.setattr(trading_loop, "fetch_today_candles", lambda client, code, **k: pd.DataFrame())
+    watchlist = pd.DataFrame([{"stock_code": "005930", "name": "A"}])
+    monkeypatch.setattr(trading_loop, "top_by_trading_value", lambda client, top_n: watchlist)
+    monkeypatch.setattr(trading_loop, "fetch_today_regime", lambda client, data_dir: True)
+    open_flags = iter([True, False])
+    monkeypatch.setattr(trading_loop, "is_extended_market_open", lambda now: next(open_flags))
+    monkeypatch.setattr(trading_loop.time, "sleep", lambda s: None)
+
+    dirty = SimpleNamespace(
+        is_clean=False, quantity_mismatches=[], internal_only=[], broker_only=["005930"],
+    )
+    monkeypatch.setattr(trading_loop, "reconcile", lambda client, risk_state: dirty)
+    alerted = []
+    monkeypatch.setattr(trading_loop, "notify_reconcile_mismatch",
+                        lambda *a, **k: alerted.append(a[1]) or True)
+
+    exits, entries = [], []
+    monkeypatch.setattr(trading_loop, "process_exits_once", lambda *a, **k: exits.append(1) or [])
+    monkeypatch.setattr(trading_loop, "process_entries_once", lambda *a, **k: entries.append(1) or [])
+
+    state_path = str(tmp_path / "risk_state.json")
+    run_trading_loop(
+        SimpleNamespace(appkey="k", secretkey="s", is_mock=True), trained=None,
+        bot_token="", chat_id="", max_daily_loss_krw=500_000,
+        risk_state_path=state_path, poll_interval_seconds=1.0, use_realtime_feed=False,
+    )
+
+    assert alerted == [dirty]      # CRITICAL 알림이 나갔다
+    assert exits == [1]            # 청산 감시는 돌았다
+    assert entries == []           # 신규 진입은 차단됐다
+    assert json.loads(open(state_path, encoding="utf-8").read())["kill_switch_active"] is True

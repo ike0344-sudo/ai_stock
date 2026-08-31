@@ -7,3 +7,5 @@ scikit-learn
 websocket-client
 pyyaml
 pywebview
+duckdb
+psutil

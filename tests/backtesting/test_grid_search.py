@@ -6,6 +6,7 @@ import pytest
 
 from backtesting import grid_search
 from backtesting.strategies.ma_crossover import MovingAverageCrossover
+from backtesting.types import Signal
 
 
 def _daily_candles(n: int = 40) -> pd.DataFrame:
@@ -101,6 +102,66 @@ def test_run_rule_based_skips_invalid_param_combo(monkeypatch):
     )
 
     assert results == []
+
+
+class _FixedSignalStrategy:
+    """가격과 무관하게 정해진 날짜에만 BUY/SELL — IS/OOS 경계 시나리오를 정확히
+    구성하기 위한 테스트 전용 더미(daily_walk_forward.py 회귀 테스트와 같은 패턴)."""
+
+    name = "fixed_signal_for_test"
+
+    def __init__(self, buy_dates, sell_dates):
+        self.buy_dates = set(buy_dates)
+        self.sell_dates = set(sell_dates)
+
+    def evaluate(self, candles: pd.DataFrame, params: dict) -> pd.Series:
+        def sig(ts):
+            d = ts.date()
+            if d in self.buy_dates:
+                return Signal.BUY
+            if d in self.sell_dates:
+                return Signal.SELL
+            return Signal.HOLD
+
+        return pd.Series([sig(ts) for ts in candles.index], index=candles.index)
+
+
+def test_run_rule_based_position_spanning_is_oos_boundary_is_not_double_entered(monkeypatch):
+    """회귀 테스트: IS 막바지에 진입해 OOS까지 안 닫힌 포지션을, IS/OOS를 독립적으로
+    evaluate+simulate하던 예전 구현은 못 봤다 — IS의 시뮬레이션이 자기 구간 끝에서
+    끊겨 그 포지션은 미청산으로 사라지고(in_sample.num_trades==0), 대신 OOS가 새로
+    fresh 상태로 시작하며 OOS 안의 신호를 자기 것인 양 진입으로 잡는다
+    (out_of_sample.num_trades==1) — 총 거래수는 우연히 같아 보여도 "어느 쪽 거래인지"가
+    틀린다(daily_walk_forward.py에서 실측으로 확인한 것과 같은 계열의 버그). 지금은
+    전체 캔들을 한 번만 시뮬레이션하고 거래를 entry_date로 나눠, 진짜 거래가 IS에
+    올바르게 잡힌다."""
+    candles = _daily_candles(n=20)  # in_sample_ratio=0.7 -> split_idx=14
+    split_idx = int(len(candles) * 0.7)
+    split_date = candles.index[split_idx].date()
+
+    # IS 마지막 거래일에 체결되도록 신호는 그 하루 전에 둔다(다음 봉 시가 체결).
+    buy_signal_date = candles.index[split_idx - 2].date()
+    exit_date = candles.index[split_idx + 3].date()
+    # OOS 초입에도 "새 진입처럼 보이는" BUY를 하나 더 심는다.
+    phantom_buy_date = candles.index[split_idx].date()
+
+    strategy = _FixedSignalStrategy(buy_dates=[buy_signal_date, phantom_buy_date], sell_dates=[exit_date])
+    monkeypatch.setattr(grid_search, "load_history", lambda *a, **k: candles)
+
+    results = grid_search.run_rule_based(
+        client=object(), stock_codes=["005930"], strategy=strategy, param_grid={},
+        start=date(2026, 1, 1), end=date(2026, 3, 1),
+    )
+
+    assert len(results) == 1
+    # 총 거래수(1건)만 보면 예전 버그도 우연히 통과한다 — "어느 쪽 거래인지"가 핵심.
+    assert results[0].in_sample.num_trades == 1, (
+        "IS 막바지에 진입한 진짜 거래가 안 잡혔다 — IS/OOS를 독립적으로 "
+        "시뮬레이션하도록 되돌아갔는지 확인할 것(그러면 이 거래가 미청산으로 사라진다)"
+    )
+    assert results[0].out_of_sample.num_trades == 0, (
+        "OOS 쪽이 IS의 미청산 포지션을 모르고 자기 구간의 신호를 새 진입으로 또 잡았다"
+    )
 
 
 def test_run_ml_walk_forward_produces_valid_result_structure(monkeypatch):

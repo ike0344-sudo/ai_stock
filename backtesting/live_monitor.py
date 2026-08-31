@@ -42,9 +42,8 @@ def fetch_today_candles(
     폴백한다 — get_minute_chart(_pages)가 한 번에 최근 ~12거래일을 반환하므로(실측)
     오늘 하루는 페이지네이션 없이 항상 커버된다.
 
-    exchange: 기본값 "1"(KRX) — strategy3_scalp.py가 이 기본값 그대로 쓴다.
-    trading_loop.py(전략1)는 "3"(통합)을 명시적으로 넘긴다(전략1은 진입 조건 기준을
-    통합으로 바꾸기로 결정)."""
+    exchange: 기본값 "1"(KRX). trading_loop.py(전략1)는 "3"(통합)을 명시적으로
+    넘긴다(전략1은 진입 조건 기준을 통합으로 바꾸기로 결정)."""
     if feed is not None:
         live_df = feed.get_minute_df(stock_code)
         if not live_df.empty:
@@ -136,9 +135,9 @@ def check_candidate(
     if proba < proba_threshold:
         return None
 
-    # signal_time은 롤링 윈도우의 끝(지금) 대신 시작 시각으로 남긴다 — strategy3_scalp.
-    # check_candidate와 동일한 이유(조건을 충족시킨 3분 구간의 시작 시각이 사용자 감각과
-    # 더 맞음, 끝 시각 라벨은 2분 뒤로 밀려 보여 혼선이 있었다).
+    # signal_time은 롤링 윈도우의 끝(지금) 대신 시작 시각으로 남긴다 — 조건을
+    # 충족시킨 3분 구간의 시작 시각이 사용자 감각과 더 맞기 때문(끝 시각 라벨은
+    # 2분 뒤로 밀려 보여 혼선이 있었다).
     window_start = minute_df.index[-1] - timedelta(minutes=WINDOW_MINUTES - 1)
     return {
         "stock_code": stock_code,

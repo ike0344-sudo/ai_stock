@@ -97,8 +97,8 @@ def notify_signal_detected(strategy: str, code: str, name: str, price: float, pr
     name이 빈 문자열/None이면(watchlist에 없던 코드 등 이름을 못 찾은 경우) 종목코드만
     표시한다 — 알림 자체가 실패하면 안 되므로 이름 조회 실패를 이유로 메시지를 막지 않음.
 
-    proba=None은 ML 게이트가 없는 전략(예: strategy3_scalp — 조건만으로 포착, 진입확률
-    개념 자체가 없음)에서 쓴다 — 이 경우 진입확률 문구를 아예 생략한다."""
+    proba=None은 ML 게이트가 없는 전략(조건만으로 포착해 진입확률 개념 자체가
+    없는 경우)에서 쓴다 — 이 경우 진입확률 문구를 아예 생략한다."""
     label = f"{name}({code})" if name else code
     proba_part = f" (진입확률 {proba:.0%})" if proba is not None else ""
     message = f"[{strategy}] [포착] {label} @ {price:,.0f}원{proba_part}"
@@ -136,9 +136,87 @@ def notify_dashboard_recovered(bot_token: str, chat_id: str) -> bool:
     return send_telegram("[대시보드] 복구됨", bot_token, chat_id, level=INFO)
 
 
+def notify_sophie_duplicate_process(count: int, bot_token: str, chat_id: str) -> bool:
+    """소피증권(ai_stock.exe)이 논리적으로 2개 이상 떠 있을 때 통지 — sophie_feed_monitor.py가
+    호출한다. 2026-08-30 실측: 중복 실행된 인스턴스가 8770 포트를 못 받고도(Windows
+    ThreadingHTTPServer의 SO_REUSEADDR 특성상 바인드 자체는 예외 없이 "성공"으로 로그된다)
+    엔진 루프는 계속 돌아 9시간 넘게 CPU를 낭비했는데 아무도 몰랐다 — 이 알림이 그 사고를
+    막기 위한 것이다. 시간대 무관(장중 게이트 없음, CPU 낭비는 언제 나든 문제)."""
+    return send_telegram(f"[소피증권] 중복 실행 감지: {count}개 인스턴스", bot_token, chat_id, level=WARNING)
+
+
+def notify_sophie_duplicate_resolved(bot_token: str, chat_id: str) -> bool:
+    """소피증권 중복 실행이 1개 이하로 정리됐을 때 통지."""
+    return send_telegram("[소피증권] 중복 실행 정리됨", bot_token, chat_id, level=INFO)
+
+
+def notify_sophie_feed_down(reason: str, bot_token: str, chat_id: str) -> bool:
+    """소피증권(kospi-theme-engine) 실시간 체결 피드가 죽었을 때 통지 —
+    sophie_feed_monitor.py가 호출한다. 8770 포트가 열려 있어도 웹소켓 피드가
+    멈춰있을 수 있어(2026-08-30 실측 — 6일간 포트는 살아있었는데 알림이 없었다),
+    프로세스 생존이 아니라 결과(엔진 틱 카운터·로그 갱신)로 판단한다."""
+    return send_telegram(f"[소피증권] 실시간 피드 이상: {reason}", bot_token, chat_id, level=WARNING)
+
+
+def notify_sophie_feed_recovered(bot_token: str, chat_id: str) -> bool:
+    """소피증권 실시간 피드가 다시 정상(틱이 증가하거나 로그가 갱신)으로 돌아왔을 때 통지."""
+    return send_telegram("[소피증권] 실시간 피드 정상화", bot_token, chat_id, level=INFO)
+
+
+def notify_top35_failed(fail_count: int, total: int, failures: list[tuple[str, str, str]],
+                        bot_token: str, chat_id: str) -> bool:
+    """top35 일일 갱신에서 일부/전체 종목을 못 받았을 때 통지 — top35_job이 호출한다.
+    데이터가 하루 비면 그날 백테스트/리포트가 조용히 낡은 채로 돌아가므로 WARNING.
+
+    실패 사유를 종목별로 붙인다(DNS 실패인지 상장폐지인지에 따라 대응이 다름).
+    사유가 길어 메시지가 잘리는 걸 막으려고 종목당 앞 120자만 싣는다."""
+    lines = [f"{code} {name}: {reason[:120]}" for code, name, reason in failures[:5]]
+    if len(failures) > 5:
+        lines.append(f"... 외 {len(failures) - 5}종목")
+    header = f"[top35 갱신] {total}종목 중 {fail_count}종목 실패"
+    return send_telegram("\n".join([header] + lines), bot_token, chat_id, level=WARNING)
+
+
 def notify_kill_switch(strategy: str, realized_pnl_krw: float, threshold_krw: float, bot_token: str, chat_id: str) -> bool:
     message = (
         f"[{strategy}] [KILL SWITCH 발동] 당일 실현손익 {realized_pnl_krw:,.0f}원 "
         f"(한도 -{threshold_krw:,.0f}원) — 신규 진입 중단"
     )
     return send_telegram(message, bot_token, chat_id, level=CRITICAL)
+
+
+def notify_feed_stale(strategy: str, age_seconds: float, bot_token: str, chat_id: str) -> bool:
+    """실시간 피드가 소켓은 열린 채 데이터만 끊겼을 때 통지 — trading_loop이
+    get_feed_age_seconds()를 폴링해 호출한다. 피드가 끊겨도 fetch_today_candles가 REST로
+    폴백하므로 매매가 멈추지는 않는다(그래서 CRITICAL이 아니다). 다만 REST 폴백은 느리고
+    rate limit을 먹으므로 조용히 방치하면 안 된다."""
+    message = f"[{strategy}] [실시간피드] {age_seconds:.0f}초째 틱 없음 — REST 폴백으로 동작 중"
+    return send_telegram(message, bot_token, chat_id, level=WARNING)
+
+
+def notify_feed_recovered(strategy: str, bot_token: str, chat_id: str) -> bool:
+    """끊겼던 실시간 피드에 다시 틱이 들어왔을 때 통지."""
+    return send_telegram(f"[{strategy}] [실시간피드] 복구됨", bot_token, chat_id, level=INFO)
+
+
+def notify_reconcile_mismatch(strategy: str, report, bot_token: str, chat_id: str) -> bool:
+    """계좌 대사(reconcile) 불일치 통지. 내부 상태를 믿을 수 없다는 뜻이라 CRITICAL이다 —
+    특히 broker_only(브로커엔 있는데 내부엔 없는 종목)는 손절 감시가 안 붙은 채 방치되는
+    포지션이므로 사람이 즉시 봐야 한다.
+
+    report는 reconcile.ReconcileReport — 타입 힌트를 붙이면 notifier가 매매 모듈을
+    import하게 되므로 덕타이핑으로 받는다(알림 모듈은 어느 도메인에도 의존하지 않는다)."""
+    lines = [f"[{strategy}] [계좌 대사 불일치] 내부 상태와 브로커 보유가 어긋납니다 — 신규 진입 차단"]
+    for m in report.quantity_mismatches[:5]:
+        lines.append(f"- 수량 불일치 {m['code']}: 내부 {m['internal_qty']}주 / 브로커 {m['broker_qty']}주")
+    if report.broker_only:
+        lines.append(f"- 브로커에만 있음(손절 감시 없음): {', '.join(report.broker_only[:5])}")
+    if report.internal_only:
+        lines.append(f"- 내부에만 있음(유령 포지션): {', '.join(report.internal_only[:5])}")
+    return send_telegram("\n".join(lines), bot_token, chat_id, level=CRITICAL)
+
+
+def notify_reconcile_failed(strategy: str, exc: Exception, bot_token: str, chat_id: str) -> bool:
+    """계좌 대사를 위한 브로커 조회 자체가 실패했을 때 통지. 조회 실패는 불일치의 증거가
+    아니므로(토큰 만료·일시 장애 등) 매매를 막지 않고 WARNING만 남긴다."""
+    return send_telegram(f"[{strategy}] [계좌 대사] 조회 실패로 확인 못 함: {exc}", bot_token, chat_id, level=WARNING)

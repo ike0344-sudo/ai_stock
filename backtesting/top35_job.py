@@ -13,6 +13,7 @@ from datetime import datetime
 
 from kiwoom_client import KiwoomClient
 
+from .notifier import notify_top35_failed
 from .updater import update_top35
 
 # 장 마감(15:30) 이후라 그날 거래대금 top35 순위가 확정되는 15:40을 기본값으로 삼는다.
@@ -37,6 +38,11 @@ class Top35JobState:
 
 _state = Top35JobState()
 _lock = threading.Lock()
+# 텔레그램 알림 수신처 — start_daily_scheduler가 한 번 채운다. 대시보드 버튼으로 수동
+# 실행한 잡도 같은 곳으로 알리려고 잡별 인자가 아니라 모듈 전역으로 둔다(핸들러까지
+# 토큰을 들고 다니게 만들지 않기 위함). 비어 있으면 알림을 건너뛴다.
+_bot_token = ""
+_chat_id = ""
 
 
 def get_status() -> dict:
@@ -83,17 +89,37 @@ def _run_job(appkey: str, secretkey: str, is_mock: bool, data_dir: str, market: 
         results = summary.reindex(
             columns=["stock_code", "name", "status", "daily_range", "minute_range"], fill_value=""
         ).to_dict("records")
+        fail_count = len(summary) - success_count
         with _lock:
             _state.status = "done"
             _state.success_count = success_count
-            _state.fail_count = len(summary) - success_count
+            _state.fail_count = fail_count
             _state.results = results
             _state.finished_at = datetime.now().isoformat()
+        if fail_count:
+            # 일부 종목만 실패해도 알린다 — _finished_successfully_today가 status만 보므로
+            # 이런 날은 스케줄러가 재시도하지 않고 그대로 넘어간다(2026-08-10 삼성전자
+            # DNS 실패가 아침까지 방치된 실측 사례). 알림이 유일한 발견 수단이다.
+            _notify_failure(fail_count, len(summary),
+                            [(r["stock_code"], r["name"], r["status"])
+                             for r in results if r["status"] != "ok"])
     except Exception as exc:
         with _lock:
             _state.status = "error"
             _state.error_message = str(exc)
             _state.finished_at = datetime.now().isoformat()
+        _notify_failure(0, 0, [("-", "잡 전체 실패", str(exc))])
+
+
+def _notify_failure(fail_count: int, total: int, failures: list[tuple[str, str, str]]) -> None:
+    """알림 실패가 잡 자체를 죽이면 안 된다 — notifier가 이미 예외를 안 던지지만,
+    수신처 미설정 등으로 여기까지 오는 경우까지 방어한다."""
+    if not (_bot_token and _chat_id):
+        return
+    try:
+        notify_top35_failed(fail_count, total, failures, _bot_token, _chat_id)
+    except Exception:
+        pass
 
 
 _last_auto_success_date: str | None = None  # 스케줄러 전용 스레드 하나만 읽고 쓰므로 잠금 불필요
@@ -148,11 +174,18 @@ def start_daily_scheduler(
     market: str = "000",
     hour: int = DAILY_UPDATE_HOUR,
     minute: int = DAILY_UPDATE_MINUTE,
+    bot_token: str = "",
+    chat_id: str = "",
 ) -> threading.Thread:
     """대시보드 서버가 켜져 있는 동안 매일 hour:minute가 지나면 top35 업데이트를 스스로
     1회 트리거하는 데몬 스레드. 이 PC는 Windows 작업 스케줄러 등록이 UAC로 막혀 있어
     (관리자 토큰 제한), 이미 상시 실행 중인 대시보드 서버 프로세스 안에서 자체
-    스케줄링한다 — trading_value_ranking.start_background_poller와 같은 패턴."""
+    스케줄링한다 — trading_value_ranking.start_background_poller와 같은 패턴.
+
+    bot_token/chat_id를 주면 종목 수집이 실패한 날 텔레그램으로 알린다(수동 트리거
+    포함 — 수신처는 모듈 전역이라 이 함수를 한 번 부르면 그 뒤 모든 잡에 적용된다)."""
+    global _bot_token, _chat_id
+    _bot_token, _chat_id = bot_token, chat_id
     thread = threading.Thread(
         target=_daily_scheduler_loop, args=(appkey, secretkey, is_mock, data_dir, market, hour, minute), daemon=True
     )

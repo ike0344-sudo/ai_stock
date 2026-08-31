@@ -21,8 +21,11 @@ import os
 
 import pandas as pd
 
-from .breakout_reversal import simulate_trade_path
+from .breakout_reversal import detect_entries_batch_duckdb, simulate_trade_path
+from .entry_filters import intraday_new_high_filter_batch_duckdb, no_prior_drawdown_filter_batch_duckdb
 from .final_strategy import (
+    DRAWDOWN_THRESHOLD,
+    MIN_RETURN_PCT,
     MIN_TRADE_VALUE,
     N_DAY_HIGH,
     RECOMMENDED_MAX_CONCURRENT_POSITIONS,
@@ -53,14 +56,39 @@ MODEL_KWARGS = {"n_estimators": 300, "max_depth": 6, "min_samples_leaf": 20, "n_
 TRADE_COLUMNS = ["code", "entry_time", "exit_time", "pct"]
 
 
-def scan_all_trades(data_dir: str = "data") -> pd.DataFrame:
+def scan_all_trades(
+    data_dir: str = "data",
+    disabled_conditions: frozenset[str] = frozenset(),
+    top25_return_rank1_by_minute: dict | None = None,
+    use_duckdb_conditions: bool = False,
+) -> pd.DataFrame:
     """로컬 유니버스 전체에 strategy_1 진입 조건을 적용해, 거래 하나당 한 행
     (code/entry_time/exit_time/pct/ML 피처)으로 모은다. final_strategy.build_training_dataset과
-    같은 스캔이지만 entry_time/exit_time/code도 보존해 포트폴리오 시뮬레이션에 쓴다."""
+    같은 스캔이지만 entry_time/exit_time/code도 보존해 포트폴리오 시뮬레이션에 쓴다.
+
+    disabled_conditions/top25_return_rank1_by_minute는 final_strategy.detect_final_entries에
+    그대로 넘긴다(A/B 비교용) — 조건 이름(예: "regime")을 넣으면 그 조건만 빼고 나머지는
+    동일하게 스캔하고, top25_return_rank1_by_minute(universe.intraday_top_n_return_rank1_by_minute
+    결과)를 주면 25위+상승률1등 조건이 추가된다.
+
+    use_duckdb_conditions=True: base_entries/new_high/no_drawdown 세 조건을 종목별로
+    반복 계산하지 않고 DuckDB 배치 함수로 전체 유니버스를 한 번에 미리 계산해 넘긴다
+    (detect_entries_batch_duckdb/intraday_new_high_filter_batch_duckdb/
+    no_prior_drawdown_filter_batch_duckdb — 전부 pandas 버전과 1:1 동치 검증됨).
+    기본값 False면 기존 pandas 경로 그대로(기존 호출부 전부 영향 없음). 이 스위치
+    자체가 회귀 테스트다 — True/False 결과가 정확히 같아야 안전하다는 뜻(2026-08-30
+    lead 지시로 new_high 제거 검증을 pandas 경로로 확정한 뒤, 그 숫자를 기준선으로
+    이 스위치의 동일성을 확인했다 — state/agent_reports/backtest-agent_20260830-*.md)."""
     daily_top35 = daily_top_n_from_local(os.path.join(data_dir, "stocks", "daily"), top_n=TOP_N)
     regime_by_day = load_kospi_regime_by_day(data_dir)
     minute_dir = os.path.join(data_dir, "stocks", "minute")
     daily_dir = os.path.join(data_dir, "stocks", "daily")
+
+    precomputed_base_entries = precomputed_new_high = precomputed_no_drawdown = None
+    if use_duckdb_conditions:
+        precomputed_base_entries = detect_entries_batch_duckdb(data_dir, WINDOW_MINUTES, MIN_TRADE_VALUE, MIN_RETURN_PCT)
+        precomputed_new_high = intraday_new_high_filter_batch_duckdb(data_dir)
+        precomputed_no_drawdown = no_prior_drawdown_filter_batch_duckdb(data_dir, DRAWDOWN_THRESHOLD)
 
     rows = []
     for filename in sorted(os.listdir(minute_dir)):
@@ -74,7 +102,13 @@ def scan_all_trades(data_dir: str = "data") -> pd.DataFrame:
         minute_df = pd.read_csv(os.path.join(minute_dir, filename), index_col=0, parse_dates=True)
         daily_df = pd.read_csv(daily_path, index_col=0, parse_dates=True)
 
-        entries = detect_final_entries(minute_df, daily_df, code, daily_top35, regime_by_day)
+        entries = detect_final_entries(
+            minute_df, daily_df, code, daily_top35, regime_by_day,
+            disabled_conditions=disabled_conditions, top25_return_rank1_by_minute=top25_return_rank1_by_minute,
+            precomputed_base_entries=precomputed_base_entries,
+            precomputed_new_high=precomputed_new_high,
+            precomputed_no_drawdown=precomputed_no_drawdown,
+        )
         if entries.sum() == 0:
             continue
 
@@ -139,6 +173,9 @@ def run_walk_forward(
     train_days: int = 240,
     test_days: int = 60,
     step_days: int = 60,
+    # ⚠️ 이 두 기본값은 워크포워드로 검증된 게 아니라 단일 IS 구간(final_strategy.py의
+    # RECOMMENDED_* 주석 참고)에서 고른 값이다 — 여기서 "기본값"으로 그대로 물려받으면
+    # 이 함수의 OOS 결과가 실은 그 값으로 최적화된 IS 성과를 재확인하는 꼴이 된다.
     proba_threshold: float = RECOMMENDED_PROBA_THRESHOLD,
     max_concurrent_positions: int = RECOMMENDED_MAX_CONCURRENT_POSITIONS,
     initial_capital: float = 10_000_000,

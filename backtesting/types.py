@@ -65,6 +65,8 @@ class GridSearchResult:
     strategy_name: str
     params: dict
     in_sample: PerformanceMetrics
+    # ⚠️ 선택 금지: 파라미터/전략을 이 값 기준으로 고르면 그 순간 홀드아웃이 아니게 된다
+    # (사후 성과 확인 전용). 후보 선택은 in_sample로, out_of_sample은 마지막에 한 번만 본다.
     out_of_sample: PerformanceMetrics
     trades: list[Trade] = field(default_factory=list)
     # 같은 구간을 그냥 매수 후 보유했을 때의 수익률. 전략 수익률만 보면 "시장이 올라서

@@ -50,6 +50,7 @@ from .dashboard_data import (
 from .dashboard_monitor import DEFAULT_STATE_DIR as DASHBOARD_MONITOR_STATE_DIR
 from .heartbeat import read_heartbeat_age_seconds
 from .market_snapshot import get_market_snapshot
+from .regime_signal import get_regime_signal
 from .nasdaq_drop_monitor import DEFAULT_STATE_DIR as NASDAQ_DROP_MONITOR_STATE_DIR
 from .orderbook_collector import is_extended_market_open
 from .strategy_catalog import describe_strategy
@@ -60,11 +61,9 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC_DIR = os.path.join(PROJECT_ROOT, "static", "dashboard")
 
 # run-trading/monitor-signals의 --strategy 실행 파라미터 플래그 중, config.json
-# 스냅샷(cli.py의 _write_strategy_config/_write_scalp_config)에 실제로 남는 키만
-# 매핑한다 — "시작" 버튼이 직전 실행과 동일한 옵션(예: 전략1의 --interval-seconds 1)으로
-# 재시작하기 위함. 전략마다 config.json에 있는 키가 다르므로(strategy_3은 top_n/
-# interval_seconds만 있음) 없는 키는 그냥 건너뛴다 — 상위 커맨드(run-trading 또는
-# monitor-signals)가 애초에 받지 않는 플래그가 잘못 섞이는 일도 이 방식으로 막힌다.
+# 스냅샷(cli.py의 _write_strategy_config)에 실제로 남는 키만 매핑한다 — "시작" 버튼이
+# 직전 실행과 동일한 옵션(예: 전략1의 --interval-seconds 1)으로 재시작하기 위함.
+# 전략마다 config.json에 있는 키가 다를 수 있으므로 없는 키는 그냥 건너뛴다.
 CONFIG_TO_CLI_FLAG = {
     "top_n": "--top-n",
     "proba_threshold": "--proba-threshold",
@@ -107,15 +106,10 @@ def spawn_detached(command: list[str], cwd: str, log_file) -> subprocess.Popen:
     )
 
 
-MONITOR_ONLY_STRATEGIES = {"strategy_3", "strategy_4"}  # 주문 없이 관찰만 하는 전략 — monitor-signals로 실행
-
-
 def build_strategy_command(strategy: str, config: dict) -> list[str]:
-    """대시보드 "시작" 버튼이 실행할 커맨드를 조립한다. strategy_3/4만 monitor-signals
-    (주문 없는 감시 전용)로 실행하고 나머지는 run-trading — cli.py 자체가 이미 이 둘을
-    strategy_1과 다른 실행 경로로 분기하는 것과 같은 특별 취급이다."""
-    subcommand = "monitor-signals" if strategy in MONITOR_ONLY_STRATEGIES else "run-trading"
-    command = [sys.executable, "-m", "backtesting.cli", subcommand, "--strategy", strategy]
+    """대시보드 "시작" 버튼이 실행할 커맨드를 조립한다. 감시 전용이던 전략3/4가
+    삭제되면서 monitor-signals 분기도 함께 없어져, 이제는 전부 run-trading이다."""
+    command = [sys.executable, "-m", "backtesting.cli", "run-trading", "--strategy", strategy]
     for key, flag in CONFIG_TO_CLI_FLAG.items():
         if key in config:
             command += [flag, str(config[key])]
@@ -219,75 +213,6 @@ def start_strategy(state_root: str, strategy: str) -> bool:
     return True
 
 
-STRATEGY_AUTO_START_HOUR = 7
-STRATEGY_AUTO_START_MINUTE = 50
-STRATEGY_AUTO_START_STRATEGY = "strategy_1"
-STRATEGY_AUTO_START_SCHEDULER_POLL_SECONDS = 30.0
-STRATEGY_AUTO_START_MARKER_FILENAME = "auto_start_last_success_date.txt"
-
-
-def _strategy_auto_start_marker_path(state_root: str, strategy: str) -> str:
-    return os.path.join(state_root, strategy, STRATEGY_AUTO_START_MARKER_FILENAME)
-
-
-def _read_strategy_auto_start_last_success(state_root: str, strategy: str) -> str | None:
-    """마지막 성공 날짜를 파일로 영속화한다 — in-memory 변수였으면 대시보드가
-    재시작될 때마다(watchdog이 죽은 프로세스를 재시작하는 경우 포함) 잊어버려서,
-    이미 오늘 시작했는데도 재시작 직후 또 시작을 시도하게 된다(2026-07-26, 실제로
-    이 문제 때문에 당일 재시작 전에 미리 오늘 날짜를 심어둬야 했음)."""
-    path = _strategy_auto_start_marker_path(state_root, strategy)
-    if not os.path.exists(path):
-        return None
-    with open(path, encoding="utf-8") as f:
-        return f.read().strip() or None
-
-
-def _write_strategy_auto_start_last_success(state_root: str, strategy: str, date_str: str) -> None:
-    path = _strategy_auto_start_marker_path(state_root, strategy)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(date_str)
-
-
-def _strategy_auto_start_due(now: datetime, last_success_date: str | None) -> bool:
-    """평일이고, 오늘 아직 자동시작을 성공(또는 이미 실행 중으로 확인)시킨 적 없고,
-    지정 시각을 지났으면 True (단위 테스트 대상 순수 함수)."""
-    if now.weekday() >= 5:
-        return False
-    if last_success_date == now.date().isoformat():
-        return False
-    return (now.hour, now.minute) >= (STRATEGY_AUTO_START_HOUR, STRATEGY_AUTO_START_MINUTE)
-
-
-def _strategy_auto_start_scheduler_loop(state_root: str, strategy: str) -> None:
-    """대시보드가 켜져 있는 평일 아침, 지정 시각(기본 07:50)이 지나면 전략을 스스로
-    시작한다 — top35_job.start_daily_scheduler와 같은 이유(이 PC는 Windows 작업
-    스케줄러 등록이 UAC로 막혀있어 대시보드 프로세스 안에서 자체 스케줄링).
-
-    한 번 성공(또는 이미 실행 중 확인)하면 그날은 다시 건드리지 않는다 — 사용자가
-    낮에 수동으로 "중지"를 누른 경우까지 자동으로 재시작하면 수동 중지가 무의미해지므로,
-    top35_job과 동일하게 "실패 시에만 그날 안에서 재시도" 원칙을 따른다(성공 판정
-    자체가 크래시 후 재시작까지는 보장하지 않음 — 필요해지면 별도로 요청할 것)."""
-    while True:
-        try:
-            now = datetime.now()
-            last_success_date = _read_strategy_auto_start_last_success(state_root, strategy)
-            if is_strategy_running(state_root, strategy):
-                _write_strategy_auto_start_last_success(state_root, strategy, now.date().isoformat())
-            elif _strategy_auto_start_due(now, last_success_date):
-                if start_strategy(state_root, strategy):
-                    _write_strategy_auto_start_last_success(state_root, strategy, now.date().isoformat())
-        except Exception:
-            pass  # 상시 스케줄러 — 한 사이클 실패해도 다음 사이클에 계속
-        time.sleep(STRATEGY_AUTO_START_SCHEDULER_POLL_SECONDS)
-
-
-def start_strategy_auto_start_scheduler(state_root: str, strategy: str = STRATEGY_AUTO_START_STRATEGY) -> threading.Thread:
-    thread = threading.Thread(target=_strategy_auto_start_scheduler_loop, args=(state_root, strategy), daemon=True)
-    thread.start()
-    return thread
-
-
 class DashboardRequestHandler(BaseHTTPRequestHandler):
     state_root = "state"
     results_dir = "results"
@@ -299,6 +224,11 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         pass  # 폴링마다(수 초 간격) 기본 http.server 접근 로그가 콘솔을 채우지 않도록 억제
 
     def _strategy_path(self, strategy: str, key: str) -> str:
+        if key == "risk_state":
+            # risk_state.json은 계좌 전체가 공유하는 단일 파일이라 전략별 폴더 밑에
+            # 있지 않다(risk-agent.md 계좌 단일화, 2026-08-29) — 어느 strategy를
+            # 골라도 같은 계좌 포지션/손익/킬스위치를 보게 되는 게 맞는 동작이다.
+            return os.path.join(self.state_root, STATE_FILENAMES["risk_state"])
         return os.path.join(self.state_root, strategy, STATE_FILENAMES[key])
 
     def _selected_strategy(self, query: dict) -> str:
@@ -326,6 +256,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
         if parsed.path == "/api/market-snapshot":
             self._send_json(get_market_snapshot(self.kiwoom_appkey, self.kiwoom_secretkey, self.kiwoom_is_mock))
+        elif parsed.path == "/api/regime-signal":
+            self._send_json(get_regime_signal(self.kiwoom_appkey, self.kiwoom_secretkey, self.kiwoom_is_mock))
         elif parsed.path == "/api/account-snapshot":
             self._send_json(get_account_snapshot(self.kiwoom_appkey, self.kiwoom_secretkey, self.kiwoom_is_mock))
         elif parsed.path == "/api/sell-all-status":
@@ -535,6 +467,8 @@ def run_dashboard_server(
     kiwoom_is_mock: bool = True,
     port: int = 8765,
     host: str = "127.0.0.1",
+    telegram_bot_token: str = "",
+    telegram_chat_id: str = "",
 ) -> None:
     """host:port에서 대시보드 서버를 기동한다(블로킹). Ctrl+C로 중단.
 
@@ -557,13 +491,8 @@ def run_dashboard_server(
         # update-top35 docstring이 안내하는 "OS 스케줄러 등록"이 이 PC에선 UAC로
         # 막혀 있어(top35_job.start_daily_scheduler 참고), 대신 이미 상시 실행 중인
         # 대시보드 서버 프로세스 안에서 자체 스케줄링한다.
-        top35_job.start_daily_scheduler(kiwoom_appkey, kiwoom_secretkey, kiwoom_is_mock)
-        # 매일 아침(기본 07:50, 평일만) strategy_1 실전매매를 스스로 시작 — 사람이 매일
-        # 대시보드에서 "시작"을 직접 눌러야 했던 것을 대체한다(2026-07-26, 사용자 요청 —
-        # 실계좌 상태에서도 그대로 적용하기로 명시적으로 확인받음). 2026-07-26에 risk-agent
-        # 감사로 발견된 두 가지 문제(매수 경로 risk_manager.check_order 미연결, 손절/청산
-        # 지정가 미체결 확인 없이 청산 처리)를 모두 고치고 재검증한 뒤 다시 켠다.
-        start_strategy_auto_start_scheduler(state_root)
+        top35_job.start_daily_scheduler(kiwoom_appkey, kiwoom_secretkey, kiwoom_is_mock,
+                                        bot_token=telegram_bot_token, chat_id=telegram_chat_id)
     display_host = "127.0.0.1" if host == "0.0.0.0" else host
     print(f"대시보드 서버 시작: http://{display_host}:{port} (Ctrl+C로 중단)", flush=True)
     if host == "0.0.0.0":

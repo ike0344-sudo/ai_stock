@@ -10,9 +10,14 @@ portfolio_sim.py의 "슬롯 N개, 없으면 스킵" 개념을 백테스트에서
 """
 import json
 import os
+import threading
+import time
+import uuid
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 
+import psutil
 import yaml
 
 DEFAULT_RISK_LIMITS_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "risk_limits.yaml")
@@ -103,6 +108,112 @@ def save_state(state: RiskState, path: str) -> None:
         json.dump(asdict(state), f, ensure_ascii=False, indent=2)
 
 
+LOCK_STALE_SECONDS = 600  # 2026-08-30 정적분석으로 120초의 실제 결함을 찾아 올림 — 아래
+# _should_reclaim_lock의 PID 생존확인이 주 판단이고, 이 값은 그게 실패했을 때만 쓰는
+# 백업(같은 프로세스 안에서 스레드가 진짜로 멈춘 경우, PID 재사용으로 생존확인이
+# 잘못 True를 준 경우 등)이라 넉넉히 잡아도 무방하다.
+LOCK_POLL_INTERVAL_SECONDS = 0.05
+
+
+def _lock_owner_alive(token: bytes) -> bool | None:
+    """락 파일에 적힌 소유 토큰(pid:thread-id:uuid)에서 pid를 뽑아 그 프로세스가
+    아직 살아있는지 확인한다. 토큰을 못 읽거나(옛 형식의 빈 락 파일 등) 파싱에
+    실패하면 None(판단불가) — 이때는 시간 기준(LOCK_STALE_SECONDS) 백업으로만
+    판단한다. psutil.pid_exists는 PID 재사용(그 사이 죽고 같은 번호로 다른
+    프로세스가 새로 뜬 경우)까지는 구분 못 한다 — 이 경우 실제로는 죽었는데도
+    "살아있다"고 잘못 답할 수 있지만, 우리 프로세스들은 하루 단위로 뜨고 지는
+    수준이라 같은 PID가 그 짧은 시간 안에 재사용될 확률은 낮다고 보고, 그 잔여
+    위험은 LOCK_STALE_SECONDS 백업이 결국 회수한다."""
+    try:
+        pid = int(token.decode().split(":", 1)[0])
+    except (ValueError, UnicodeDecodeError, IndexError):
+        return None
+    try:
+        return psutil.pid_exists(pid)
+    except Exception:
+        return None  # psutil 쪽 예외(권한 등)도 판단불가로 — 시간 기준 백업에 맡긴다
+
+
+def _should_reclaim_lock(lock_path: str) -> bool:
+    """지금 이 락 파일을 회수해도 되는지 판단 — 소유자 pid가 확실히 죽었으면 즉시
+    True(크래시 복구가 최대 LOCK_STALE_SECONDS까지 안 기다려도 됨, 2026-08-30 PID
+    생존확인으로 승격), 판단 불가/살아있음이면 시간 기준 백업(LOCK_STALE_SECONDS)으로
+    판단한다. 소유자가 확실히 살아있으면(생존확인=True) 아무리 오래 걸려도 시간만으로
+    훔치지 않는다 — 이게 원래 결함(정적분석으로 찾은 "살아있는 락을 stale로 오판해
+    훔치는" 시나리오)을 근본적으로 막는 부분이다."""
+    with open(lock_path, "rb") as f:
+        holder_token = f.read()
+    alive = _lock_owner_alive(holder_token)
+    if alive is True:
+        return False  # 소유자가 확실히 살아있다 — 아무리 오래돼도 훔치지 않는다
+    if alive is False:
+        return True  # 소유자가 확실히 죽었다 — 시간 기준을 기다릴 필요 없이 즉시 회수
+    return time.time() - os.path.getmtime(lock_path) > LOCK_STALE_SECONDS  # 판단불가 — 시간 기준 백업
+
+
+@contextmanager
+def risk_state_lock(risk_state_path: str):
+    """계좌 전체가 risk_state.json 하나를 공유할 때(여러 전략 프로세스 동시 실행,
+    risk-agent.md 계좌 단일화) load_state → 반영 → save_state를 이 컨텍스트 안에서
+    하면, 두 프로세스의 사이클이 겹쳐도 서로 상대가 방금 쓴 포지션/손익/킬스위치를
+    조용히 덮어쓰지 않는다. O_CREAT|O_EXCL로 만든 락 파일 하나로 상호배제한다
+    (ponytail: 단일 파일 뮤텍스 — 프로세스가 더 늘어나 경합이 잦아지면 DB row lock
+    같은 걸로 승격할 것, 지금은 프로세스 2~3개 수준이라 이걸로 충분).
+
+    PermissionError도 FileExistsError와 동일하게 "지금은 못 잡음, 재시도"로 취급한다
+    — Windows(NTFS)는 락 파일이 막 삭제된 직후(다른 스레드/프로세스가 finally에서
+    os.remove한 바로 뒤) 같은 이름으로 다시 만들려 하면 파일이 진짜 없어졌는데도
+    FileExistsError 대신 PermissionError(ERROR_ACCESS_DENIED)를 던지는 경우가 있다
+    (2026-08-30 CPU 경합 부하테스트로 실측 재현: 8스레드로 GIL을 다투게 만든 뒤
+    O_CREAT|O_EXCL 재시도 루프에서 발생, 잡지 않으면 워커 스레드가 그대로 죽는다 —
+    실거래에서는 run_trading_loop 전체가 예외로 죽는 것과 같다). 이 예외를 못 잡으면
+    락이 "깨졌다"기보다 "락 획득 재시도 로직이 플랫폼별 예외 하나를 안 잡아서
+    죽는다"는 뜻이므로, 상호배제 자체(O_CREAT|O_EXCL의 원자성)는 여전히 안전하다.
+
+    락 파일에 소유 토큰(pid:thread-id:uuid)을 적어두고, 해제(finally) 시 그 토큰이
+    여전히 우리 것일 때만 지운다(2026-08-30 정적분석으로 발견) — 원래는 빈 파일만
+    만들고 finally에서 무조건 os.remove(lock_path)했는데, 이러면 A가 stale 판정으로
+    "죽은 줄 알고" 지운 락이 사실 B가 방금 새로 만든 락이어도 A는 구분 못 하고 그냥
+    지웠다. 토큰 검증은 이 cascade(엉뚱한 락을 지워버리는 것)를 막는다.
+
+    회수 판단(_should_reclaim_lock)은 2026-08-30에 시간 기준(120초 경과)에서 PID
+    생존확인 기준으로 승격했다 — 원래 결함은 "A가 여전히 살아서 오래 걸리는 정상
+    작업 중인데 다른 대기자가 시간만 보고 stale로 오판해 훔치는" 것이었는데, 이제는
+    소유자 pid가 실제로 죽었는지 psutil로 확인해 살아있으면 아무리 오래 걸려도 안
+    훔치고(근본 원인 차단), 죽었으면 LOCK_STALE_SECONDS(600초)를 기다릴 필요 없이
+    즉시 회수한다(크래시 복구 속도도 개선). PID 재사용 등으로 생존확인 자체가 안 될
+    때만 시간 기준이 백업으로 남는다."""
+    lock_path = risk_state_path + ".lock"
+    directory = os.path.dirname(lock_path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)  # 최초 실행 시 상태 폴더가 아직 없을 수 있음
+    token = f"{os.getpid()}:{threading.get_ident()}:{uuid.uuid4().hex}".encode()
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, token)
+            os.close(fd)
+            break
+        except (FileExistsError, PermissionError):
+            try:
+                if _should_reclaim_lock(lock_path):
+                    os.remove(lock_path)  # 죽은 프로세스가 남긴 락 회수(PID 생존확인 우선, 시간 기준은 백업)
+                    continue
+            except OSError:
+                pass  # 그 사이 다른 프로세스가 이미 지웠거나 새로 잡음 — 다시 시도
+            time.sleep(LOCK_POLL_INTERVAL_SECONDS)
+    try:
+        yield
+    finally:
+        try:
+            with open(lock_path, "rb") as f:
+                current = f.read()
+            if current == token:  # 우리 락이 맞을 때만 지운다 — 남의 락을 지우지 않음
+                os.remove(lock_path)
+        except OSError:
+            pass
+
+
 def roll_to_new_day_if_needed(
     state: RiskState, today: str | None = None, pnl_history_path: str | None = None
 ) -> RiskState:
@@ -160,6 +271,14 @@ def record_position_opened(
     state: RiskState, code: str, entry_time: str, allocated_capital: float, entry_price: float,
     total_quantity: int = 0,
 ) -> RiskState:
+    """같은 code로 이미 열려있는 OpenPosition이 있으면 새로 만들지 않고
+    record_position_added_to로 병합한다. record_partial_exit/record_position_closed는
+    code당 포지션이 하나뿐이라고 가정하고 동작하므로(첫 매칭만 청산·code 일치 전부
+    제거), 이미 열린 종목에 이 함수가 또 불리면(재신호 재진입 등) 두 번째 포지션이
+    청산 때 손익 반영 없이 조용히 사라진다. 호출부마다 방어하는 대신 여기 한 곳에서
+    막는다(risk-agent.md — 리스크 상태 추적 누락 방지)."""
+    if any(p.code == code for p in state.open_positions):
+        return record_position_added_to(state, code, allocated_capital, entry_price, total_quantity)
     state.open_positions.append(
         OpenPosition(
             code=code, entry_time=entry_time, allocated_capital=allocated_capital, entry_price=entry_price,

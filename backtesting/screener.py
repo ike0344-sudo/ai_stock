@@ -35,14 +35,29 @@ TRADE_VALUE_UNIT_WON = 1_000_000
 STEX_TP_COMBINED = "3"
 
 
-def _is_excluded_instrument(name: str) -> bool:
-    """ETF/ETN/스팩처럼 개별 상장기업이 아닌 상품·명목회사를 이름 휴리스틱으로 판별."""
+def _is_excluded_instrument(name: str, exclude_spac: bool = True) -> bool:
+    """ETF/ETN/스팩처럼 개별 상장기업이 아닌 상품·명목회사를 이름 휴리스틱으로 판별.
+
+    브랜드 접두어는 **뒤에 공백이 와야** 인정한다. ETF·ETN은 "KODEX 레버리지",
+    "신한 레버리지 WTI원유 ETN"처럼 운용사와 상품명 사이가 띄어져 있고, 개별 종목은
+    붙여 쓴다. 이 구분이 없으면 신한지주·HK이노엔·파워로직스·파워넷이 거래대금
+    순위에서 통째로 빠진다(실측) — "신한", "HK", "파워"가 위 목록에 있기 때문이다.
+    kospi-theme-engine/app/ingest/rest.py 의 is_fund_like 와 같은 규칙이다.
+    """
     upper = name.upper()
     if "ETN" in upper:
         return True
-    if any(marker in name for marker in SPAC_NAME_MARKERS):
+    if exclude_spac and any(marker in name for marker in SPAC_NAME_MARKERS):
         return True
-    return any(upper.startswith(prefix.upper()) for prefix in ETF_ETN_NAME_PREFIXES)
+    for prefix in ETF_ETN_NAME_PREFIXES:
+        p = prefix.upper()
+        if not upper.startswith(p):
+            continue
+        rest = upper[len(p):]
+        # "K-" 처럼 구분자를 품은 접두어는 그 자체가 경계다.
+        if p.endswith("-") or not rest or rest[0] == " ":
+            return True
+    return False
 
 
 def top_by_trading_value(
@@ -52,11 +67,15 @@ def top_by_trading_value(
     exclude_managed: bool = True,
     exclude_etf: bool = True,
     max_pages: int = 5,
+    exclude_spac: bool = True,
 ) -> pd.DataFrame:
     """거래대금 상위 종목을 top_n개 반환.
 
     market: "000"=코스피+코스닥 통합, "001"=코스피, "101"=코스닥.
     ETF/ETN/스팩·관리종목을 걸러내며 페이지를 이어받아(cont-yn/next-key) top_n개를 채운다.
+    exclude_spac=False면 스팩은 남긴다 — 스팩 급등도 "돈이 들어오는" 사건이라 순위에서
+    보고 싶을 때가 있다. 그 경우 **베이스라인도 같은 설정으로 받아야** 스팩만 장전
+    물량이 안 빠져 정규장 순위가 위로 뜨는 일이 없다.
 
     키움 [0184](당일거래량상위) 화면과 비슷한 정보를 보여주기 위해, ka10032 응답에
     이미 들어있는 필드들을 추가로 파싱해 반환한다 — current_price(현재가), change_amount
@@ -82,7 +101,7 @@ def top_by_trading_value(
             raise RuntimeError(f"ka10032 응답 오류 - return_code={payload.get('return_code')} {payload.get('return_msg', '')}".strip())
         for item in payload.get("trde_prica_upper", []):
             name = item["stk_nm"]
-            if exclude_etf and _is_excluded_instrument(name):
+            if exclude_etf and _is_excluded_instrument(name, exclude_spac):
                 continue
             # stex_tp=3(통합) 응답은 종목코드에 "_AL" 접미사가 붙는다(예: "000660_AL")
             # — 다운스트림(캔들 조회/주문/워치리스트 매칭)은 순수 6자리 코드를 기대하므로

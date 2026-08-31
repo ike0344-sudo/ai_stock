@@ -136,12 +136,12 @@ def test_notify_signal_detected_falls_back_to_code_only_when_name_unknown(monkey
 
 
 def test_notify_signal_detected_omits_proba_clause_when_none(monkeypatch):
-    # strategy3_scalp처럼 ML 게이트가 없는 전략은 진입확률 개념이 없어 proba=None을
+    # ML 게이트가 없는 전략은 진입확률 개념이 없어 proba=None을
     # 넘긴다 — 이때 메시지에 "진입확률" 문구 자체가 없어야 한다.
     captured = {}
     monkeypatch.setattr(notifier, "send_telegram", _capturing_send_telegram(captured))
 
-    notify_signal_detected("strategy_3", "005930", "삼성전자", 70000, None, "TOKEN", "CHAT")
+    notify_signal_detected("strategy_2", "005930", "삼성전자", 70000, None, "TOKEN", "CHAT")
 
     assert "005930" in captured["message"]
     assert "70,000" in captured["message"]

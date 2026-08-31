@@ -6,6 +6,7 @@ from backtesting.breakout_reversal import (
     DEFAULT_SLIPPAGE_RATE,
     DEFAULT_TAX_RATE,
     detect_entries,
+    detect_entries_batch_duckdb,
     simulate_all_entries,
     simulate_all_partial_exits,
     simulate_all_tiered_exits,
@@ -79,6 +80,44 @@ def test_detect_entries_does_not_leak_across_day_boundary():
 
     # day2의 단일 캔들은 day1 데이터와 합쳐져 3분 윈도우를 채우면 안 됨 (rolling(3)에 NaN만 있어야 함)
     assert entries.iloc[-1] == False  # noqa: E712
+
+
+def test_detect_entries_batch_duckdb_matches_pandas_version(tmp_path):
+    """배치 DuckDB 버전이 종목별 pandas 버전과 완전히 같은 결과를 내는지 - 정상발동/
+    수익률미달/거래대금미달/날짜경계리셋(가장 중요 - strategy-agent 요청사항) 네
+    시나리오를 종목 4개로 재구성해 확인한다."""
+    minute_dir = tmp_path / "stocks" / "minute"
+    minute_dir.mkdir(parents=True)
+
+    scenarios = {
+        "A": _candles("2026-01-01", [100, 100, 101.6], [20_000_000, 20_000_000, 20_000_000]),  # 발동
+        "B": _candles("2026-01-01", [100, 100, 100.5], [2_000_000, 2_000_000, 2_000_000]),  # 수익률 미달
+        "C": _candles("2026-01-01", [100, 100, 102], [10, 10, 10]),  # 거래대금 미달
+        "D": pd.concat([
+            _candles("2026-01-01", [100, 100], [2_000_000, 2_000_000]),
+            _candles("2026-01-02", [102], [2_000_000]),
+        ]),  # 날짜경계 - day2 첫 봉은 3분 윈도우를 못 채워야 함
+    }
+    for code, combined in scenarios.items():
+        csv_index = combined.index.copy()
+        csv_index.name = "date"
+        combined.set_axis(csv_index).to_csv(minute_dir / f"{code}.csv")
+
+    expected = {
+        code: detect_entries(df, window_minutes=3, min_trade_value=4_000_000_000, min_return_pct=0.015)
+        for code, df in scenarios.items()
+    }
+    result = detect_entries_batch_duckdb(
+        str(tmp_path), window_minutes=3, min_trade_value=4_000_000_000, min_return_pct=0.015
+    )
+
+    assert set(result.keys()) == set(scenarios.keys())
+    for code in scenarios:
+        pd.testing.assert_series_equal(
+            result[code], expected[code], check_names=False, check_freq=False
+        )
+    # 핵심 확인: D의 마지막 봉(day2 첫 봉)은 day1과 안 섞여 False여야 한다.
+    assert result["D"].iloc[-1] == False  # noqa: E712
 
 
 def test_simulate_trade_path_fills_entry_and_exit_at_next_bar_open():

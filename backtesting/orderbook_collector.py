@@ -87,10 +87,9 @@ def wait_until_extended_market_open(now_fn=datetime.now, on_wait_tick=None) -> b
 
 
 def wait_until_market_open(now_fn=datetime.now, on_wait_tick=None) -> bool:
-    """wait_until_extended_market_open과 동일한 대기 로직이지만 09:00(정규장) 기준 —
-    전략4(strategy4_rank_watch.py)가 통합장(08:00~20:00)이 아니라 정규장(09:00~15:30)
-    동안만 순위를 감시하도록 사용자가 명시해, cli.py의 strategy_4 분기가 이 함수로
-    대기한다."""
+    """wait_until_extended_market_open과 동일한 대기 로직이지만 09:00(정규장) 기준.
+    통합장이 아니라 정규장 동안만 도는 루프를 위한 것 — 현재 호출부는 없고
+    extended 쪽과 짝을 이루는 공용 헬퍼로 남겨둔다."""
     return _wait_until_session_open(
         MARKET_OPEN_HOUR, MARKET_OPEN_MINUTE, is_market_open, "정규장", now_fn, on_wait_tick,
     )

@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 from backtesting import sell_all_job, top35_job
-from backtesting.dashboard_server import _strategy_auto_start_due, build_dashboard_server
+from backtesting.dashboard_server import build_dashboard_server
 from backtesting.sell_all_job import SellAllJobState
 from backtesting.top35_job import Top35JobState
 
@@ -37,7 +37,9 @@ def running_server(tmp_path):
     state_root = str(tmp_path / "state")
     strategy_dir = os.path.join(state_root, "strategy_1")
     os.makedirs(strategy_dir, exist_ok=True)
-    risk_state_path = os.path.join(strategy_dir, "risk_state.json")
+    # risk_state.json은 계좌 전체가 공유하는 단일 파일이라 strategy_dir이 아니라
+    # state_root 바로 밑에 있다(risk-agent.md 계좌 단일화, 2026-08-29).
+    risk_state_path = os.path.join(state_root, "risk_state.json")
     signals_path = os.path.join(strategy_dir, "signals.jsonl")
     orders_path = os.path.join(strategy_dir, "orders.jsonl")
     pnl_history_path = os.path.join(strategy_dir, "pnl_history.jsonl")
@@ -67,6 +69,7 @@ def running_server(tmp_path):
 
     yield SimpleNamespace(
         get=get, post=post, port=port, state_root=state_root, risk_state_path=risk_state_path,
+        strategy_dir=strategy_dir,
         signals_path=signals_path, results_dir=results_dir, orders_path=orders_path,
         pnl_history_path=pnl_history_path, kill_switch_override_path=kill_switch_override_path,
     )
@@ -343,7 +346,7 @@ def test_get_api_config_returns_empty_object_when_no_file(running_server):
 
 
 def test_get_api_config_returns_strategy_run_parameters(running_server):
-    config_path = os.path.join(os.path.dirname(running_server.risk_state_path), "config.json")
+    config_path = os.path.join(running_server.strategy_dir, "config.json")
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump({"strategy": "strategy_1", "top_n": 35, "proba_threshold": 0.6, "is_mock": True}, f)
 
@@ -607,7 +610,7 @@ def test_get_api_strategies_lists_subfolders_and_defaults_selection(running_serv
 def test_get_api_strategies_reports_running_false_when_stop_requested_even_with_fresh_heartbeat(running_server):
     # "중지" 버튼을 눌러 루프가 막 종료됐을 때, 마지막 하트비트는 아직 신선한 상태로
     # 남아있다 — stop_requested.json이 있으면 하트비트 나이와 무관하게 False여야 한다.
-    strategy_dir = os.path.dirname(running_server.risk_state_path)
+    strategy_dir = running_server.strategy_dir
     with open(os.path.join(strategy_dir, "heartbeat.json"), "w", encoding="utf-8") as f:
         json.dump({"updated_at": time.time()}, f)
     with open(os.path.join(strategy_dir, "stop_requested.json"), "w", encoding="utf-8") as f:
@@ -620,7 +623,7 @@ def test_get_api_strategies_reports_running_false_when_stop_requested_even_with_
 
 
 def test_get_api_strategies_reports_running_true_with_fresh_heartbeat(running_server):
-    strategy_dir = os.path.dirname(running_server.risk_state_path)
+    strategy_dir = running_server.strategy_dir
     with open(os.path.join(strategy_dir, "heartbeat.json"), "w", encoding="utf-8") as f:
         json.dump({"updated_at": time.time()}, f)
 
@@ -631,7 +634,7 @@ def test_get_api_strategies_reports_running_true_with_fresh_heartbeat(running_se
 
 
 def test_get_api_strategies_reports_running_false_with_stale_heartbeat(running_server):
-    strategy_dir = os.path.dirname(running_server.risk_state_path)
+    strategy_dir = running_server.strategy_dir
     with open(os.path.join(strategy_dir, "config.json"), "w", encoding="utf-8") as f:
         json.dump({"interval_seconds": 1.0}, f)
     with open(os.path.join(strategy_dir, "heartbeat.json"), "w", encoding="utf-8") as f:
@@ -762,14 +765,19 @@ def test_get_api_strategies_returns_empty_list_and_fallback_selected_when_no_fol
     assert payload == {"strategies": [], "selected": "strategy_1", "running": {}}
 
 
-def test_get_api_state_scopes_to_requested_strategy(tmp_path):
+def test_get_api_state_shares_account_wide_risk_state_across_strategies(tmp_path):
+    """risk_state.json은 계좌 전체가 공유하는 단일 파일이라(risk-agent.md 계좌
+    단일화, 2026-08-29) ?strategy=strategy_1/strategy_2 어느 쪽으로 물어도 같은
+    포지션/손익을 봐야 한다 — 전략별 폴더 밑에 있는 risk_state.json은(레거시든
+    실수든) 무시되고 절대 읽히지 않는다."""
     from backtesting.dashboard_server import build_dashboard_server
 
     state_root = str(tmp_path / "state")
     os.makedirs(os.path.join(state_root, "strategy_1"))
     os.makedirs(os.path.join(state_root, "strategy_2"))
-    with open(os.path.join(state_root, "strategy_1", "risk_state.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(state_root, "risk_state.json"), "w", encoding="utf-8") as f:
         json.dump({"trading_date": "2026-07-20", "realized_pnl_krw": 1000.0, "kill_switch_active": False, "open_positions": []}, f)
+    # 전략별 폴더 밑에 남아있는 risk_state.json(레거시/실수)은 무시돼야 한다.
     with open(os.path.join(state_root, "strategy_2", "risk_state.json"), "w", encoding="utf-8") as f:
         json.dump({"trading_date": "2026-07-20", "realized_pnl_krw": -2000.0, "kill_switch_active": False, "open_positions": []}, f)
 
@@ -794,7 +802,7 @@ def test_get_api_state_scopes_to_requested_strategy(tmp_path):
     thread.join(timeout=5)
 
     assert json.loads(body1)["realized_pnl_krw"] == 1000.0
-    assert json.loads(body2)["realized_pnl_krw"] == -2000.0
+    assert json.loads(body2)["realized_pnl_krw"] == 1000.0
 
 
 # ---- build_strategy_command ----
@@ -808,23 +816,6 @@ def test_build_strategy_command_uses_run_trading_for_strategy_1_with_config_flag
     assert "strategy_1" in command
     assert "--top-n" in command and "35" in command
     assert "--interval-seconds" in command and "1.0" in command
-
-
-def test_build_strategy_command_uses_monitor_signals_for_strategy_3():
-    from backtesting.dashboard_server import build_strategy_command
-
-    command = build_strategy_command("strategy_3", {"top_n": 35})
-
-    assert command[1:4] == ["-m", "backtesting.cli", "monitor-signals"]
-
-
-def test_build_strategy_command_uses_monitor_signals_for_strategy_4():
-    from backtesting.dashboard_server import build_strategy_command
-
-    command = build_strategy_command("strategy_4", {"top_n": 10, "interval_seconds": 10.0})
-
-    assert command[1:4] == ["-m", "backtesting.cli", "monitor-signals"]
-    assert "strategy_4" in command
 
 
 def test_build_strategy_command_omits_flags_not_present_in_config():
@@ -888,7 +879,7 @@ def test_spawn_detached_falls_back_without_breakaway_when_job_disallows_it(monke
 # ---- POST /api/strategy/start, /api/strategy/stop ----
 
 def test_post_api_strategy_start_spawns_subprocess_with_config_derived_command(running_server, monkeypatch):
-    strategy_dir = os.path.dirname(running_server.risk_state_path)
+    strategy_dir = running_server.strategy_dir
     with open(os.path.join(strategy_dir, "config.json"), "w", encoding="utf-8") as f:
         json.dump({"top_n": 35, "interval_seconds": 1.0}, f)
 
@@ -911,7 +902,7 @@ def test_post_api_strategy_start_spawns_subprocess_with_config_derived_command(r
 
 
 def test_post_api_strategy_start_refuses_when_already_running(running_server, monkeypatch):
-    strategy_dir = os.path.dirname(running_server.risk_state_path)
+    strategy_dir = running_server.strategy_dir
     with open(os.path.join(strategy_dir, "heartbeat.json"), "w", encoding="utf-8") as f:
         json.dump({"updated_at": time.time()}, f)
 
@@ -955,7 +946,7 @@ def test_post_allows_same_origin_request(running_server):
 
 
 def test_post_api_strategy_stop_writes_stop_flag_file(running_server):
-    strategy_dir = os.path.dirname(running_server.risk_state_path)
+    strategy_dir = running_server.strategy_dir
     stop_flag_path = os.path.join(strategy_dir, "stop_requested.json")
     assert not os.path.exists(stop_flag_path)
 
@@ -964,31 +955,3 @@ def test_post_api_strategy_stop_writes_stop_flag_file(running_server):
     assert response.status == 200
     assert json.loads(body) == {"stopped": True}
     assert os.path.exists(stop_flag_path)
-
-
-# ---- strategy auto-start scheduling (_strategy_auto_start_due) ----
-
-def test_strategy_auto_start_due_true_when_time_passed_and_not_run_today():
-    now = datetime(2026, 7, 27, 7, 51)  # Monday
-    assert _strategy_auto_start_due(now, last_success_date=None) is True
-
-
-def test_strategy_auto_start_due_false_before_scheduled_time():
-    now = datetime(2026, 7, 27, 7, 49)  # Monday
-    assert _strategy_auto_start_due(now, last_success_date=None) is False
-
-
-def test_strategy_auto_start_due_false_when_already_run_today():
-    now = datetime(2026, 7, 27, 8, 30)  # Monday
-    assert _strategy_auto_start_due(now, last_success_date="2026-07-27") is False
-
-
-def test_strategy_auto_start_due_true_on_new_day_even_if_run_yesterday():
-    now = datetime(2026, 7, 27, 7, 51)  # Monday
-    assert _strategy_auto_start_due(now, last_success_date="2026-07-24") is True
-
-
-def test_strategy_auto_start_due_false_on_weekend():
-    now = datetime(2026, 7, 25, 7, 51)  # Saturday
-    assert _strategy_auto_start_due(now, last_success_date=None) is False
-

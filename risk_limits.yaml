@@ -12,7 +12,16 @@ risk_pct_per_trade: 0.01
 
 # 아래는 심사 메커니즘만 구현되어 있고 값은 미적용(null) 상태 — 사용자가 실제
 # 수치를 정하기 전까지는 해당 검사를 건너뛴다.
-max_symbol_weight_pct: null
+#
+# max_symbol_weight_pct: 2026-08-30 사용자 결정 — 0.25(비율, stop_loss_pct와 동일 표기).
+# 지금까지 5슬롯 균등분할(1/max_concurrent_positions)이라 자연스럽게 종목당 20%씩
+# 들어가서 이 한도가 null이어도 문제가 안 보였다. 그런데 "거래대금 상위 25위 이내 +
+# 그 중 상승률 1등"처럼 좁아진 신규 조건(final_strategy.py TOP25_TRADING_VALUE_RANK_N)은
+# 같은 종목을 반복 재선정할 수 있고, 실제로 record_position_opened가 같은 code로
+# 중복 OpenPosition을 만들어 청산 시 손익이 조용히 사라지는 버그(2026-08-30 수정,
+# risk_manager.py record_position_opened 참고)로 이어진 적이 있다 — 그 경로를 이 한도로도
+# 막는다. 20~25% 권장 범위의 상단을 택함(risk-agent 제안, 사용자 승인).
+max_symbol_weight_pct: 0.25
 # 팻핑거 방지용 단일 주문 노셔널 상한. strategy_1 슬롯당 정상 노셔널
 # (10,000,000 / max_concurrent_positions = 2,000,000원)의 2배로 설정 (2026-07-27 사용자 승인).
 max_order_notional: 4000000

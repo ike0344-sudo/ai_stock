@@ -11,12 +11,13 @@
 캔들)에 도달하면 강제 청산된다.
 
 거래소 기준: 이 모듈 자체는 candles(분봉 DataFrame)를 받아 계산만 할 뿐 KRX/통합
-구분에 관여하지 않는다 — 그 구분은 호출부가 결정한다(final_strategy.py/전략1,
-strategy3_scalp.py/전략3 모두 통합 기준 분봉을 넘긴다, live_monitor.fetch_today_candles
-참고).
+구분에 관여하지 않는다 — 그 구분은 호출부가 결정한다(final_strategy.py/전략1이
+통합 기준 분봉을 넘긴다, live_monitor.fetch_today_candles 참고).
 """
+import os
 from dataclasses import dataclass, field
 
+import duckdb
 import pandas as pd
 
 from .types import is_price_limit_locked, prev_day_close_series
@@ -48,6 +49,72 @@ def detect_entries(
     if not parts:
         return pd.Series(dtype=bool)
     return pd.concat(parts).reindex(candles.index).fillna(False)
+
+
+# ponytail: scan_all_trades 프로파일링에서 detect_entries가 전체의 34%로 가장 큼
+# (backtest-agent_20260830-083548.md). 판단로직은 위 pandas 버전과 완전히 동일 -
+# 일자별 리셋 롤링합/기간수익률을 SQL PARTITION BY (code, day)로 그대로 옮겼다.
+# strategy-agent 승인(2026-08-30, state/agent_mail 스레드) 후 추가 - detect_entries
+# 자체는 그대로 두고 이 함수만 추가, detect_final_entries에는 연결 안 함.
+def detect_entries_batch_duckdb(
+    data_dir: str = "data",
+    window_minutes: int = 3,
+    min_trade_value: float = 4_000_000_000,
+    min_return_pct: float = 0.015,
+) -> dict[str, pd.Series]:
+    """detect_entries를 로컬 유니버스 전체 종목에 대해 한 번의 DuckDB 쿼리로 계산한다.
+    반환값은 {code: pd.Series[bool]} - 기존 detect_entries(candles, ...) 종목별 호출
+    결과와 값이 완전히 같아야 한다(tests/backtesting/test_breakout_reversal.py::
+    test_detect_entries_batch_duckdb_matches_pandas_version 참고).
+
+    로컬 CSV에 "value" 컬럼이 있는 파일이 없어(entry_filters.py의 배치 포팅 2건과
+    동일하게 확인됨) close*volume 근사만 구현했다 - pandas 버전의 "value 있으면
+    그대로 쓰는" 폴백은 없음.
+    """
+    minute_glob = os.path.join(data_dir, "stocks", "minute", "*.csv").replace("\\", "/")
+    # (close/close_ref - 1)로 쓴다 - 수학적으로는 (close-close_ref)/close_ref와 같지만
+    # pandas의 pct_change()가 정확히 이 형태(나눈 뒤 1을 뺌)로 계산해서, 등락률이
+    # 임계값에 정확히 걸치는 극히 드문 경우(실측: 105/7000, 105/6000이 부동소수점
+    # 반올림에서 한쪽은 0.015 정확히, 다른 쪽은 0.014999999999999902로 갈림) 계산식
+    # 순서를 안 맞추면 결과가 갈린다 - 1045종목 실측에서 32건 실제로 갈렸던 걸 발견
+    # 하고 고침(tests/backtesting/test_breakout_reversal.py 참고).
+    query = f"""
+    WITH minute AS (
+        SELECT
+            parse_filename(filename, true) AS code,
+            date AS ts,
+            date::DATE AS d,
+            close,
+            close * volume AS per_minute_value
+        FROM read_csv('{minute_glob}', filename=true, union_by_name=true)
+    ),
+    windowed AS (
+        SELECT code, ts,
+            ROW_NUMBER() OVER (PARTITION BY code, d ORDER BY ts) AS rn,
+            SUM(per_minute_value) OVER (
+                PARTITION BY code, d ORDER BY ts
+                ROWS BETWEEN {window_minutes - 1} PRECEDING AND CURRENT ROW
+            ) AS trade_value,
+            close,
+            LAG(close, {window_minutes - 1}) OVER (PARTITION BY code, d ORDER BY ts) AS close_ref
+        FROM minute
+    )
+    SELECT code, ts,
+        COALESCE(
+            rn >= {window_minutes}
+            AND trade_value >= {min_trade_value}
+            AND (close / close_ref - 1) >= {min_return_pct},
+            false
+        ) AS is_entry
+    FROM windowed
+    ORDER BY code, ts
+    """
+    result = duckdb.sql(query).df()
+    result["ts"] = pd.to_datetime(result["ts"])
+    return {
+        code: group.set_index("ts")["is_entry"].astype(bool)
+        for code, group in result.groupby("code")
+    }
 
 
 @dataclass

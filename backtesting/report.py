@@ -21,6 +21,10 @@ def _oos_alpha_pct(result: GridSearchResult) -> float:
 def rank_results(results: list[GridSearchResult]) -> list[GridSearchResult]:
     """거래가 있는 조합을 우선하고, 그 안에서는 벤치마크 대비 초과수익(alpha) 내림차순으로 정렬.
 
+    ⚠️ out_of_sample로 정렬/선택한다 — 이 결과를 '검증된 성과'로 재보고하면 데이터
+    스누핑이다(types.GridSearchResult.out_of_sample 참고). 여기서는 사람이 후보를
+    훑어보는 용도로만 쓰고, 최종 성과 주장은 별도의 진짜 홀드아웃으로 확인할 것.
+
     거래 0건인 조합은 수익률이 0%가 되어 실제로 수익 난 조합과 동률/역전될 수 있다
     (실제 API로 여러 종목을 돌리다 발견 — 거래 없는 조합이 '최고'로 뽑혀 차트 생성이
     크래시했었음). summarize()의 표 순서와 plot 대상 선정이 이 함수 하나로 일치한다.

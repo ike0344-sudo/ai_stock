@@ -149,14 +149,14 @@ def test_load_signal_history_respects_limit(tmp_path):
 
 def test_load_all_signal_history_tags_each_signal_with_its_strategy(tmp_path):
     path1 = tmp_path / "strategy_1_signals.jsonl"
-    path2 = tmp_path / "strategy_3_signals.jsonl"
+    path2 = tmp_path / "strategy_2_signals.jsonl"
     path1.write_text(json.dumps({"stock_code": "005930", "signal_time": "2026-07-20T09:00:00", "price": 70000.0, "proba": 0.55}), encoding="utf-8")
     path2.write_text(json.dumps({"stock_code": "000660", "signal_time": "2026-07-20T10:15:00", "price": 215000.0}), encoding="utf-8")
 
-    signals = load_all_signal_history({"strategy_1": str(path1), "strategy_3": str(path2)})
+    signals = load_all_signal_history({"strategy_1": str(path1), "strategy_2": str(path2)})
 
     by_code = {s["stock_code"]: s["strategy"] for s in signals}
-    assert by_code == {"005930": "strategy_1", "000660": "strategy_3"}
+    assert by_code == {"005930": "strategy_1", "000660": "strategy_2"}
 
 
 def test_load_all_signal_history_sorts_across_strategies_by_signal_time_descending(tmp_path):

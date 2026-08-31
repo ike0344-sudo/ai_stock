@@ -14,6 +14,13 @@ import sys
 import time
 from datetime import date, datetime, timedelta
 
+# nasdaq_monitor_watchdog.ps1이 monitor-nasdaq-drop/monitor-dashboard/dashboard
+# 서브커맨드를 -RedirectStandardOutput으로 로그 파일에 상시 리다이렉트한다 — 그러면
+# stdout이 Windows 기본 cp949로 열려 한글 출력에서 UnicodeEncodeError로 죽을 수 있다
+# (실측: kospi-theme-engine/scripts/prepare.py에서 같은 원인으로 재현). 이 프로세스
+# 전체(dashboard_server/dashboard_monitor/nasdaq_drop_monitor 전부 포함)에 한 번만 걸면 된다.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 import pandas as pd
 from dotenv import load_dotenv
 from kiwoom_client import KiwoomClient
@@ -38,19 +45,15 @@ from .orderbook_collector import (
     is_market_open,
     run_collection_loop,
     wait_until_extended_market_open,
-    wait_until_market_open,
 )
 from .oversold_strategy import STOCK_CODE as OVERSOLD_STOCK_CODE
 from .oversold_trading_loop import run_oversold_trading_loop
 from .risk_manager import RECOMMENDED_MAX_CONCURRENT_POSITIONS
 from .screener import top_by_trading_value
+from .sophie_feed_monitor import DEFAULT_LOG_PATH as SOPHIE_FEED_LOG_PATH, run_sophie_feed_monitor_loop
 from .strategies.envelope import EnvelopeStrategy
 from .strategies.ma_crossover import MovingAverageCrossover
 from .strategies.rsi_strategy import RsiStrategy
-from .strategy3_scalp import DEFAULT_SIGNAL_LOG_PATH as STRATEGY3_DEFAULT_SIGNAL_LOG_PATH
-from .strategy3_scalp import run_scalp_monitor_loop
-from .strategy4_rank_watch import DEFAULT_SIGNAL_LOG_PATH as STRATEGY4_DEFAULT_SIGNAL_LOG_PATH
-from .strategy4_rank_watch import run_rank_watch_loop
 from .telegram_order_bot import run_telegram_order_bot
 from .trading_loop import run_trading_loop
 from .universe import build_liquid_universe, build_topn_union_universe
@@ -59,29 +62,106 @@ from .updater import update_top35
 INDEX_CODES = {"001": "코스피종합", "101": "코스닥종합"}
 
 
+ACCOUNT_RISK_STATE_PATH = "state/risk_state.json"  # 계좌 전체가 공유하는 단일 리스크
+# 상태 파일 — 전략별로 나누면 동시보유 슬롯 한도(risk_limits.yaml)가 전략마다 따로
+# 적용돼 실질 한도가 전략 수배로 조용히 늘어난다(risk-agent.md 계좌 단일화,
+# 2026-08-29). 이 경로는 --strategy나 --risk-state-path로 바꿀 수 없다 — 리스크
+# 심사를 우회하는 경로를 남기지 않기 위함(risk-agent.md §핵심원칙 1).
+
+# 모의->실거래 전환 이중 확인(execution-agent.md, 2026-08-30 지시). KIWOOM_IS_MOCK=false
+# 하나만으로 실주문이 나가면 셸 환경변수 오타/다른 셸의 설정 누수만으로 사고가 난다.
+# 두 번째 신호는 환경변수가 아니라 "정해진 내용의 파일을 직접 만드는 행위"여야 한다 —
+# 환경변수를 하나 더 추가하는 건 같은 실수 경로(export/set 오타, 프로필 누수)를 하나
+# 더 만들 뿐이라 거부됐다. 대화형 확인(input())도 자동 실행 경로(스케줄러/워치독)를
+# 막아버리므로 쓰지 않는다 — 그래서 정적 파일 존재+내용 일치로만 확인한다.
+LIVE_TRADING_CONFIRM_PATH = "state/LIVE_TRADING_CONFIRMED"
+LIVE_TRADING_CONFIRM_TOKEN = "I_UNDERSTAND_THIS_IS_REAL_MONEY"
+
+
+def _live_trading_confirmation_status(confirm_path: str = LIVE_TRADING_CONFIRM_PATH) -> str:
+    """반환값: "ok"(오늘 날짜로 확인됨) / "missing"(파일이 아예 없음) / "stale"(파일은
+    있지만 형식이 틀렸거나 날짜가 오늘이 아님).
+
+    파일 내용은 "{LIVE_TRADING_CONFIRM_TOKEN} YYYY-MM-DD" 한 줄 — 고정 문자열만 검사하던
+    이전 버전은 한 번 만든 파일이 영구히 유효해서, "실거래를 한 번 테스트하고 파일을
+    안 지운 채 몇 달 뒤 다른 설정 변경으로 KIWOOM_IS_MOCK=false가 켜지면 그대로 실주문이
+    나간다"는 사고 시나리오를 못 막았다(2026-08-30 사용자 지적). 날짜까지 확인하면 같은
+    날 재시작(워치독 등)은 통과하되 다음 날은 다시 막혀 매일 새로 확인해야 한다.
+
+    "오늘"은 date.today()(로컬 시스템 시각) 기준 — 이 코드베이스가 이미 이 기준으로
+    "오늘"을 다룬다(risk_manager.roll_to_new_day_if_needed 등). 정규장+통합장은
+    08:00~20:00로 자정을 넘지 않으므로, 자정 이후 재시작은 이미 그날 거래가 다 끝난
+    뒤다 — 이 시점부터는 다음 실행이 wait_until_extended_market_open()으로 어차피 다음
+    날 08:00까지 막히므로, "날짜가 바뀌면 다시 막는다"만으로 자정 넘어 재시작도 별도
+    처리 없이 안전하게 걸러진다(거래일 캘린더까지 만들 필요 없음)."""
+    if not os.path.exists(confirm_path):
+        return "missing"
+    try:
+        with open(confirm_path, encoding="utf-8") as f:
+            content = f.read().strip()
+    except OSError:
+        return "missing"
+
+    parts = content.split()
+    if len(parts) != 2 or parts[0] != LIVE_TRADING_CONFIRM_TOKEN:
+        return "stale"
+    try:
+        confirmed_date = _parse_date(parts[1])
+    except ValueError:
+        return "stale"
+    return "ok" if confirmed_date == date.today() else "stale"
+
+
+def _print_live_trading_banner(
+    strategy: str, client, total_capital: float, max_daily_loss: float, max_concurrent_positions: int | None = None,
+) -> None:
+    """실거래 시작 시 켜지는 내용을 한눈에 보이게 출력한다(모의는 건드리지 않음 —
+    기존 한 줄 로그 그대로, 요구사항 4). client.base_url로 실제 어느 도메인(=어느
+    계좌)에 붙는지 보여준다 — REST API는 appkey/secretkey에 계좌가 묶여 있어 별도
+    계좌번호 조회 API 호출 없이도 도메인만으로 모의/실계좌 구분이 가능하다."""
+    lines = [
+        "=" * 60,
+        "*** 실계좌(실제 자금) 매매를 시작합니다 ***",
+        f"전략: {strategy}",
+        f"연결 도메인: {client.base_url}",
+        f"총 배정자본: {total_capital:,.0f}원",
+        f"일일손실한도(kill switch): {max_daily_loss:,.0f}원",
+    ]
+    if max_concurrent_positions is not None:
+        lines.append(f"동시보유 슬롯: {max_concurrent_positions}개")
+    lines += [
+        "주의: 미체결/체결확인(ka10075) 응답 필드명은 실계좌로 한 번도 검증되지",
+        "      않았습니다 — 첫 실거래 주문에서 체결 상태가 'unknown'으로 표시될 수",
+        "      있습니다(order_execution.py _REMAINING_QTY_KEYS 참고, 2026-08-30).",
+        "=" * 60,
+    ]
+    print("\n".join(lines), flush=True)
+
+
 def _strategy_state_defaults(strategy: str) -> dict:
     """run-trading의 --strategy로 상태·모델 경로 기본값을 state/{strategy}/,
     models/{strategy}/ 밑으로 네임스페이스한다 — 전략별로 별도 프로세스를 띄워도
-    파일이 서로 덮어쓰지 않고, dashboard가 state 루트를 스캔해 전략 목록으로
-    자동 인식할 수 있게 한다. --risk-state-path 등 개별 플래그로 명시하면 이 기본값
-    대신 그 값이 쓰인다."""
+    주문로그/설정 파일이 서로 덮어쓰지 않고, dashboard가 state 루트를 스캔해 전략
+    목록으로 자동 인식할 수 있게 한다. --risk-state-path는 없다(위 ACCOUNT_RISK_STATE_PATH
+    참고) — risk_state.json은 이 네임스페이스 대상이 아니다. 나머지 개별 플래그로
+    명시하면 이 기본값 대신 그 값이 쓰인다."""
     base = f"state/{strategy}"
     return {
         "model_path": f"models/{strategy}/entry_filter_model.joblib",
-        "risk_state_path": f"{base}/risk_state.json",
         "order_log_path": f"{base}/orders.jsonl",
         "pnl_history_path": f"{base}/pnl_history.jsonl",
         "kill_switch_override_path": f"{base}/kill_switch_override.json",
     }
 
 
-def _write_strategy_config(risk_state_path: str, config: dict) -> None:
-    """run-trading 시작 시 실행 파라미터 스냅샷을 risk_state_path와 같은 폴더의
+def _write_strategy_config(state_dir: str, config: dict) -> None:
+    """run-trading 시작 시 실행 파라미터 스냅샷을 전략별 상태 폴더(state/{strategy}/)의
     config.json에 남긴다 — dashboard가 GET /api/config로 읽어 "이 전략이 지금 어떤
-    조건값으로 도는지" 보여줄 수 있게 한다(risk_state.json 등 다른 상태 파일과 같은
-    폴더에 둬야 대시보드의 전략별 경로 해석 규칙과 맞아떨어진다)."""
-    config_path = os.path.join(os.path.dirname(risk_state_path), "config.json")
-    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+    조건값으로 도는지" 보여줄 수 있게 한다. risk_state.json은 이제 계좌 전체가 공유하는
+    별도 경로(ACCOUNT_RISK_STATE_PATH)라 더 이상 여기 기준으로 삼지 않는다 — 두 전략이
+    같은 config.json을 덮어쓰면 대시보드가 서로의 실행 파라미터를 섞어 보여준다."""
+    config_path = os.path.join(state_dir, "config.json")
+    os.makedirs(state_dir, exist_ok=True)
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
 
@@ -469,49 +549,11 @@ def _run_train_entry_model(args) -> None:
 def _run_monitor_signals(args) -> None:
     """정규장 동안 오늘의 top-N 종목을 실시간으로 감시해 신호를 로그로만 남긴다.
     실제 매수 주문은 내지 않는다 — 주문 실행은 별도의 리스크 검토가 필요한 이후
-    단계다.
-
-    --strategy strategy_3은 ML 모델/코스피 레짐 없이 3분 거래대금+수익률 조건만
-    보는 테스트 모드 전략(strategy3_scalp.py), --strategy strategy_4는 거래대금
-    순위 4→3위/5→4위/6→5위 승격만 감시하는 전략(strategy4_rank_watch.py)이라 둘 다
-    완전히 다른 실행 경로(텔레그램 알림 포함)로 분기한다 — run-trading의 strategy_2
-    분기와 같은 이유(다른 전략을 strategy_1 경로로 잘못 태우는 버그 방지)."""
+    단계다."""
     client = _build_client()
-    strategy = getattr(args, "strategy", "strategy_1")
-
-    if strategy == "strategy_4":
-        # strategy_4는 정규장(09:00~15:30)만 감시하므로, 다른 전략들의 통합장
-        # (08:00~20:00) 대기 게이트를 타면 08:00~09:00 사이에 시작했을 때 곧바로
-        # 종료돼버린다 — 그래서 이 분기는 wait_until_extended_market_open보다 먼저,
-        # 정규장 기준 대기로 처리한다.
-        if not wait_until_market_open():
-            print("현재 정규장 시간이 아닙니다(평일 09:00~15:30). 아무 것도 감시하지 않고 종료합니다.")
-            return
-        load_dotenv()
-        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-        output_path = args.output if args.output != "signals.jsonl" else STRATEGY4_DEFAULT_SIGNAL_LOG_PATH
-        run_rank_watch_loop(
-            client, bot_token, chat_id,
-            output_path=output_path, top_n=args.top_n, poll_interval_seconds=args.interval_seconds,
-        )
-        print("정규장 종료로 감시를 마쳤습니다.")
-        return
 
     if not wait_until_extended_market_open():
         print("현재 통합장 시간이 아닙니다(평일 08:00~20:00). 아무 것도 감시하지 않고 종료합니다.")
-        return
-
-    if strategy == "strategy_3":
-        load_dotenv()
-        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-        output_path = args.output if args.output != "signals.jsonl" else STRATEGY3_DEFAULT_SIGNAL_LOG_PATH
-        run_scalp_monitor_loop(
-            client, bot_token, chat_id,
-            output_path=output_path, top_n=args.top_n, poll_interval_seconds=args.interval_seconds,
-        )
-        print("통합장 종료로 감시를 마쳤습니다.")
         return
 
     print(f"모델 로드 중: {args.model_path}")
@@ -552,19 +594,66 @@ def _run_trading(args) -> None:
 
     strategy = getattr(args, "strategy", "strategy_1")
     defaults = _strategy_state_defaults(strategy)
-    risk_state_path = args.risk_state_path or defaults["risk_state_path"]
+    risk_state_path = ACCOUNT_RISK_STATE_PATH  # 강제 — 전략/플래그로 바꿀 수 없다
+    # heartbeat/중지플래그/config.json은 risk_state_path와 달리 프로세스(전략)별로
+    # 분리돼야 한다 — 계좌 단일화로 risk_state_path가 공유 경로가 된 뒤에도 이 셋까지
+    # 같이 공유되면 대시보드가 두 전략을 구분 못 하거나 한쪽 "중지" 버튼이 둘 다
+    # 멈춰버린다(risk-agent.md 계좌 단일화, 2026-08-29).
+    state_dir = f"state/{strategy}"
 
     client = _build_client()
     # 08:00 대기 구간에도 heartbeat를 계속 찍어야 한다 — 안 그러면 대시보드가 이
     # 프로세스를 "중지됨"으로 오판해 "시작" 버튼으로 중복 실행시키는 사고가 난다
     # (trading_loop.run_trading_loop의 같은 문제를 고친 이유와 동일, 실계좌에서 실측).
-    write_heartbeat(os.path.dirname(risk_state_path))
-    if not wait_until_extended_market_open(on_wait_tick=lambda: write_heartbeat(os.path.dirname(risk_state_path))):
+    write_heartbeat(state_dir)
+    if not wait_until_extended_market_open(on_wait_tick=lambda: write_heartbeat(state_dir)):
         print("현재 통합장 시간이 아닙니다(평일 08:00~20:00). 실주문을 시작하지 않고 종료합니다.")
         return
 
     is_mock = os.environ.get("KIWOOM_IS_MOCK", "true").lower() == "true"
     mode_label = "모의투자" if is_mock else "*** 실계좌(실제 자금) ***"
+
+    # 전략1(신고가추세매매) 폐기(docs/STRATEGY1_RETIREMENT.md, 2026-08-30 사용자 결정) —
+    # 실거래만 끊는다. 모의투자는 회귀테스트/기준선 비교용으로 계속 돌 수 있어야 하므로
+    # (폐기 기록 §"폐기와 무관하게 남는 것") 여기서 막지 않는다.
+    #
+    # strategy=="strategy_1" 로 비교하지 않는 이유: 아래 분기 자체가 strategy_2(오버솔드)
+    # 냐 아니냐 딱 둘뿐이라, strategy_2가 아니면 문자열이 뭐든 전략1의 ML 로직이 그대로
+    # 실행된다(이름표가 아니라 코드 경로가 전략1). 그래서 "strategy_2가 아니면 막는다"만
+    # 실제로 우회가 없다. 새 전략(지점 라벨링, strategy-agent)이 자기 분기를 얻으면 그
+    # 분기만 예외로 추가하도록 이 조건을 다시 고쳐야 한다.
+    if not is_mock and strategy != "strategy_2":
+        print(
+            "*** 전략1(신고가추세매매)은 폐기되어 실거래를 지원하지 않습니다 — 시작하지 않습니다. ***\n"
+            "근거: docs/STRATEGY1_RETIREMENT.md (강세장 11개월 +1.70%, 워크포워드 PF 1.006, "
+            "천장이 0 — 규칙 개선으로 해결 불가).\n"
+            "모의투자(KIWOOM_IS_MOCK=true)에서는 회귀테스트/기준선 비교용으로 계속 실행됩니다.\n"
+            "새 전략(지점 라벨링)이 그 전용 분기를 얻으면 이 차단을 그 분기만 제외하도록 고칠 것."
+        )
+        return
+
+    if not is_mock:
+        confirm_status = _live_trading_confirmation_status(LIVE_TRADING_CONFIRM_PATH)
+        if confirm_status != "ok":
+            today_line = f"{LIVE_TRADING_CONFIRM_TOKEN} {date.today().isoformat()}"
+            if confirm_status == "missing":
+                print(
+                    "*** 실계좌(실제 자금) 모드인데 실거래 확인 파일이 없습니다 — 시작하지 않습니다. ***\n"
+                    f"의도한 게 맞으면 '{LIVE_TRADING_CONFIRM_PATH}' 파일을 만들고 다음 한 줄만 넣으세요:\n"
+                    f"  {today_line}\n"
+                    "KIWOOM_IS_MOCK=false만으로는 실주문을 켜지 않습니다 — 셸/환경변수 오설정 사고를 막기 위한 "
+                    "이중 확인입니다(execution-agent.md, 2026-08-30)."
+                )
+            else:  # "stale" — 파일은 있지만 날짜가 오늘이 아니거나 형식이 틀림
+                print(
+                    f"*** 실거래 확인 파일('{LIVE_TRADING_CONFIRM_PATH}')의 날짜가 오늘"
+                    f"({date.today().isoformat()})이 아니거나 형식이 올바르지 않습니다 — 시작하지 않습니다. ***\n"
+                    "오늘 날짜로 갱신하려면 파일 내용을 다음 한 줄로 다시 쓰세요:\n"
+                    f"  {today_line}\n"
+                    "확인은 매일 새로 해야 합니다 — 예전에 만든 파일을 지우지 않고 방치하면 몇 달 뒤 "
+                    "설정 실수로 그대로 실주문이 나갈 수 있어 날짜까지 확인합니다(execution-agent.md, 2026-08-30)."
+                )
+            return
 
     order_log_path = args.order_log_path or defaults["order_log_path"]
     pnl_history_path = args.pnl_history_path or defaults["pnl_history_path"]
@@ -578,7 +667,7 @@ def _run_trading(args) -> None:
     # top_n/proba_threshold/max_concurrent_positions/model_path가 아예 적용되지
     # 않는 완전히 다른 전략이라 별도 실행 경로(run_oversold_trading_loop)로 보낸다.
     if strategy == "strategy_2":
-        _write_strategy_config(risk_state_path, {
+        _write_strategy_config(state_dir, {
             "strategy": strategy,
             "stock_code": OVERSOLD_STOCK_CODE,
             "total_capital_krw": args.total_capital,
@@ -588,23 +677,40 @@ def _run_trading(args) -> None:
             "started_at": datetime.now().isoformat(timespec="seconds"),
         })
 
+        if not is_mock:  # 모의는 손대지 않는다 — 배너는 실거래 쪽에만(요구사항 4)
+            _print_live_trading_banner(strategy, client, args.total_capital, float(max_daily_loss_raw))
         run_oversold_trading_loop(
             client, bot_token, chat_id, float(max_daily_loss_raw),
             risk_state_path=risk_state_path, total_capital_krw=args.total_capital,
             poll_interval_seconds=args.interval_seconds, order_log_path=order_log_path,
             pnl_history_path=pnl_history_path, kill_switch_override_path=kill_switch_override_path,
+            state_dir=state_dir,
         )
     else:
         model_path = args.model_path or defaults["model_path"]
         print(f"모델 로드 중: {model_path}")
         trained = load_model(model_path)
 
-        _write_strategy_config(risk_state_path, {
+        # yaml의 동시보유 슬롯 한도보다 큰 값은 거부한다(장중 한도 완화 금지) — 이 값이
+        # 슬롯 수 자체(can_open_new_position)뿐 아니라 슬롯당 배정자금(position_capital_krw
+        # = total_capital/N) 산정에도 쓰여, yaml보다 작은 N을 주면 슬롯당 배정자금이
+        # 커져 사실상 더 큰 베팅이 된다 — 낮추는 방향(강화)만 허용하고, 올리는 방향은
+        # 여기서 바로 막는다(risk-agent.md §핵심원칙 4, 2026-08-29 계좌 단일화 겸 점검).
+        max_concurrent_positions = args.max_concurrent_positions
+        if max_concurrent_positions > RECOMMENDED_MAX_CONCURRENT_POSITIONS:
+            print(
+                f"--max-concurrent-positions {max_concurrent_positions}는 risk_limits.yaml 한도"
+                f"({RECOMMENDED_MAX_CONCURRENT_POSITIONS})보다 큽니다 — 장중 한도 완화는 거부되어 "
+                f"{RECOMMENDED_MAX_CONCURRENT_POSITIONS}로 낮춰 시작합니다."
+            )
+            max_concurrent_positions = RECOMMENDED_MAX_CONCURRENT_POSITIONS
+
+        _write_strategy_config(state_dir, {
             "strategy": strategy,
             "model_path": model_path,
             "top_n": args.top_n,
             "proba_threshold": args.proba_threshold,
-            "max_concurrent_positions": args.max_concurrent_positions,
+            "max_concurrent_positions": max_concurrent_positions,
             "total_capital_krw": args.total_capital,
             "interval_seconds": args.interval_seconds,
             "max_daily_loss_krw": float(max_daily_loss_raw),
@@ -612,13 +718,16 @@ def _run_trading(args) -> None:
             "started_at": datetime.now().isoformat(timespec="seconds"),
         })
 
+        if not is_mock:  # 모의는 손대지 않는다 — 배너는 실거래 쪽에만(요구사항 4)
+            _print_live_trading_banner(strategy, client, args.total_capital, float(max_daily_loss_raw), max_concurrent_positions)
         run_trading_loop(
             client, trained, bot_token, chat_id, float(max_daily_loss_raw),
             risk_state_path=risk_state_path, data_dir=args.data_dir, top_n=args.top_n,
-            proba_threshold=args.proba_threshold, max_concurrent_positions=args.max_concurrent_positions,
+            proba_threshold=args.proba_threshold, max_concurrent_positions=max_concurrent_positions,
             total_capital_krw=args.total_capital, poll_interval_seconds=args.interval_seconds,
             order_log_path=order_log_path, pnl_history_path=pnl_history_path,
             kill_switch_override_path=kill_switch_override_path, strategy=strategy,
+            state_dir=state_dir,
         )
     print("통합장 종료로 실주문 매매를 마쳤습니다.")
 
@@ -643,6 +752,8 @@ def _run_dashboard(args) -> None:
         kiwoom_is_mock=os.environ.get("KIWOOM_IS_MOCK", "true").lower() == "true",
         port=args.port,
         host=args.host,
+        telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+        telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", ""),
     )
 
 
@@ -721,6 +832,35 @@ def _run_monitor_dashboard(args) -> None:
             break  # 정상 종료(stop 요청) — 재시작하지 않음
         except Exception as exc:
             print(f"대시보드 감시가 예상치 못하게 종료됨 — {RESTART_DELAY_SECONDS}초 후 자동 재시작: {exc}", flush=True)
+            time.sleep(RESTART_DELAY_SECONDS)
+
+
+def _run_monitor_sophie_feed(args) -> None:
+    """소피증권(kospi-theme-engine) 실시간 체결 웹소켓이 실제로 데이터를 받고 있는지
+    결과 기준(엔진 틱 카운터·로그 갱신)으로 확인해, 이상/복구 시 텔레그램으로 알린다.
+    포트 응답 여부만으로는 안 잡힌다(2026-08-30 실측 — 포트는 살아있는데 피드가
+    6일간 죽어있었다)."""
+    load_dotenv()
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if not bot_token or not chat_id:
+        print("TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID가 .env에 설정되어 있지 않습니다. 알림 없이는 감시를 시작하지 않습니다.")
+        return
+
+    print(
+        f"소피증권 피드 감시 시작 — {args.log_path} (폴링간격 {args.interval_seconds:.0f}초). 중단하려면 Ctrl+C.",
+        flush=True,
+    )
+    # 상시 감시라 run_sophie_feed_monitor_loop가 사이클 안에서 못 막은 예외로 죽더라도
+    # 프로세스 자체는 계속 살아 있어야 한다 — monitor-nasdaq-drop과 같은 이유.
+    while True:
+        try:
+            run_sophie_feed_monitor_loop(
+                bot_token, chat_id, log_path=args.log_path, poll_interval_seconds=args.interval_seconds,
+            )
+            break  # 정상 종료(stop 요청) — 재시작하지 않음
+        except Exception as exc:
+            print(f"소피증권 피드 감시가 예상치 못하게 종료됨 — {RESTART_DELAY_SECONDS}초 후 자동 재시작: {exc}", flush=True)
             time.sleep(RESTART_DELAY_SECONDS)
 
 
@@ -865,16 +1005,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     monitor_parser = sub.add_parser(
         "monitor-signals",
-        help="정규장 동안 오늘 top-N 종목을 실시간 감시해 통과 신호를 로그로만 기록 (매수 주문 없음). "
-        "--strategy strategy_3은 3분거래대금+수익률 조건만 보는 테스트 모드(텔레그램 알림 포함)",
+        help="정규장 동안 오늘 top-N 종목을 실시간 감시해 통과 신호를 로그로만 기록 (매수 주문 없음)",
     )
-    monitor_parser.add_argument("--strategy", default="strategy_1", help="strategy_1(기본, 조건1~8+ML), strategy_3(3분 거래대금+수익률만, ML/레짐 없음), strategy_4(거래대금 순위 4→3위/5→4위/6→5위 승격 감시, 정규장 09:00~15:30) — strategy_3/4 모두 텔레그램 알림 포함")
     monitor_parser.add_argument("--model-path", default="models/strategy_1/entry_filter_model.joblib", help="train-entry-model로 저장한 모델 경로 (strategy_1 전용)")
     monitor_parser.add_argument("--top-n", type=int, default=35)
     monitor_parser.add_argument("--proba-threshold", type=float, default=RECOMMENDED_PROBA_THRESHOLD, help="ML 예측 성공확률 임계값 (strategy_1 전용)")
     monitor_parser.add_argument("--interval-seconds", type=float, default=30.0, help="watchlist 한 바퀴 폴링 후 대기 시간(초)")
     monitor_parser.add_argument("--data-dir", default="data", help="일봉 참조용 로컬 데이터 위치 (strategy_1 전용)")
-    monitor_parser.add_argument("--output", default="signals.jsonl", help="신호 기록 파일 경로 (strategy_3/4는 미지정 시 각각 state/strategy_3/, state/strategy_4/ 밑 signals.jsonl)")
+    monitor_parser.add_argument("--output", default="signals.jsonl", help="신호 기록 파일 경로")
     monitor_parser.set_defaults(func=_run_monitor_signals)
 
     trading_parser = sub.add_parser(
@@ -885,11 +1023,13 @@ def build_parser() -> argparse.ArgumentParser:
     trading_parser.add_argument("--model-path", default=None, help="train-entry-model로 저장한 모델 경로 (미지정 시 models/{strategy}/entry_filter_model.joblib)")
     trading_parser.add_argument("--top-n", type=int, default=35)
     trading_parser.add_argument("--proba-threshold", type=float, default=RECOMMENDED_PROBA_THRESHOLD, help="ML 예측 성공확률 임계값")
-    trading_parser.add_argument("--max-concurrent-positions", type=int, default=RECOMMENDED_MAX_CONCURRENT_POSITIONS, help="동시보유 슬롯 수")
+    trading_parser.add_argument("--max-concurrent-positions", type=int, default=RECOMMENDED_MAX_CONCURRENT_POSITIONS, help="동시보유 슬롯 수 — risk_limits.yaml 한도보다 큰 값은 거부되고 yaml 값으로 낮춰진다(장중 한도 완화 금지)")
     trading_parser.add_argument("--total-capital", type=float, default=float(os.environ.get("TOTAL_CAPITAL_KRW", 10_000_000)), help="총 투자금(원), 슬롯 수만큼 균등 배분")
     trading_parser.add_argument("--interval-seconds", type=float, default=30.0, help="진입/청산 감시 폴링 간격(초)")
     trading_parser.add_argument("--data-dir", default="data", help="일봉/코스피 레짐 참조용 로컬 데이터 위치")
-    trading_parser.add_argument("--risk-state-path", default=None, help="당일 손익·보유 포지션 상태 저장 경로 (미지정 시 state/{strategy}/risk_state.json)")
+    # --risk-state-path 없음(의도적) — risk_state.json은 계좌 전체가 공유하는 단일 파일로
+    # 강제된다(ACCOUNT_RISK_STATE_PATH). 전략별로 분리할 수 있는 플래그를 남겨두면 동시보유
+    # 슬롯 한도가 전략 수배로 조용히 늘어나는 우회 경로가 된다(risk-agent.md 계좌 단일화).
     trading_parser.add_argument("--order-log-path", default=None, help="체결 이력 기록 경로(trading-dashboard가 조회) (미지정 시 state/{strategy}/orders.jsonl)")
     trading_parser.add_argument("--pnl-history-path", default=None, help="일별 손익 이력 기록 경로(trading-dashboard가 조회) (미지정 시 state/{strategy}/pnl_history.jsonl)")
     trading_parser.add_argument("--kill-switch-override-path", default=None, help="대시보드 수동 kill switch 요청 상태 파일 경로 (미지정 시 state/{strategy}/kill_switch_override.json)")
@@ -933,6 +1073,14 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard_monitor_parser.add_argument("--port", type=int, default=8765, help="확인할 대시보드 포트 (dashboard 명령의 --port와 맞출 것)")
     dashboard_monitor_parser.add_argument("--interval-seconds", type=float, default=30.0, help="확인 간격(초)")
     dashboard_monitor_parser.set_defaults(func=_run_monitor_dashboard)
+
+    sophie_feed_monitor_parser = sub.add_parser(
+        "monitor-sophie-feed",
+        help="소피증권(kospi-theme-engine) 실시간 체결 웹소켓이 데이터를 받고 있는지 결과 기준으로 확인해 이상/복구 시 텔레그램 알림 (포트 응답이 아니라 엔진 틱 카운터·로그 갱신을 본다)",
+    )
+    sophie_feed_monitor_parser.add_argument("--log-path", default=SOPHIE_FEED_LOG_PATH, help="소피증권 배포본 app.log 경로(kospi-theme-engine/CLAUDE.md 경고대로 dist/logs/ 여야 한다 — logs/는 배포본 실행 중엔 안 갱신됨)")
+    sophie_feed_monitor_parser.add_argument("--interval-seconds", type=float, default=30.0, help="확인 간격(초)")
+    sophie_feed_monitor_parser.set_defaults(func=_run_monitor_sophie_feed)
 
     return parser
 

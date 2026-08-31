@@ -19,9 +19,28 @@ from .kill_switch_control import DEFAULT_OVERRIDE_PATH as DEFAULT_KILL_SWITCH_OV
 from .kill_switch_control import is_kill_switch_requested
 from .live_monitor import fetch_today_candles, fetch_today_regime, scan_watchlist_once
 from .ml_entry_filter import TrainedEntryFilterModel
-from .notifier import notify_error, notify_kill_switch, notify_order_filled, notify_signal_detected
+from .notifier import (
+    notify_error,
+    notify_feed_recovered,
+    notify_feed_stale,
+    notify_kill_switch,
+    notify_order_filled,
+    notify_reconcile_failed,
+    notify_reconcile_mismatch,
+    notify_signal_detected,
+)
+from .order_execution import (
+    DEFAULT_ORDER_TRACKING_LOG_PATH,
+    _order_rejected,
+    cancel_if_timed_out,
+    check_fill,
+    load_recent_orders,
+    restore_pending_orders_from_broker,
+    submit_order,
+)
 from .orderbook_collector import is_extended_market_open
 from .realtime_feed import RealtimeFeed
+from .reconcile import reconcile
 from .risk_manager import (
     RECOMMENDED_MAX_CONCURRENT_POSITIONS,
     STOP_LOSS_PCT,
@@ -33,15 +52,37 @@ from .risk_manager import (
     check_order,
     load_state,
     record_partial_exit,
+    record_position_added_to,
     record_position_opened,
+    risk_state_lock,
     roll_to_new_day_if_needed,
     save_state,
 )
 from .screener import top_by_trading_value
 from .stop_control import clear_stop_flag, is_stop_requested
 
+FEED_STALE_SECONDS = 180
+
+
+def is_feed_stale(age_seconds: float | None, now: datetime) -> bool:
+    """실시간 피드가 "끊긴 것"으로 볼지 판정. age_seconds=None(아직 첫 틱 전)은 끊김이
+    아니다 — 구독 직후엔 항상 None이라 이걸 끊김으로 보면 매일 오탐이 난다.
+
+    정규장(09:00~15:00)에만 판정한다. 통합장 앞뒤 구간(08시대, 15시 이후)은 top35
+    종목이라도 몇 분씩 체결이 없는 게 정상이라 같은 임계값을 쓰면 오탐이 된다."""
+    if age_seconds is None:
+        return False
+    if not (9 <= now.hour < 15):
+        return False
+    return age_seconds > FEED_STALE_SECONDS
+
+
 DEFAULT_ORDER_LOG_PATH = "state/orders.jsonl"
 DEFAULT_PNL_HISTORY_PATH = "state/pnl_history.jsonl"
+# 미체결(pending/partial) 주문을 몇 초 기다린 뒤 잔량을 취소할지. 기본 폴링 주기(30초)의
+# 4배 — 한두 사이클 정도의 일시적 유동성 부족은 정정/추격 없이 그냥 기다려주고, 그래도
+# 안 끝나면 포기한다. order_execution.cancel_if_timed_out에 그대로 전달된다.
+ORDER_FILL_TIMEOUT_SECONDS = 120.0
 
 
 def _log_order(order_log_path: str, side: str, code: str, quantity: int, price: float, reason: str) -> None:
@@ -74,18 +115,6 @@ class ExitTrackingState:
     고유 로직)은 여기서 별도로 관리한다."""
     armed: bool = False
     tiers_remaining: list = field(default_factory=lambda: list(TIERS))
-
-
-def _order_rejected(response: dict) -> RuntimeError | None:
-    """place_order 응답이 거부(return_code!=0)면 RuntimeError로, 정상 체결이면
-    None을 반환한다. request_tr()은 HTTP 레벨 오류만 예외로 던지고, 주문 거부는
-    HTTP 200 + return_code!=0으로 응답에 실려 온다 — 이 체크 없이 응답을 무조건
-    성공으로 취급하면 실제로는 거부된 주문이 risk_state에 "체결"로 기록되는
-    phantom position이 생긴다."""
-    return_code = response.get("return_code")
-    if return_code == 0:
-        return None
-    return RuntimeError(f"return_code={return_code} {response.get('return_msg', '')}".strip())
 
 
 def evaluate_exit(
@@ -150,6 +179,8 @@ def process_entries_once(
     code_to_name: dict | None = None,
     strategy: str = "strategy_1",
     exchange: str = "3",
+    pending_orders: dict | None = None,
+    order_tracking_log_path: str = DEFAULT_ORDER_TRACKING_LOG_PATH,
 ) -> list:
     """신규 진입 신호를 감지해, 리스크 승인되는 만큼 매수 주문을 실행한다.
     실행된 주문 목록을 반환(테스트/로깅용).
@@ -161,15 +192,22 @@ def process_entries_once(
     strategy: 전략1/2/3이 같은 텔레그램 채팅방으로 동시에 알림을 보내면 어느 전략이
     보낸 건지 구분이 안 되는 문제가 있었다 — 모든 notify_* 호출 맨 앞에 붙는다.
 
-    exchange: 진입 조건용 분봉의 거래소 기준. 전략1은 "3"(통합, KRX+NXT)이 기본값 —
-    전략3(strategy3_scalp.py)는 별도로 KRX 기준을 유지한다.
+    exchange: 진입 조건용 분봉의 거래소 기준. 전략1은 "3"(통합, KRX+NXT)이 기본값.
 
     total_capital_krw + STOP_LOSS_PCT 기반 손절가로 risk_manager.check_order를 통과한
     주문만 실제로 낸다(risk-agent.md §핵심원칙 1) — 이전엔 can_open_new_position(동시보유
     슬롯)만 확인하고 바로 place_order를 불러, risk_limits.yaml의 나머지 한도(단일주문
     금액/종목당 비중/재진입 쿨다운/연속손절 한도)가 값을 채워도 전혀 적용되지 않는
-    상태였다(2026-07-26 risk-agent 감사 지적)."""
+    상태였다(2026-07-26 risk-agent 감사 지적).
+
+    place_order 응답만 보고 바로 "체결 완료"로 기록하던 방식(execution-agent 감사
+    지적)을 order_execution.submit_order/check_fill로 대체했다 — 통신오류 재시도,
+    브로커 거부 판정, 실제 체결수량 확인을 거친다. 이 첫 확인에서 전량 체결이
+    안 되면(pending_orders가 주어진 경우) 다음 사이클에 process_pending_orders_once가
+    이어서 확인/타임아웃취소한다 — pending_orders=None(기본, 단위테스트용)이면 이
+    호출 안에서만 쓰고 버린다."""
     code_to_name = code_to_name or {}
+    pending_orders = {} if pending_orders is None else pending_orders
     new_signals = scan_watchlist_once(
         client, trained, today_top35, regime_ok, data_dir, proba_threshold, seen_signals, feed=feed, exchange=exchange
     )
@@ -178,6 +216,11 @@ def process_entries_once(
         code = signal["stock_code"]
         notify_signal_detected(strategy, code, code_to_name.get(code, ""), signal["price"], signal["proba"], bot_token, chat_id)
         if not can_open_new_position(risk_state, max_concurrent_positions):
+            continue
+        if f"buy:{code}" in pending_orders:
+            # 이 종목에 이미 낸 매수 주문이 아직 안 끝났다(재시작 복원분 포함) — 같은
+            # 종목에 새 매수를 겹쳐 내면 중복 체결이 된다. process_pending_orders_once가
+            # 다음 사이클에 계속 확인하므로 여기선 그냥 건너뛴다.
             continue
 
         quantity = max(1, int(position_capital_krw // signal["price"]))
@@ -192,23 +235,28 @@ def process_entries_once(
         if decision.adjusted_qty is not None:
             quantity = decision.adjusted_qty
 
-        try:
-            order_response = client.place_order(code, side="buy", quantity=quantity, price=signal["price"], order_type="0")
-        except Exception as exc:
-            notify_error(strategy, f"{code} 매수 주문 실패", exc, bot_token, chat_id)
-            continue
-        rejected = _order_rejected(order_response)
-        if rejected is not None:
-            notify_error(strategy, f"{code} 매수 주문 거부", rejected, bot_token, chat_id)
+        tracked = submit_order(
+            client, stock_code=code, side="buy", quantity=quantity, price=signal["price"],
+            approved=True, order_type="0", log_path=order_tracking_log_path,
+        )
+        if tracked.status in ("rejected", "ambiguous", "failed"):
+            notify_error(strategy, f"{code} 매수 주문 {tracked.status}", RuntimeError(tracked.detail), bot_token, chat_id)
             continue
 
-        record_position_opened(
-            risk_state, code, signal["signal_time"], position_capital_krw, signal["price"], total_quantity=quantity
-        )
-        exit_tracking[code] = ExitTrackingState()
-        notify_order_filled(strategy, "buy", code, quantity, signal["price"], bot_token, chat_id)
-        _log_order(order_log_path, "buy", code, quantity, signal["price"], "entry")
-        executed.append({"code": code, "quantity": quantity, "price": signal["price"]})
+        tracked = check_fill(client, tracked)
+        if tracked.filled_qty > 0:
+            record_position_opened(
+                risk_state, code, signal["signal_time"], position_capital_krw, signal["price"],
+                total_quantity=tracked.filled_qty,
+            )
+            exit_tracking[code] = ExitTrackingState()
+            notify_order_filled(strategy, "buy", code, tracked.filled_qty, signal["price"], bot_token, chat_id)
+            _log_order(order_log_path, "buy", code, tracked.filled_qty, signal["price"], "entry")
+            executed.append({"code": code, "quantity": tracked.filled_qty, "price": signal["price"]})
+            tracked.applied_qty = tracked.filled_qty
+
+        if tracked.status in ("pending", "partial"):
+            pending_orders[f"buy:{code}"] = tracked
 
     return executed
 
@@ -232,6 +280,8 @@ def process_exits_once(
     order_log_path: str = DEFAULT_ORDER_LOG_PATH,
     feed: RealtimeFeed | None = None,
     strategy: str = "strategy_1",
+    pending_orders: dict | None = None,
+    order_tracking_log_path: str = DEFAULT_ORDER_TRACKING_LOG_PATH,
 ) -> list:
     """보유 포지션 전부의 청산 조건을 확인해 필요한 매도 주문을 실행한다.
 
@@ -239,8 +289,12 @@ def process_exits_once(
     28)를 쓴다 — REST 호가조회(ka10004)보다 빠르고, 무엇보다 보유종목마다 매번 REST
     왕복이 필요 없어진다. 아직 그 종목의 틱을 못 받았으면(막 진입 직후 등) 기존처럼
     REST로 폴백한다.
+
+    pending_orders: process_entries_once와 동일 — 이 호출 안에서 전량 체결이 안
+    되면 다음 사이클 process_pending_orders_once가 이어서 확인한다.
     """
     executed = []
+    pending_orders = {} if pending_orders is None else pending_orders
     for position in list(risk_state.open_positions):
         feed_bid = feed.get_latest_bid(position.code) if feed is not None else None
         if feed_bid is not None:
@@ -259,6 +313,11 @@ def process_exits_once(
                 notify_error(strategy, f"{position.code} 현재가 조회 실패", exc, bot_token, chat_id)
                 continue
 
+        if f"sell:{position.code}" in pending_orders:
+            # 이 종목에 이미 낸 매도 주문이 아직 안 끝났다(재시작 복원분 포함) — 겹쳐
+            # 내면 중복 매도가 된다. process_pending_orders_once가 이어서 확인한다.
+            continue
+
         tracking = exit_tracking.setdefault(position.code, ExitTrackingState())
         net_pct = (current_price - position.entry_price) / position.entry_price
         outcome = evaluate_exit(tracking, net_pct)
@@ -270,34 +329,106 @@ def process_exits_once(
         if quantity_to_sell <= 0:
             continue
 
-        try:
-            # 시장가(order_type="3") — 지정가는 접수돼도 미체결로 남을 수 있는데, 아래에서
-            # 응답만 확인하고 바로 "청산 완료"로 기록해 미체결 관리/체결확인 인프라가 아직
-            # 없다(2026-07-26 execution-agent 감사 지적). 손절/청산은 슬리피지 통제보다
-            # 확실한 체결이 우선이라 시장가로 되돌린다 — 매수 쪽은 지정가 유지.
-            order_response = client.place_order(
-                position.code, side="sell", quantity=quantity_to_sell, price=current_price, order_type="3",
-            )
-        except Exception as exc:
-            notify_error(strategy, f"{position.code} 매도 주문 실패({exit_reason})", exc, bot_token, chat_id)
-            continue
-        rejected = _order_rejected(order_response)
-        if rejected is not None:
-            notify_error(strategy, f"{position.code} 매도 주문 거부({exit_reason})", rejected, bot_token, chat_id)
+        # 시장가(order_type="3") — 지정가는 접수돼도 미체결로 남을 수 있는데, 손절/청산은
+        # 슬리피지 통제보다 확실한 체결이 우선이라 시장가로 되돌린다(매수 쪽은 지정가
+        # 유지). 그래도 유동성 부족 시 시장가조차 부분체결로 남을 수 있어 아래에서
+        # submit_order/check_fill로 실제 체결수량을 확인한다 — 응답만 보고 바로 "청산
+        # 완료"로 기록하던 방식(2026-07-26 execution-agent 감사 지적)을 대체.
+        tracked = submit_order(
+            client, stock_code=position.code, side="sell", quantity=quantity_to_sell, price=current_price,
+            approved=True, order_type="3", log_path=order_tracking_log_path,
+        )
+        if tracked.status in ("rejected", "ambiguous", "failed"):
+            notify_error(strategy, f"{position.code} 매도 주문 {tracked.status}({exit_reason})", RuntimeError(tracked.detail), bot_token, chat_id)
             continue
 
-        record_partial_exit(risk_state, position.code, current_price, sell_fraction, max_daily_loss_krw)
-        notify_order_filled(strategy, "sell", position.code, quantity_to_sell, current_price, bot_token, chat_id)
-        _log_order(order_log_path, "sell", position.code, quantity_to_sell, current_price, exit_reason)
-        executed.append({"code": position.code, "quantity": quantity_to_sell, "price": current_price, "reason": exit_reason})
+        tracked = check_fill(client, tracked)
+        if tracked.filled_qty > 0:
+            # quantity_to_sell주를 팔면 sell_fraction만큼 청산되므로, 실제 체결수량 비례로
+            # 축소한다 — 부분체결인데 sell_fraction 전부를 반영하면 남은 잔량이 이미
+            # 청산된 것으로 risk_state에 잘못 기록된다.
+            actual_fraction = sell_fraction * (tracked.filled_qty / quantity_to_sell)
+            record_partial_exit(risk_state, position.code, current_price, actual_fraction, max_daily_loss_krw)
+            notify_order_filled(strategy, "sell", position.code, tracked.filled_qty, current_price, bot_token, chat_id)
+            _log_order(order_log_path, "sell", position.code, tracked.filled_qty, current_price, exit_reason)
+            executed.append({"code": position.code, "quantity": tracked.filled_qty, "price": current_price, "reason": exit_reason})
+            tracked.applied_qty = tracked.filled_qty
 
-        if risk_state.kill_switch_active:
-            notify_kill_switch(strategy, risk_state.realized_pnl_krw, max_daily_loss_krw, bot_token, chat_id)
+            if risk_state.kill_switch_active:
+                notify_kill_switch(strategy, risk_state.realized_pnl_krw, max_daily_loss_krw, bot_token, chat_id)
 
-        if position.code not in [p.code for p in risk_state.open_positions]:
-            exit_tracking.pop(position.code, None)
+            if position.code not in [p.code for p in risk_state.open_positions]:
+                exit_tracking.pop(position.code, None)
+
+        if tracked.status in ("pending", "partial"):
+            pending_orders[f"sell:{position.code}"] = tracked
 
     return executed
+
+
+def process_pending_orders_once(
+    client: KiwoomClient,
+    risk_state: RiskState,
+    pending_orders: dict,
+    exit_tracking: dict,
+    position_capital_krw: float,
+    max_daily_loss_krw: float,
+    bot_token: str,
+    chat_id: str,
+    order_log_path: str = DEFAULT_ORDER_LOG_PATH,
+    strategy: str = "strategy_1",
+    timeout_seconds: float = ORDER_FILL_TIMEOUT_SECONDS,
+) -> None:
+    """이전 사이클에 전량 체결이 안 된 매수/매도 주문(pending_orders)을 이어서
+    확인한다 — 체결이 늘어난 만큼만 risk_state에 반영하고(부분체결 추적,
+    execution-agent.md §2), timeout_seconds를 넘기면 잔량을 취소한다(§3).
+
+    매수의 첫 체결분은 record_position_opened로 슬롯을 새로 열고, 그 뒤 추가
+    체결분은 record_position_added_to로 같은 포지션에 누적한다(risk_manager.py가
+    이미 분할매수용으로 제공하는 함수 — 새로 만들지 않는다). 매도는 매번
+    record_partial_exit로 반영한다.
+    """
+    for key, tracked in list(pending_orders.items()):
+        tracked = check_fill(client, tracked)
+        newly_filled = tracked.filled_qty - tracked.applied_qty
+        code = tracked.stock_code
+
+        if newly_filled > 0 and tracked.side == "buy":
+            if tracked.applied_qty == 0:
+                record_position_opened(
+                    risk_state, code, datetime.now().isoformat(), position_capital_krw, tracked.price,
+                    total_quantity=newly_filled,
+                )
+                exit_tracking[code] = ExitTrackingState()
+            else:
+                record_position_added_to(risk_state, code, 0.0, tracked.price, newly_filled)
+            notify_order_filled(strategy, "buy", code, newly_filled, tracked.price, bot_token, chat_id)
+            _log_order(order_log_path, "buy", code, newly_filled, tracked.price, "entry(추가체결)")
+            tracked.applied_qty = tracked.filled_qty
+
+        elif newly_filled > 0 and tracked.side == "sell":
+            position = next((p for p in risk_state.open_positions if p.code == code), None)
+            if position is not None and position.total_quantity > 0:
+                record_partial_exit(risk_state, code, tracked.price, newly_filled / position.total_quantity, max_daily_loss_krw)
+                notify_order_filled(strategy, "sell", code, newly_filled, tracked.price, bot_token, chat_id)
+                _log_order(order_log_path, "sell", code, newly_filled, tracked.price, "청산(추가체결)")
+                if code not in [p.code for p in risk_state.open_positions]:
+                    exit_tracking.pop(code, None)
+            tracked.applied_qty = tracked.filled_qty
+
+        if tracked.status == "filled":
+            pending_orders.pop(key, None)
+            continue
+
+        tracked = cancel_if_timed_out(client, tracked, timeout_seconds)
+        if tracked.status == "cancelled":
+            pending_orders.pop(key, None)
+            continue
+
+        if tracked.status in ("ambiguous", "unknown"):
+            notify_error(strategy, f"{code} 주문 상태 확인 필요({tracked.status})", RuntimeError(tracked.detail), bot_token, chat_id)
+
+        pending_orders[key] = tracked
 
 
 def run_trading_loop(
@@ -319,6 +450,9 @@ def run_trading_loop(
     use_realtime_feed: bool = True,
     stop_flag_path: str | None = None,
     strategy: str = "strategy_1",
+    order_tracking_log_path: str = DEFAULT_ORDER_TRACKING_LOG_PATH,
+    order_fill_timeout_seconds: float = ORDER_FILL_TIMEOUT_SECONDS,
+    state_dir: str | None = None,
 ) -> None:
     """정규장 동안 반복: kill switch 수동 요청 확인 → 보유 포지션 청산 감시 →
     신규 진입 신호 처리 → 상태 저장.
@@ -347,17 +481,72 @@ def run_trading_loop(
     (live_monitor.fetch_today_candles가 feed 비어있으면 알아서 REST를 쓰므로 이 함수
     쪽에서 별도 예외 처리가 필요 없다).
     """
-    stop_flag_path = stop_flag_path or os.path.join(os.path.dirname(risk_state_path), "stop_requested.json")
+    # state_dir(heartbeat/중지플래그)은 risk_state_path(계좌 전체 공유)와 분리된 전략별
+    # 폴더다 — 미지정 시에만 risk_state_path의 폴더로 폴백한다(직접 호출하는 기존
+    # 테스트/호출부와의 하위호환용; cli.py는 항상 state/{strategy}/를 명시로 넘긴다).
+    state_dir = state_dir or os.path.dirname(risk_state_path)
+    stop_flag_path = stop_flag_path or os.path.join(state_dir, "stop_requested.json")
     clear_stop_flag(stop_flag_path)
     # 백필(35종목 REST, 최대 40초 가까이)이 끝나기 전에도 "지금 이 전략이 실행 중"이라고
     # 대시보드가 바로 판단할 수 있도록 루프 진입 전에 먼저 한 번 하트비트를 찍는다 —
     # 이게 없으면 첫 사이클 전까지의 창(=백필 시간)에 오래된 하트비트가 임계값을
     # 넘겨버린 순간 "중지됨"으로 잘못 보여, 그 틈에 대시보드 "시작" 버튼이 똑같은
     # 전략을 중복 실행시키는 사고가 날 수 있다(실측: 전략1 실계좌에서 실제로 발생).
-    write_heartbeat(os.path.dirname(risk_state_path))
+    write_heartbeat(state_dir)
 
-    risk_state = roll_to_new_day_if_needed(load_state(risk_state_path), pnl_history_path=pnl_history_path)
+    # place_order의 client_order_id 멱등성 캐시는 프로세스 메모리뿐이라 재시작하면
+    # 빈다(kiwoom_client.py:47-53) — 재시작 직후 재시도가 재시작 전 client_order_id를
+    # 재사용해도 캐시가 없으면 API를 다시 부를 수 있다. 디스크 로그로 복원한다.
+    # 실패해도(로그 파손 등) 매매 시작을 막지 않는다 — 워치리스트 갱신 실패와 같은
+    # 관용구(그 사이클만 이전 상태를 쓰고 계속 진행).
+    try:
+        restored = load_recent_orders(client, log_path=order_tracking_log_path)
+        if restored:
+            print(f"주문 멱등성 캐시 복원 - {restored}건", flush=True)
+    except Exception as exc:
+        print(f"주문 멱등성 캐시 복원 실패(매매는 진행) - {exc}", flush=True)
+
+    # risk_state_path는 계좌 전체가 공유하는 단일 파일이다(다른 전략 프로세스와 동시
+    # 실행 가능, risk-agent.md 계좌 단일화) — load/reconcile/save를 락 없이 하면 그
+    # 사이 다른 프로세스가 쓴 포지션/손익을 이 시작 시점 스냅샷으로 덮어써버릴 수
+    # 있다.
+    with risk_state_lock(risk_state_path):
+        risk_state = roll_to_new_day_if_needed(load_state(risk_state_path), pnl_history_path=pnl_history_path)
+
+        # 장 시작 전 계좌 대사 — 내부 상태가 브로커와 어긋난 채로 시작하면 브로커에만 있는
+        # 종목이 손절 감시 없이 하루 종일 방치된다(reconcile.py §핵심원칙 3 "상태는 브로커가
+        # 진실"). 불일치면 신규 진입만 막고 보유 포지션 청산 감시는 계속 돌린다 — 여기서
+        # 루프를 아예 안 띄우면 손절 감시까지 같이 멈춰 오히려 위험하다.
+        # 주의: kill_switch_active는 다음 날 상태 롤 전까지 해제되지 않는다(risk_manager.py
+        # roll_to_new_day_if_needed) — 대시보드 버튼으로도 못 푼다. 오늘은 신규 진입이 없다.
+        try:
+            reconcile_report = reconcile(client, risk_state)
+        except Exception as exc:
+            # 조회 실패는 불일치의 증거가 아니다(토큰 만료·일시 장애 등). 확인을 못 했다는
+            # 사실만 알리고 매매는 그대로 진행한다.
+            print(f"계좌 대사 조회 실패(매매는 진행) - {exc}", flush=True)
+            notify_reconcile_failed(strategy, exc, bot_token, chat_id)
+        else:
+            if not reconcile_report.is_clean:
+                risk_state.kill_switch_active = True
+                print("계좌 대사 불일치 — 신규 진입을 차단합니다(보유 포지션 청산은 계속)", flush=True)
+                notify_reconcile_mismatch(strategy, reconcile_report, bot_token, chat_id)
+        save_state(risk_state, risk_state_path)
+
     exit_tracking: dict = {}
+    # 이전 사이클에 전량 체결이 안 된 매수/매도 주문(buy:{code}/sell:{code} 키) —
+    # process_pending_orders_once가 매 사이클 이어서 확인/타임아웃취소한다. 이
+    # dict 자체는 프로세스 메모리뿐이지만, 재시작 직후엔 아래에서 브로커에 직접
+    # 물어(get_pending_orders) 우리가 낸 미체결을 다시 채워 넣는다 — 로컬 상태가
+    # 아니라 브로커가 진실이라는 원칙을 여기서도 따른다(2026-08-29).
+    pending_orders: dict = {}
+    try:
+        restored_pending = restore_pending_orders_from_broker(client, pending_orders, log_path=order_tracking_log_path)
+        if restored_pending:
+            print(f"재시작 복원 — 브로커에 남아있던 우리 미체결 {restored_pending}건을 이어서 감시합니다", flush=True)
+    except Exception as exc:
+        print(f"미체결 복원 실패(매매는 진행, 이 종목들은 이번엔 못 알아챌 수 있음) - {exc}", flush=True)
+
     position_capital_krw = total_capital_krw / max_concurrent_positions
 
     # top_by_trading_value(워치리스트 선정)와 fetch_today_candles(진입 신호 계산용 분봉)
@@ -366,9 +555,17 @@ def run_trading_loop(
     watchlist_df = top_by_trading_value(client, top_n=top_n)
     today_top35 = set(watchlist_df["stock_code"])
     code_to_name = dict(zip(watchlist_df["stock_code"], watchlist_df["name"]))
-    regime_ok = fetch_today_regime(client, data_dir)
+    # 코스피 지수 분봉은 09:00부터 생성된다. 통합장 시작(08:00)에 계산하면 오늘 봉이
+    # 0개라 compute_index_regime_by_day 결과에 오늘 키가 없고, fetch_today_regime의
+    # .get(today, False)가 False(하락)를 돌려준다 — 장중 재평가가 없어서 그 값이 하루
+    # 종일 고정되고 진입조건 7번이 매일 100% 차단된다(실측: 8/20까지 매수신호 0건,
+    # 루프 시작 로그 25회 중 22회가 "레짐=하락"인데 같은 날 백테스트 판정은 상승).
+    # 정규장 전에는 당일상승률·장중신고가도 못 재므로 None(=차단)으로 두고 09시 이후
+    # 첫 사이클에서 한 번만 확정한다.
+    regime_ok = fetch_today_regime(client, data_dir) if datetime.now().hour >= 9 else None
+    regime_label = "09시 이후 판정" if regime_ok is None else ("상승" if regime_ok else "하락")
     print(
-        f"실주문 매매 시작 — 감시 {len(today_top35)}종목, 코스피 레짐={'상승' if regime_ok else '하락'}, "
+        f"실주문 매매 시작 — 감시 {len(today_top35)}종목, 코스피 레짐={regime_label}, "
         f"일일손실한도 {max_daily_loss_krw:,.0f}원, 슬롯 {max_concurrent_positions}개",
         flush=True,
     )
@@ -390,16 +587,28 @@ def run_trading_loop(
 
     try:
         seen_signals: set = set()
+        feed_stale_alerted = False
         while is_extended_market_open(datetime.now()) and not is_stop_requested(stop_flag_path):
-            risk_state = roll_to_new_day_if_needed(risk_state, pnl_history_path=pnl_history_path)
+            if regime_ok is None and datetime.now().hour >= 9:
+                regime_ok = fetch_today_regime(client, data_dir)
+                print(f"코스피 레짐 확정 — {'상승' if regime_ok else '하락'}", flush=True)
 
-            if is_kill_switch_requested(kill_switch_override_path):
-                risk_state.kill_switch_active = True
+            # 소켓은 열려 있는데 틱만 조용히 끊긴 상태를 잡는다 — 이때 매매가 멈추지는
+            # 않고(fetch_today_candles가 REST 폴백) 느려질 뿐이라 알림만 낸다.
+            # 상태 전이 시에만 보낸다(monitoring-agent.md §알림 폭주 억제).
+            if feed is not None:
+                stale = is_feed_stale(feed.get_feed_age_seconds(), datetime.now())
+                if stale and not feed_stale_alerted:
+                    notify_feed_stale(strategy, feed.get_feed_age_seconds() or 0.0, bot_token, chat_id)
+                    feed_stale_alerted = True
+                elif not stale and feed_stale_alerted:
+                    notify_feed_recovered(strategy, bot_token, chat_id)
+                    feed_stale_alerted = False
 
             # 워치리스트를 매 사이클마다 다시 뽑는다 — 시작 시 한 번만 고정해두면 장중에
             # 새로 거래대금 top_n 안으로 들어온 종목은 재시작 전까지 영영 감시 대상이
-            # 아니게 되는 문제가 strategy3_scalp에서 실측으로 확인됐다(같은 구조라 전략1도
-            # 동일하게 겪음). 새로 들어온 종목은 실시간피드 구독 목록엔 없어도
+            # 아니게 되는 문제가 실측으로 확인됐다(감시 전용 전략에서 먼저 발견됐고
+            # 같은 구조라 전략1도 동일하게 겪음). 새로 들어온 종목은 실시간피드 구독 목록엔 없어도
             # fetch_today_candles가 자동으로 REST 폴백하므로 이 갱신만으로 바로 감시
             # 대상에 들어간다.
             try:
@@ -409,23 +618,43 @@ def run_trading_loop(
             except Exception as exc:
                 print(f"워치리스트 갱신 실패(기존 목록 유지) - {exc}", flush=True)
 
-            process_exits_once(
-                client, risk_state, exit_tracking, max_daily_loss_krw, bot_token, chat_id,
-                order_log_path=order_log_path, feed=feed, strategy=strategy,
-            )
-            if not risk_state.kill_switch_active:
-                process_entries_once(
-                    client, trained, today_top35, regime_ok, risk_state, exit_tracking,
-                    data_dir, proba_threshold, max_concurrent_positions, position_capital_krw,
-                    bot_token, chat_id, seen_signals, total_capital_krw, order_log_path=order_log_path, feed=feed,
-                    code_to_name=code_to_name, strategy=strategy,
+            # 계좌 전체가 공유하는 risk_state.json을 매 사이클 락 밑에서 새로 읽어
+            # 반영·저장한다 — 다른 전략 프로세스가 그 사이 쓴 킬스위치/포지션/손익을
+            # 이 사이클이 시작 전 상태로 덮어쓰지 않기 위함(risk-agent.md 계좌 단일화).
+            with risk_state_lock(risk_state_path):
+                risk_state = roll_to_new_day_if_needed(load_state(risk_state_path), pnl_history_path=pnl_history_path)
+                if is_kill_switch_requested(kill_switch_override_path):
+                    risk_state.kill_switch_active = True
+
+                # 지난 사이클에 못 끝낸 주문부터 먼저 정리한다 — 이번 사이클의
+                # process_exits_once/process_entries_once가 같은 종목에 새 주문을
+                # 겹쳐 내기 전에 이전 건의 체결/타임아웃 판정을 끝내둔다.
+                process_pending_orders_once(
+                    client, risk_state, pending_orders, exit_tracking, position_capital_krw,
+                    max_daily_loss_krw, bot_token, chat_id, order_log_path=order_log_path, strategy=strategy,
+                    timeout_seconds=order_fill_timeout_seconds,
                 )
 
-            save_state(risk_state, risk_state_path)
-            write_heartbeat(os.path.dirname(risk_state_path))
+                process_exits_once(
+                    client, risk_state, exit_tracking, max_daily_loss_krw, bot_token, chat_id,
+                    order_log_path=order_log_path, feed=feed, strategy=strategy,
+                    pending_orders=pending_orders, order_tracking_log_path=order_tracking_log_path,
+                )
+                if not risk_state.kill_switch_active:
+                    process_entries_once(
+                        client, trained, today_top35, bool(regime_ok), risk_state, exit_tracking,
+                        data_dir, proba_threshold, max_concurrent_positions, position_capital_krw,
+                        bot_token, chat_id, seen_signals, total_capital_krw, order_log_path=order_log_path, feed=feed,
+                        code_to_name=code_to_name, strategy=strategy,
+                        pending_orders=pending_orders, order_tracking_log_path=order_tracking_log_path,
+                    )
+                save_state(risk_state, risk_state_path)
+
+            write_heartbeat(state_dir)
             time.sleep(poll_interval_seconds)
     finally:
         if feed is not None:
             feed.stop()
 
-    save_state(risk_state, risk_state_path)
+    with risk_state_lock(risk_state_path):
+        save_state(risk_state, risk_state_path)
