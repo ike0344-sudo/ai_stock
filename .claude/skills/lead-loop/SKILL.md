@@ -25,7 +25,7 @@ herdr agent list                                    # pane 별 idle/working/bloc
 grep -c '^- \[ \]' state/agent_queue/*-agent.md     # 열린 큐 ([>] 는 선행대기라 안 셈)
 ls state/agent_mail/*/[0-9]*.md 2>/dev/null         # 미배달 편지 (standing.md 는 편지 아님)
 ls -t state/agent_reports/ | head -5                # 새 리포트
-grep -nE '\[[^]]*요청[^]]*\]' state/STATUS.md      # 열린 판단 요청 (아래 주의)
+grep -nE '\*\*\[[^]]*요청' state/STATUS.md          # 열린 판단 요청 (아래 주의)
 tail -5 state/loop_ledger.md                        # 지난 회차에 내가 뭘 했나
 ```
 
@@ -35,6 +35,10 @@ tail -5 state/loop_ledger.md                        # 지난 회차에 내가 �
 2026-08-31 에 `grep '\[요청\]'` 이 strategy-agent 의 `[재요청, 미응답]` 을 놓쳐 판단요청이
 여러 회차 방치됐다. 대괄호 안에 "요청"이 들어간 것은 전부 잡아라.
 표기를 통일시키려 하지 마라 — 도구가 넓게 잡는 쪽이 맞다.
+
+**단, 넓게 잡으면 인용까지 걸린다.** "지시대로 `[요청]` 지움" 같은 본문 언급이 열린 요청으로
+잡혀 종료 판정이 영영 안 선다(2026-09-01 실제로 밟음). 에이전트는 실제 요청을 **굵게**
+(`**[요청] ...**`) 쓴다 — 굵은 것만 세라. 애매하면 그 행의 진행 칸을 보면 된다.
 
 ## B. 판정 — 우선순위 순으로 **딱 하나만** 처리한다
 

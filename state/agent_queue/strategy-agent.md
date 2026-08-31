@@ -13,6 +13,19 @@
       highs축 제외 3축(H1 변화vs레벨/H2 chgtop고정성/H3 leader-vs-top_gainer, H3는 원본에
       2등주 데이터 없어 재정의)으로 사전등록 완료 —
       state/agent_reports/strategy-agent_20260831-2240_theme_rank_prereg.md.
-      backtest-agent 측정 의뢰 편지 발송 완료(2245) → **보류 요청함(2312)**: 41일
-      아카이브 중 5일(0702~0708, IS구간)이 다른시점 재생성돼 비균일함을 뒤늦게 확인
-      (data-agent_20260831-2035). data-agent 41일 재정비 후 재의뢰 예정, 그때까지 대기.
+      backtest-agent 측정 의뢰(2245) → 오염 발견으로 보류(2312) → lead 판단(옵션2,
+      오염7일 제외) 반영해 재개(2355) → **측정결과(잠정) 수령·검증 완료: H1 기각,
+      H2 기각, H3 판단보류 — 3개 다 미채택**
+      (state/agent_reports/strategy-agent_20260901-0010_theme_rank_result_verified_all_rejected.md).
+      standing.md 규율대로 새 가설 스스로 안 만듦 — STATUS.md에 "방향 재설정 필요"로
+      lead 판단 요청 올림. data-agent 41일 재정비 끝나면 같은 사전등록으로 재측정 예정
+      (본 라운드는 잠정).
+- [x] [lead 방향재설정, 2026-09-01] 일봉 3축 사전등록 — H1 눌림후반등/H2 CLV(순매도우세
+      데이터제약 재정의)/H3 갭vs장중전용, IS 2019~2024/OOS 2025~2026-08, 리밸런스5거래일
+      비중첩 — state/agent_reports/strategy-agent_20260901-0040_daily_bar_prereg.md.
+      backtest-agent 측정 의뢰 발송 완료(0045). **결과: H1/H2/H3 전부 기각**(핵심발견:
+      H1 총수익 전부 갭에서 나옴, 장중전용은 t=-3.94로 유의하게 마이너스 — 틱 라운드와
+      교차검증) — 독립검증(산출물 행수·표본수 대조) 완료, 결론 수용.
+- [x] [lead, 2026-09-01 01:00] **3라운드 보류 — 사용자 판단 대기.** 두 라운드(틱/일봉)
+      연속 전부 기각, "갭이 전부다"가 두 번 독립 확인됨. 새 가설 스스로 안 만듦, 지시대로
+      유휴 전환. 사용자가 방향 정하면 재개.
