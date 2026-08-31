@@ -24,3 +24,9 @@ build/
 # 커밋마다 그만큼 붇는다. 템플릿(_archive_template.html)과 생성기만 남긴다.
 results/rank_archive.html
 results/rank_timeline*.html
+
+# 캔들/체결 캐시. data/stocks 만 3.3GB 다(parquet 이라 *.csv 규칙에 안 걸린다).
+# 재수집 가능한 파생물이고, 한 번 add 되면 이력에서 못 뺀다.
+data/stocks/
+data/backup/
+data/cache/
