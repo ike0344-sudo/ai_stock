@@ -25,11 +25,16 @@ herdr agent list                                    # pane 별 idle/working/bloc
 grep -c '^- \[ \]' state/agent_queue/*-agent.md     # 열린 큐 ([>] 는 선행대기라 안 셈)
 ls state/agent_mail/*/[0-9]*.md 2>/dev/null         # 미배달 편지 (standing.md 는 편지 아님)
 ls -t state/agent_reports/ | head -5                # 새 리포트
-grep -n '\[요청\]' state/STATUS.md                  # 열린 판단 요청
+grep -nE '\[[^]]*요청[^]]*\]' state/STATUS.md      # 열린 판단 요청 (아래 주의)
 tail -5 state/loop_ledger.md                        # 지난 회차에 내가 뭘 했나
 ```
 
 **원장을 반드시 먼저 읽어라.** 안 읽으면 같은 상태를 보고 같은 지시를 다시 내린다.
+
+**요청 탐지는 `[요청]` 정확 일치로 하지 마라.** 에이전트는 `[재요청, 미응답]` 처럼 변형을 쓴다.
+2026-08-31 에 `grep '\[요청\]'` 이 strategy-agent 의 `[재요청, 미응답]` 을 놓쳐 판단요청이
+여러 회차 방치됐다. 대괄호 안에 "요청"이 들어간 것은 전부 잡아라.
+표기를 통일시키려 하지 마라 — 도구가 넓게 잡는 쪽이 맞다.
 
 ## B. 판정 — 우선순위 순으로 **딱 하나만** 처리한다
 
