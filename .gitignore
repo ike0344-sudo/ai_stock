@@ -30,3 +30,18 @@ results/rank_timeline*.html
 data/stocks/
 data/backup/
 data/cache/
+
+# 분석 산출물. 스크립트를 다시 돌리면 나온다 — 78만행 parquet 이 이력에 쌓이면 안 된다.
+results/*.parquet
+results/*.html
+!results/_rank_template.html
+!results/clean20_report_template.html
+
+# 리다이렉트 로그. *.log 는 이미 막았는데 .out 이 빠져 있었다.
+*.out
+
+.archive/
+dd.zip
+
+# 중첩 저장소 — 자체 .git 을 가진다. 루트에서 add 하면 서브모듈 링크처럼 잡힌다.
+kospi-theme-engine/
