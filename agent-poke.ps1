@@ -31,7 +31,9 @@ $CooldownSeconds = 300
 $lastPoked = @{}
 
 # 큐는 편지보다 급하지 않다. 같은 주기로 찔러대면 "아직 대기 중"만 반복 보고하게 된다.
-$QueueCooldownSeconds = 1800
+# 2026-09-01 사용자 지시로 30분 -> 10분. 짧게 줄이는 대신 아래에서 working 인 에이전트는
+# 아예 건너뛴다 — 안 그러면 40분짜리 작업 도중에 지시가 네 번 쌓인다.
+$QueueCooldownSeconds = 600
 $lastQueuePoked = @{}
 
 # pane 이 없을 때(재부팅 직후) / 세션이 닫혔을 때 herdr 가 매번
@@ -45,8 +47,24 @@ function Write-PokeHeartbeat {
 }
 
 function Invoke-Sweep {
+    # 지금 일하고 있는(또는 승인창에 걸린) 에이전트는 건너뛴다. herdr agent prompt 는
+    # 상대가 바빠도 입력창에 텍스트를 넣어버려서, 반복 호출하면 초안이 이어붙어 엉킨다.
+    $busy = @{}
+    try {
+        $list = & $Herdr agent list 2>$null | ConvertFrom-Json
+        foreach ($a in $list.result.agents) {
+            if ($a.name -and ($a.agent_status -eq "working" -or $a.agent_status -eq "blocked")) {
+                $busy[$a.name] = $a.agent_status
+            }
+        }
+    } catch { }   # 조회 실패면 예전처럼 그냥 진행한다 — 안 깨우는 것보다 낫다
+
     foreach ($dir in Get-ChildItem $Mail -Directory -ErrorAction SilentlyContinue) {
         $agent = $dir.Name
+        if ($busy.ContainsKey($agent)) {
+            Write-Host "  $agent : $($busy[$agent]) — 건너뜀" -ForegroundColor DarkGray
+            continue
+        }
         # read/ 는 처리 완료분. 최상위에 남은 .md 만 안 읽은 편지다.
         # standing.md 는 상주하는 상시 임무 파일이라 편지가 아니다 — 세면 영원히 깨운다.
         # read/ 에 같은 이름 사본이 있으면 처리된 편지다 — 최상위 원본이 남아 있어도 안 센다.
