@@ -26,7 +26,8 @@ import pyarrow.parquet as pq
 
 from tick_compress import RAW_COLUMNS, compress, decompress, verify_losslessness
 
-TICK_DIR = "data/stocks/tick"
+# 통합(AL) 기본. KRX 전용(data/stocks/tick)은 2026-08-31 삭제됐다 — 되살리지 마라.
+TICK_DIR = "data/stocks/tick_al"
 MAIN_PROGRESS_PATH = "state/tick_collection/progress.json"
 COMPACT_PROGRESS_PATH = "state/tick_collection/compress_progress.json"
 LOG_PATH = "state/tick_collection/compress_log.txt"

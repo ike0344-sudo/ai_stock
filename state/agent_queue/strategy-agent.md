@@ -18,8 +18,9 @@
       H2 기각, H3 판단보류 — 3개 다 미채택**
       (state/agent_reports/strategy-agent_20260901-0010_theme_rank_result_verified_all_rejected.md).
       standing.md 규율대로 새 가설 스스로 안 만듦 — STATUS.md에 "방향 재설정 필요"로
-      lead 판단 요청 올림. data-agent 41일 재정비 끝나면 같은 사전등록으로 재측정 예정
-      (본 라운드는 잠정).
+      lead 판단 요청 올림. **41일 균일본 최종 재측정 결과 수령·검증·사전등록 갱신
+      완료: H1/H2 기각 유지(크기만 변화), H3는 표본충족(19→25)돼 판단보류→기각으로
+      확정 — 3축 다 최종 기각.** 사전등록 문서(2240)에 최종 확정 배너 추가.
 - [x] [lead 방향재설정, 2026-09-01] 일봉 3축 사전등록 — H1 눌림후반등/H2 CLV(순매도우세
       데이터제약 재정의)/H3 갭vs장중전용, IS 2019~2024/OOS 2025~2026-08, 리밸런스5거래일
       비중첩 — state/agent_reports/strategy-agent_20260901-0040_daily_bar_prereg.md.

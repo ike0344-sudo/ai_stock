@@ -99,7 +99,8 @@ from .final_strategy import (
 from .risk_manager import STOP_LOSS_PCT, TIERS
 from .universe import daily_top_n_from_local
 
-TICK_DIR = "data/stocks/tick"
+# 통합(AL) 기준. KRX 전용(data/stocks/tick)은 2026-08-31 삭제됐다 — 되살리지 마라.
+TICK_DIR = "data/stocks/tick_al"
 DAILY_DIR = "data/stocks/daily"
 
 # 데이터 품질 조사로 확정한 사용 범위 - 알려진 결측/이상 원칙에 따라 사용 전 제외.

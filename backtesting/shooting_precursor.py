@@ -85,6 +85,18 @@ LABEL_HORIZON = 600  # 10분
 FEATURE_WINDOWS = {"w3": 180, "w10": 600}
 LARGE_TRADE_MULT = 3.0  # 그 순간까지의 평균 체결크기의 몇 배부터 "대량"으로 볼지
 
+def large_trade_flag(tick_qty: np.ndarray, mult: float = LARGE_TRADE_MULT) -> np.ndarray:
+    """"그 순간까지의 평균 체결크기"의 mult배 이상인 체결을 "대량"으로 본다
+    (과거 정보만 쓰는 인과적 확장평균 - window_sum으로 O(1) 집계하려면
+    percentile 대신 이 근사가 필요, `precursor_lead_lag.py`/큐(4)에서도
+    같은 정의를 재사용한다 - 중복 구현 금지)."""
+    tick_idx = np.arange(1, len(tick_qty) + 1)
+    cs_tick_qty = np.cumsum(tick_qty)
+    avg_before = (np.concatenate(([np.nan], cs_tick_qty[:-1] / tick_idx[:-1]))
+                  if len(tick_qty) > 1 else np.array([np.nan]))
+    return np.nan_to_num(tick_qty >= mult * avg_before, nan=0.0).astype(bool)
+
+
 TRAIN_DATES = ["2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07", "2026-08-10",
                "2026-08-11", "2026-08-12", "2026-08-13", "2026-08-14", "2026-08-18",
                "2026-08-19", "2026-08-20"]  # 앞 12거래일 = IS
@@ -127,13 +139,7 @@ def compute_stock_day(path: str, code: str, date_str: str):
     day_high_before = np.concatenate(([-np.inf], cum_high[:-1]))
     new_high_flag_per_sec = (px > day_high_before).astype(float)
 
-    # 대량체결: "그 순간까지의 평균 체결크기"의 LARGE_TRADE_MULT배 이상인 체결을
-    # 크다고 본다(과거 정보만 사용하는 인과적 확장평균, 그 창의 미래 분포를
-    # 안 쓴다 - window_sum으로 O(1) 집계하려면 percentile 대신 이 근사가 필요).
-    tick_idx = np.arange(1, len(tick_qty) + 1)
-    cs_tick_qty = np.cumsum(tick_qty)
-    avg_before = np.concatenate(([np.nan], cs_tick_qty[:-1] / tick_idx[:-1])) if len(tick_qty) > 1 else np.array([np.nan])
-    large_flag = np.nan_to_num(tick_qty >= LARGE_TRADE_MULT * avg_before, nan=0.0).astype(bool)
+    large_flag = large_trade_flag(tick_qty)
     large_qty_per_sec = np.bincount(tick_sec, weights=np.where(large_flag, tick_qty, 0.0), minlength=N)
 
     # 변동성: 틱마다 되짚는 대신 초단위 수익률(px 기반, 거래 없는 초는 0)의
