@@ -62,13 +62,16 @@ def load_universe(data_dir: str = DATA_DIR) -> dict[str, pd.DataFrame]:
     그대로 읽는다(일봉은 리샘플링이 없어 data_loader._load_local_series의 일봉
     분기와 완전히 동일한 두 줄).
     """
+    # lead 지시(20260901 일봉캐시 편지): 종목별 CSV 2,413번 여는 대신 합친 parquet
+    # 캐시를 쓴다 - 판단 로직/결과는 그대로, 로딩 방식만 바꾼다.
+    # date를 groupby 전에 한 번만 파싱/인덱싱해야 한다 - 그룹마다 pd.to_datetime을
+    # 부르면 파일 읽기 절약분(0.07초)을 재구성 루프가 다시 까먹는다(실측 1.6초->0.7초).
+    from backtesting.daily_cache import load_daily_all
+
     daily_dir = os.path.join(data_dir, "stocks", "daily")
-    codes = sorted(f[: -len(".csv")] for f in os.listdir(daily_dir) if f.endswith(".csv"))
-    universe = {}
-    for code in codes:
-        df = pd.read_csv(os.path.join(daily_dir, f"{code}.csv"), index_col=0, parse_dates=True)
-        if not df.empty:
-            universe[code] = df
+    panel = load_daily_all(daily_dir)
+    panel = panel.assign(date=pd.to_datetime(panel["date"])).set_index("date")
+    universe = {code: g.drop(columns="code") for code, g in panel.groupby("code", sort=True) if not g.empty}
     return universe
 
 

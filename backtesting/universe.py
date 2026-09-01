@@ -11,10 +11,25 @@ import duckdb
 import pandas as pd
 
 from kiwoom_client import KiwoomClient
+from . import minute_store
 from .entry_filters import _day_return
 from .screener import top_by_trading_value
 
 TRADE_VALUE_UNIT_TO_EOK = 100  # trde_prica는 백만원 단위. 1억원 = 100백만원.
+
+
+def _trading_value_minute_dir(data_dir: str) -> str:
+    """대금 순위 계산용 분봉 디렉터리 — **통합(AL) 기준**(2026-09-01 lead 판단,
+    data-agent_20260901-1645_minute_al_bridge.md). KRX 전용으로는 대금 중앙값
+    오차 17.5%(최대 298%)라 순위가 흔들린다(가격/수익률은 95% 일치라 그쪽은 안 바꿈).
+
+    data_dir이 기본값("data")일 때만 통합 경로로 간다 — tests/backtesting/
+    test_universe.py가 tmp_path를 data_dir로 넘겨 만드는 소규모 픽스처는 그대로
+    자기 경로(tmp_path/stocks/minute)를 쓴다(격리 유지, 매번 1,265종목 실데이터를
+    읽게 만들지 않는다). 프로덕션 호출(기본값 그대로 쓰는 곳)만 AL로 바뀐다."""
+    if data_dir == "data":
+        return minute_store.minute_al_dir()
+    return os.path.join(data_dir, "stocks", "minute")
 
 
 def build_liquid_universe(
@@ -196,7 +211,7 @@ def intraday_top_n_return_rank1_by_minute(
     드는 코드만 골라 그중 등락률 최댓값"이라는 원래 로직과 동치다(값이 NaN인
     칸은 랭크도 NaN이 되어 자동 제외되므로 dropna 후 nlargest와 같은 집합이 나옴).
     """
-    minute_dir = os.path.join(data_dir, "stocks", "minute")
+    minute_dir = _trading_value_minute_dir(data_dir)
     daily_dir = os.path.join(data_dir, "stocks", "daily")
 
     cum_value_by_code: dict[str, pd.Series] = {}
@@ -256,7 +271,7 @@ def intraday_top_n_return_rank1_by_minute_duckdb(
     근사만 구현했다 - pandas 버전처럼 파일별로 있으면 쓰고 없으면 근사하는 폴백은
     없다. value 컬럼이 든 데이터가 실제로 생기면 이 함수를 그때 확장할 것.
     """
-    minute_glob = os.path.join(data_dir, "stocks", "minute", "*.csv").replace("\\", "/")
+    minute_glob = os.path.join(_trading_value_minute_dir(data_dir), "*.csv").replace("\\", "/")
     daily_glob = os.path.join(data_dir, "stocks", "daily", "*.csv").replace("\\", "/")
 
     query = f"""
