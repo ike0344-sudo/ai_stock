@@ -9,10 +9,25 @@ update-top35는 "오늘 기준 top35"만 받는다. 그래서 어제 top10이었
 reach20_condition_scan은 데이터가 있는 종목끼리만 대금 순위를 매기므로, 빈 자리로
 엉뚱한 종목이 top10에 들어간다(2026-07-20~08-11 구간에서 실제로 발생).
 
+## 소피증권 유니버스를 같이 본다
+
+밀린 종목을 **분봉 폴더**로 골랐더니, 분봉이 없는 종목은 일봉도 영영 안 받았다 —
+9/2 남화토건이 8/21 일봉으로 판정돼 10일 신고가에 별표가 안 떴다(6종목이 12일째).
+소피증권이 신고가·전일종가를 재는 종목(universe.csv)은 일봉이 밀리면 화면이 곧장
+틀리므로, 분봉 목록과 합쳐서 고른다.
+
+## 증분이 안 되면 통째로 다시 받는다
+
+거래정지 등으로 load_history 가 최근 구간을 아예 안 주는 종목이 있다(아이티켐은
+4/2 이후가 안 나온다). 증분 뒤에도 날짜가 그대로면 refetch_daily 의 전체 재수집으로
+한 번 더 시도한다 — 그쪽 엔드포인트는 그 구간을 준다.
+
 한 종목당 API 호출이 2~3회라 600종목이면 30분 이상 걸린다. 중간에 끊겨도 이미 받은
 종목은 파일에 남으므로 다시 돌리면 이어서 진행된다(밀린 종목만 고르기 때문).
 """
+import csv
 import os
+import shutil
 import sys
 import time
 from datetime import date, timedelta
@@ -29,6 +44,9 @@ DAILY_DIR = "data/stocks/daily"
 MINUTE_DIR = "data/stocks/minute"
 LOG = "backfill_universe.log"
 OVERLAP_DAYS = 5
+# 소피증권이 판정에 쓰는 종목 목록. 돌아가는 앱(dist) 것을 먼저 본다.
+UNIVERSE_CSV = ("kospi-theme-engine/dist/data/reference/universe.csv",
+                "kospi-theme-engine/data/reference/universe.csv")
 
 
 def log(msg: str) -> None:
@@ -51,12 +69,54 @@ def last_date(path: str) -> date | None:
         return None
 
 
-def stale_codes(target: date, force_all: bool) -> list[str]:
-    codes = sorted(f[:-4] for f in os.listdir(MINUTE_DIR) if f.endswith(".csv"))
+def universe_codes() -> set[str]:
+    """소피증권이 신고가·전일종가를 재는 종목. 없으면 빈 집합(그 앱을 안 쓰는 PC)."""
+    for rel in UNIVERSE_CSV:
+        if os.path.exists(rel):
+            with open(rel, encoding="utf-8-sig", newline="") as fh:
+                return {r["code"] for r in csv.DictReader(fh) if r.get("code")}
+    return set()
+
+
+def stale_codes(target: date, force_all: bool) -> tuple[list[str], set[str]]:
+    """(받을 종목, 그중 일봉이 밀린 종목).
+
+    분봉은 있는 파일만 갱신한다 — 없는 종목까지 받으면 2.6GB 캐시가 통째로 늘어난다.
+    일봉은 소피증권 유니버스까지 챙긴다. 그쪽은 밀리는 순간 화면이 틀린다.
+    """
+    minute = sorted(f[:-4] for f in os.listdir(MINUTE_DIR) if f.endswith(".csv"))
+    pool = sorted(set(minute) | universe_codes())
     if force_all:
-        return codes
-    return [c for c in codes
-            if (last_date(os.path.join(MINUTE_DIR, f"{c}.csv")) or date(2000, 1, 1)) < target]
+        return pool, set(pool)
+    def old(d: str, c: str) -> bool:
+        return (last_date(os.path.join(d, f"{c}.csv")) or date(2000, 1, 1)) < target
+    daily_late = {c for c in pool if old(DAILY_DIR, c)}
+    minute_late = {c for c in minute if old(MINUTE_DIR, c)}
+    return sorted(daily_late | minute_late), daily_late
+
+
+def full_refetch(client, code: str, path: str) -> bool:
+    """증분으로 못 채운 일봉을 통째로 다시 받는다. 채웠으면 True.
+
+    이력이 짧아지면 쓰지 않는다 — 과거를 잃는 쪽이 며칠 밀린 것보다 나쁘다.
+    """
+    from refetch_daily import fetch
+
+    try:
+        df = fetch(client, code, max_pages=3)
+    except Exception as e:                              # noqa: BLE001
+        log(f"  {code} 전체 재수집 실패: {type(e).__name__}: {str(e)[:80]}")
+        return False
+    if df is None or df.empty:
+        return False
+    try:
+        old_rows = len(pd.read_csv(path)) if os.path.exists(path) else 0
+    except (OSError, ValueError):
+        old_rows = 0
+    if len(df) < old_rows:
+        return False
+    df.to_csv(path)
+    return True
 
 
 def main() -> None:
@@ -65,7 +125,7 @@ def main() -> None:
     # 오늘 장중이면 오늘치는 어차피 미완성이라 "전 거래일까지" 채워졌으면 최신으로 본다
     target = date.today() if time.localtime().tm_hour >= 16 else date.today() - timedelta(days=1)
 
-    codes = stale_codes(target, "--all" in sys.argv)
+    codes, daily_late = stale_codes(target, "--all" in sys.argv)
     if limit:
         codes = codes[:limit]
     log("=" * 50)
@@ -78,26 +138,41 @@ def main() -> None:
                           is_mock=os.environ.get("KIWOOM_IS_MOCK", "true").lower() == "true")
     ok = fail = 0
     started = time.time()
+    rescued = []
     for i, code in enumerate(codes, 1):
+        dpath = os.path.join(DAILY_DIR, f"{code}.csv")
+        mpath = os.path.join(MINUTE_DIR, f"{code}.csv")
         try:
-            update_daily(client, code, os.path.join(DAILY_DIR, f"{code}.csv"),
-                         overlap_days=OVERLAP_DAYS)
-            m = update_minute(client, code, os.path.join(MINUTE_DIR, f"{code}.csv"),
-                              overlap_days=OVERLAP_DAYS)
+            if code in daily_late:
+                update_daily(client, code, dpath, overlap_days=OVERLAP_DAYS)
+                # 증분이 아무것도 못 가져오는 종목이 있다(거래정지 등). 조용히 두면
+                # 그 종목만 옛날 일봉으로 신고가가 매겨진다.
+                if (last_date(dpath) or date(2000, 1, 1)) < target and full_refetch(client, code, dpath):
+                    rescued.append(code)
+            m = (update_minute(client, code, mpath, overlap_days=OVERLAP_DAYS)
+                 if os.path.exists(mpath) else None)
             ok += 1
             if i % 25 == 0 or i == len(codes):
                 rate = (time.time() - started) / i
-                log(f"[{i}/{len(codes)}] {code} ~{m.index.max():%m-%d} "
+                stamp = f"~{m.index.max():%m-%d}" if m is not None and not m.empty else "일봉만"
+                log(f"[{i}/{len(codes)}] {code} {stamp} "
                     f"| 성공 {ok} 실패 {fail} | 남은 {int(rate*(len(codes)-i)/60)}분")
         except Exception as e:
             fail += 1
             log(f"[{i}/{len(codes)}] {code} 실패: {str(e)[:120]}")
 
+    if rescued:
+        log(f"증분이 안 돼 통째로 다시 받은 종목 {len(rescued)}개: {', '.join(rescued[:10])}")
+    still = [c for c in daily_late if (last_date(os.path.join(DAILY_DIR, f"{c}.csv"))
+                                       or date(2000, 1, 1)) < target]
+    if still:
+        log(f"아직도 일봉이 밀린 종목 {len(still)}개: {', '.join(sorted(still)[:10])}")
     log(f"백필 완료: 성공 {ok} 실패 {fail} ({(time.time()-started)/60:.1f}분)")
 
 
 def demo() -> None:
-    """last_date가 파일 끝에서 날짜를 제대로 뽑는지 - 여기가 틀리면 전 종목을 다시 받는다."""
+    """last_date가 파일 끝에서 날짜를 제대로 뽑는지 - 여기가 틀리면 전 종목을 다시 받는다.
+    그리고 밀린 종목 고르기 - 여기가 틀리면 일부 종목이 조용히 안 받아진다."""
     p = "state/_backfill_demo.csv"
     os.makedirs("state", exist_ok=True)
     open(p, "w", encoding="utf-8").write(
@@ -106,6 +181,32 @@ def demo() -> None:
     assert last_date(p) == date(2026, 8, 11), last_date(p)
     os.remove(p)
     assert last_date("없는파일.csv") is None
+
+    global DAILY_DIR, MINUTE_DIR, UNIVERSE_CSV
+    keep = (DAILY_DIR, MINUTE_DIR, UNIVERSE_CSV)
+    root = "state/_backfill_demo"
+    shutil.rmtree(root, ignore_errors=True)
+    DAILY_DIR, MINUTE_DIR = f"{root}/daily", f"{root}/minute"
+    os.makedirs(DAILY_DIR); os.makedirs(MINUTE_DIR)
+    UNIVERSE_CSV = (f"{root}/universe.csv",)
+    try:
+        def bar(d, code, day):
+            with open(os.path.join(d, f"{code}.csv"), "w", encoding="utf-8") as fh:
+                fh.write("date,open,high,low,close,volume" + chr(10)
+                         + f"{day} 09:00:00,1,1,1,1,1" + chr(10))
+        bar(DAILY_DIR, "AAA", "2026-08-21")     # 분봉이 없고 일봉만 밀렸다 (남화토건)
+        bar(DAILY_DIR, "BBB", "2026-09-02")     # 일봉은 최신, 분봉만 밀렸다
+        bar(MINUTE_DIR, "BBB", "2026-08-21")
+        bar(DAILY_DIR, "CCC", "2026-09-02")     # 둘 다 최신 - 안 받는다
+        bar(MINUTE_DIR, "CCC", "2026-09-02")
+        with open(f"{root}/universe.csv", "w", encoding="utf-8") as fh:
+            fh.write("code,name" + chr(10) + "AAA,가" + chr(10) + "BBB,나" + chr(10) + "CCC,다" + chr(10))
+        codes, daily_late = stale_codes(date(2026, 9, 2), force_all=False)
+        assert codes == ["AAA", "BBB"], codes
+        assert daily_late == {"AAA"}, daily_late
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+        DAILY_DIR, MINUTE_DIR, UNIVERSE_CSV = keep
     print("demo ok")
 
 
