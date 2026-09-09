@@ -25,7 +25,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from backtesting.data_loader import _pages_to_dataframe
 from backtesting.updater import _load_existing, _merge_dedupe_save
-from kiwoom_client import KiwoomClient
+from kiwoom_client import KiwoomClient, batch_keys
 
 STATE_DIR = "state/daily_report"
 LOG = "daily_report_job.log"
@@ -99,7 +99,7 @@ def main() -> None:
             load_dotenv()
             log("지수 증분 수집 시작")
             update_indexes(KiwoomClient(
-                os.environ["KIWOOM_APPKEY"], os.environ["KIWOOM_SECRETKEY"],
+                *batch_keys(),
                 is_mock=os.environ.get("KIWOOM_IS_MOCK", "true").lower() == "true"))
             log("지수 증분 수집 완료")
         except Exception as e:                      # 지수가 실패해도 종목 기반 재계산은 의미가 있다

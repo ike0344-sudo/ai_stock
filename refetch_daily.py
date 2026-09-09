@@ -28,10 +28,10 @@ DAILY = ROOT / "data" / "stocks" / "daily"
 
 def _client():
     from dotenv import load_dotenv
-    from kiwoom_client import KiwoomClient
+    from kiwoom_client import KiwoomClient, batch_keys
 
     load_dotenv(ROOT / ".env")
-    key, secret = os.environ.get("KIWOOM_APPKEY"), os.environ.get("KIWOOM_SECRETKEY")
+    key, secret = batch_keys()
     if not key or not secret:
         raise SystemExit("KIWOOM_APPKEY / KIWOOM_SECRETKEY 가 .env에 없습니다")
     return KiwoomClient(key, secret,

@@ -4,6 +4,7 @@
 - 실전 도메인: https://api.kiwoom.com
 - 모의투자 도메인: https://mockapi.kiwoom.com
 """
+import os
 import threading
 import time
 import uuid
@@ -12,6 +13,23 @@ from datetime import date
 import requests
 
 INVALID_TOKEN_ERROR_CODE = "8005"
+
+
+def batch_keys() -> tuple[str, str]:
+    """배치·수집용 (앱키, 시크릿). KIWOOM_BATCH_* 가 있으면 그걸, 없으면 실시간용을 쓴다.
+
+    **앱키 하나당 WebSocket 세션은 하나다.** 같은 앱키로 두 번째 연결을 열면 먼저
+    있던 쪽이 즉시 Bye 로 끊긴다(2026-08-31 실측: 탐침 연결 시각과 소피증권 끊김
+    시각이 밀리초까지 일치). 그래서 백필·분봉 수집·장전 배치처럼 뒤에서 도는 일은
+    별도 앱키로 돌려 소피증권 실시간 구독을 건드리지 않는다.
+
+    없으면 실시간용으로 돌아가므로, 배치키를 안 넣은 PC 에서도 그대로 동작한다.
+    """
+    key = os.environ.get("KIWOOM_BATCH_APPKEY", "").strip()
+    sec = os.environ.get("KIWOOM_BATCH_SECRETKEY", "").strip()
+    if key and sec:
+        return key, sec
+    return os.environ.get("KIWOOM_APPKEY", ""), os.environ.get("KIWOOM_SECRETKEY", "")
 
 
 def _is_invalid_token_response(payload: dict) -> bool:

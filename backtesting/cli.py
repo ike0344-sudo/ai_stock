@@ -23,7 +23,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import pandas as pd
 from dotenv import load_dotenv
-from kiwoom_client import KiwoomClient
+from kiwoom_client import KiwoomClient, batch_keys
 
 from . import grid_search, report
 from .bracket_scan import scan_bracket_zones, summarize_zones
@@ -172,8 +172,8 @@ def _parse_date(value: str) -> date:
 
 def _build_client() -> KiwoomClient:
     load_dotenv()
-    appkey = os.environ["KIWOOM_APPKEY"]
-    secretkey = os.environ["KIWOOM_SECRETKEY"]
+    # 뒤에서 도는 수집이라 배치용 앱키를 쓴다 — 소피증권 실시간 세션을 안 건드린다.
+    appkey, secretkey = batch_keys()
     is_mock = os.environ.get("KIWOOM_IS_MOCK", "true").lower() == "true"
     return KiwoomClient(appkey, secretkey, is_mock=is_mock)
 

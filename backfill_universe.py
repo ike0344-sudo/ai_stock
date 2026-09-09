@@ -38,7 +38,7 @@ from dotenv import load_dotenv
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from backtesting.updater import update_daily, update_minute
-from kiwoom_client import KiwoomClient
+from kiwoom_client import KiwoomClient, batch_keys
 
 DAILY_DIR = "data/stocks/daily"
 MINUTE_DIR = "data/stocks/minute"
@@ -134,7 +134,7 @@ def main() -> None:
         log("밀린 종목 없음")
         return
 
-    client = KiwoomClient(os.environ["KIWOOM_APPKEY"], os.environ["KIWOOM_SECRETKEY"],
+    client = KiwoomClient(*batch_keys(),
                           is_mock=os.environ.get("KIWOOM_IS_MOCK", "true").lower() == "true")
     ok = fail = 0
     started = time.time()
