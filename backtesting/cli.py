@@ -170,10 +170,12 @@ def _parse_date(value: str) -> date:
     return date.fromisoformat(value)
 
 
-def _build_client() -> KiwoomClient:
+def _build_client(batch: bool = True) -> KiwoomClient:
+    """batch=True(기본): 뒤에서 도는 수집이라 배치용 앱키 — 소피증권 실시간 세션을 안 건드린다.
+    batch=False: 실주문 전용. 주문은 지금까지 검증된 그 앱키로만 낸다."""
     load_dotenv()
-    # 뒤에서 도는 수집이라 배치용 앱키를 쓴다 — 소피증권 실시간 세션을 안 건드린다.
-    appkey, secretkey = batch_keys()
+    appkey, secretkey = batch_keys() if batch else (
+        os.environ.get("KIWOOM_APPKEY", ""), os.environ.get("KIWOOM_SECRETKEY", ""))
     is_mock = os.environ.get("KIWOOM_IS_MOCK", "true").lower() == "true"
     return KiwoomClient(appkey, secretkey, is_mock=is_mock)
 
@@ -601,7 +603,7 @@ def _run_trading(args) -> None:
     # 멈춰버린다(risk-agent.md 계좌 단일화, 2026-08-29).
     state_dir = f"state/{strategy}"
 
-    client = _build_client()
+    client = _build_client(batch=False)
     # 08:00 대기 구간에도 heartbeat를 계속 찍어야 한다 — 안 그러면 대시보드가 이
     # 프로세스를 "중지됨"으로 오판해 "시작" 버튼으로 중복 실행시키는 사고가 난다
     # (trading_loop.run_trading_loop의 같은 문제를 고친 이유와 동일, 실계좌에서 실측).
