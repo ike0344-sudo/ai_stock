@@ -1,0 +1,456 @@
+{
+  "day": "20260701",
+  "n_frames": 390,
+  "frame0": {
+    "t": "09:01",
+    "chgtop": [
+      "금호건설",
+      13.67,
+      6.74
+    ],
+    "rows": [
+      {
+        "theme": "전력",
+        "score": 78.6,
+        "rise": 7.26,
+        "speed": 2.43,
+        "leader": "LS ELECTRIC",
+        "lead_pct": 6.9,
+        "top": [
+          "LS ELECTRIC",
+          6.93
+        ]
+      },
+      {
+        "theme": "호남 반도체",
+        "score": 51.6,
+        "rise": 6.71,
+        "speed": 3.72,
+        "leader": "금호건설",
+        "lead_pct": 13.7,
+        "top": [
+          "금호건설",
+          13.67
+        ]
+      },
+      {
+        "theme": "MLCC",
+        "score": 39.8,
+        "rise": 2.78,
+        "speed": 2.68,
+        "leader": "삼성전기",
+        "lead_pct": 3.2,
+        "top": [
+          "삼성전기",
+          3.16
+        ]
+      },
+      {
+        "theme": "메모리 반도체",
+        "score": 37.8,
+        "rise": 1.89,
+        "speed": 2.07,
+        "leader": "SK하이닉스",
+        "lead_pct": 2.3,
+        "top": [
+          "SK하이닉스",
+          2.3
+        ]
+      },
+      {
+        "theme": "신재생",
+        "score": 26.7,
+        "rise": 5.3,
+        "speed": 0.53,
+        "leader": "한화솔루션",
+        "lead_pct": 5.7,
+        "top": [
+          "",
+          0.0
+        ]
+      },
+      {
+        "theme": "소부장반도체",
+        "score": 22.7,
+        "rise": 1.27,
+        "speed": 1.68,
+        "leader": "심텍",
+        "lead_pct": 1.3,
+        "top": [
+          "심텍",
+          1.28
+        ]
+      },
+      {
+        "theme": "5G",
+        "score": 20.6,
+        "rise": 3.76,
+        "speed": 0.67,
+        "leader": "서진시스템",
+        "lead_pct": 7.2,
+        "top": [
+          "",
+          0.0
+        ]
+      },
+      {
+        "theme": "2차전지",
+        "score": 14.4,
+        "rise": -2.31,
+        "speed": 1.37,
+        "leader": "에코프로",
+        "lead_pct": -6.3,
+        "top": [
+          "삼성SDI",
+          1.95
+        ]
+      },
+      {
+        "theme": "증권",
+        "score": 11.6,
+        "rise": 2.26,
+        "speed": 0.86,
+        "leader": "미래에셋증권",
+        "lead_pct": 1.8,
+        "top": [
+          "",
+          0.0
+        ]
+      },
+      {
+        "theme": "원전",
+        "score": 10.2,
+        "rise": 0.88,
+        "speed": 0.77,
+        "leader": "두산에너빌리티",
+        "lead_pct": 1.0,
+        "top": [
+          "두산에너빌리티",
+          1.04
+        ]
+      },
+      {
+        "theme": "HBM 소부장",
+        "score": 10.2,
+        "rise": 0.88,
+        "speed": 1.68,
+        "leader": "이오테크닉스",
+        "lead_pct": 3.7,
+        "top": [
+          "",
+          0.0
+        ]
+      },
+      {
+        "theme": "조선",
+        "score": 8.8,
+        "rise": 0.87,
+        "speed": 1.23,
+        "leader": "한화오션",
+        "lead_pct": 0.2,
+        "top": [
+          "",
+          0.0
+        ]
+      },
+      {
+        "theme": "방산",
+        "score": 8.7,
+        "rise": 1.45,
+        "speed": 0.65,
+        "leader": "한화에어로스페이스",
+        "lead_pct": 2.8,
+        "top": [
+          "",
+          0.0
+        ]
+      },
+      {
+        "theme": "로봇",
+        "score": 7.9,
+        "rise": -0.59,
+        "speed": 0.85,
+        "leader": "현대차",
+        "lead_pct": 0.1,
+        "top": [
+          "현대차",
+          0.1
+        ]
+      },
+      {
+        "theme": "데이터센터",
+        "score": 7.1,
+        "rise": 0.09,
+        "speed": 1.26,
+        "leader": "NAVER",
+        "lead_pct": 0.2,
+        "top": [
+          "NAVER",
+          0.2
+        ]
+      },
+      {
+        "theme": "바이오",
+        "score": 5.7,
+        "rise": -0.17,
+        "speed": 0.87,
+        "leader": "셀트리온",
+        "lead_pct": 2.3,
+        "top": [
+          "",
+          0.0
+        ]
+      },
+      {
+        "theme": "대북 관련주",
+        "score": 3.9,
+        "rise": 0.61,
+        "speed": 0.52,
+        "leader": "현대엘리베이터",
+        "lead_pct": 2.0,
+        "top": [
+          "",
+          0.0
+        ]
+      },
+      {
+        "theme": "화장품",
+        "score": 3.0,
+        "rise": 0.48,
+        "speed": 0.22,
+        "leader": "파마리서치",
+        "lead_pct": 0.3,
+        "top": [
+          "",
+          0.0
+        ]
+      }
+    ]
+  },
+  "frame_last": {
+    "t": "15:30",
+    "chgtop": [
+      "대원전선",
+      29.97,
+      1.28
+    ],
+    "rows": [
+      {
+        "theme": "소부장반도체",
+        "score": 88.0,
+        "rise": 11.3,
+        "speed": 3.99,
+        "leader": "주성엔지니어링",
+        "lead_pct": 20.4,
+        "top": [
+          "주성엔지니어링",
+          20.4
+        ]
+      },
+      {
+        "theme": "전력",
+        "score": 77.6,
+        "rise": 15.38,
+        "speed": 1.0,
+        "leader": "LS ELECTRIC",
+        "lead_pct": 10.7,
+        "top": [
+          "대원전선",
+          29.97
+        ]
+      },
+      {
+        "theme": "호남 반도체",
+        "score": 55.1,
+        "rise": 14.77,
+        "speed": 3.42,
+        "leader": "금호전기",
+        "lead_pct": 18.3,
+        "top": [
+          "금호전기",
+          18.31
+        ]
+      },
+      {
+        "theme": "원전",
+        "score": 39.2,
+        "rise": 6.86,
+        "speed": 0.84,
+        "leader": "GS건설",
+        "lead_pct": 19.9,
+        "top": [
+          "두산에너빌리티",
+          1.96
+        ]
+      },
+      {
+        "theme": "방산",
+        "score": 38.5,
+        "rise": 8.19,
+        "speed": 0.9,
+        "leader": "한화에어로스페이스",
+        "lead_pct": 9.6,
+        "top": [
+          "",
+          0.0
+        ]
+      },
+      {
+        "theme": "신재생",
+        "score": 35.8,
+        "rise": 7.91,
+        "speed": 0.42,
+        "leader": "OCI홀딩스",
+        "lead_pct": 11.9,
+        "top": [
+          "",
+          0.0
+        ]
+      },
+      {
+        "theme": "조선",
+        "score": 24.4,
+        "rise": 4.59,
+        "speed": 0.81,
+        "leader": "한화오션",
+        "lead_pct": 3.0,
+        "top": [
+          "",
+          0.0
+        ]
+      },
+      {
+        "theme": "5G",
+        "score": 24.2,
+        "rise": 4.98,
+        "speed": 0.44,
+        "leader": "대한광통신",
+        "lead_pct": 4.9,
+        "top": [
+          "",
+          0.0
+        ]
+      },
+      {
+        "theme": "화장품",
+        "score": 23.6,
+        "rise": 3.92,
+        "speed": 0.18,
+        "leader": "한국콜마",
+        "lead_pct": 7.3,
+        "top": [
+          "",
+          0.0
+        ]
+      },
+      {
+        "theme": "MLCC",
+        "score": 23.6,
+        "rise": 0.44,
+        "speed": 1.68,
+        "leader": "삼성전기",
+        "lead_pct": 1.0,
+        "top": [
+          "삼성전기",
+          0.96
+        ]
+      },
+      {
+        "theme": "메모리 반도체",
+        "score": 23.5,
+        "rise": -4.43,
+        "speed": 1.98,
+        "leader": "SK하이닉스",
+        "lead_pct": -3.4,
+        "top": [
+          "SK하이닉스",
+          -3.4
+        ]
+      },
+      {
+        "theme": "HBM 소부장",
+        "score": 18.9,
+        "rise": -1.36,
+        "speed": 3.36,
+        "leader": "한미반도체",
+        "lead_pct": -3.9,
+        "top": [
+          "한미반도체",
+          -3.9
+        ]
+      },
+      {
+        "theme": "증권",
+        "score": 12.2,
+        "rise": 2.4,
+        "speed": 0.66,
+        "leader": "미래에셋증권",
+        "lead_pct": 2.1,
+        "top": [
+          "",
+          0.0
+        ]
+      },
+      {
+        "theme": "로봇",
+        "score": 8.7,
+        "rise": -2.3,
+        "speed": 0.85,
+        "leader": "현대차",
+        "lead_pct": -1.5,
+        "top": [
+          "현대차",
+          -1.52
+        ]
+      },
+      {
+        "theme": "2차전지",
+        "score": 8.4,
+        "rise": -4.7,
+        "speed": 0.75,
+        "leader": "한솔케미칼",
+        "lead_pct": 4.5,
+        "top": [
+          "에코프로",
+          -12.76
+        ]
+      },
+      {
+        "theme": "바이오",
+        "score": 7.6,
+        "rise": 0.44,
+        "speed": 0.46,
+        "leader": "한미약품",
+        "lead_pct": 6.2,
+        "top": [
+          "",
+          0.0
+        ]
+      },
+      {
+        "theme": "대북 관련주",
+        "score": 6.5,
+        "rise": 1.34,
+        "speed": 0.46,
+        "leader": "현대엘리베이터",
+        "lead_pct": 2.0,
+        "top": [
+          "",
+          0.0
+        ]
+      },
+      {
+        "theme": "데이터센터",
+        "score": 4.5,
+        "rise": -0.49,
+        "speed": 0.91,
+        "leader": "삼성에스디에스",
+        "lead_pct": 3.5,
+        "top": [
+          "",
+          0.0
+        ]
+      }
+    ]
+  }
+}
