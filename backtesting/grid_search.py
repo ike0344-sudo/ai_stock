@@ -3,6 +3,7 @@
 Design: docs/02-design/features/strategy-backtesting.design.md §4.1, §4.3
 """
 import concurrent.futures as cf
+import logging
 import os
 from datetime import date
 from itertools import product
@@ -14,6 +15,8 @@ from .ml.features import build_features
 from .ml.labeling import make_labels
 from .ml.walk_forward import split as walk_forward_split
 from .types import GridSearchResult, PerformanceMetrics
+
+logger = logging.getLogger(__name__)
 
 
 def _param_combinations(param_grid: dict) -> list[dict]:
@@ -131,13 +134,19 @@ def run_rule_based(
     # 종목별로 캔들을 먼저 읽는다. 로컬 캐시를 채우는 일이기도 해서, 뒤이어 워커가
     # 파일만 읽으면 된다. API 폴백이 필요한 종목도 여기서 해결된다.
     loaded = []
+    failed_codes = []
     for stock_code in stock_codes:
         try:
             candles = load_history(
                 client, stock_code, start, end, interval=interval,
                 use_local_data=use_local_data, data_dir=data_dir,
             )
-        except Exception:
+        except Exception as exc:
+            # 조용히 continue하면 "조회 실패로 빠짐"과 "해당 구간에 데이터가 원래
+            # 없어서 제외"가 그리드서치 결과에서 구분 안 된다 - 최소한 로그엔 남긴다
+            # (universe.py build_liquid_universe와 동일 패턴).
+            logger.warning("run_rule_based: %s 캔들 조회 실패, 그리드서치에서 제외 (%s)", stock_code, exc)
+            failed_codes.append(stock_code)
             continue
         if candles.empty:
             continue
@@ -145,6 +154,12 @@ def run_rule_based(
         if split_idx <= 0 or split_idx >= len(candles):
             continue
         loaded.append((stock_code, candles, split_idx))
+
+    if failed_codes:
+        logger.warning(
+            "run_rule_based: 종목 %d개 중 %d개가 조회 실패로 그리드서치에서 제외됨 (%s)",
+            len(stock_codes), len(failed_codes), ", ".join(failed_codes),
+        )
 
     tasks = len(loaded) * len(combos)
     bars = sum(len(c) for _, c, _ in loaded) / max(len(loaded), 1)
@@ -211,13 +226,16 @@ def run_ml_walk_forward(
     strategy = MLStrategy()
     results: list[GridSearchResult] = []
 
+    failed_codes = []
     for stock_code in stock_codes:
         try:
             candles = load_history(
                 client, stock_code, start, end, interval=interval,
                 use_local_data=use_local_data, data_dir=data_dir,
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("run_ml_walk_forward: %s 캔들 조회 실패, 그리드서치에서 제외 (%s)", stock_code, exc)
+            failed_codes.append(stock_code)
             continue
         if candles.empty:
             continue
@@ -279,6 +297,12 @@ def run_ml_walk_forward(
                     benchmark_oos_return_pct=sum(oos_benchmark_list) / len(oos_benchmark_list),
                 )
             )
+
+    if failed_codes:
+        logger.warning(
+            "run_ml_walk_forward: 종목 %d개 중 %d개가 조회 실패로 그리드서치에서 제외됨 (%s)",
+            len(stock_codes), len(failed_codes), ", ".join(failed_codes),
+        )
 
     return results
 

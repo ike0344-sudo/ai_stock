@@ -69,20 +69,37 @@ def collect(client, code, today):
                               "기관": NUM(inv.orgn), "기타법인": NUM(inv.etc_corp)}), on="dt", how="left")
 
     bal = f"{CACHE}/{code}_balance.csv"
+    balance_note = None  # "데이터 없음"과 "수집이 깨져서 없음"을 구분해 산출물(attrs)에 남긴다.
     try:
-        fetch_balance(code, 2025).to_csv(bal, index=False)
+        fetched = fetch_balance(code, 2025)
+        fetched.to_csv(bal, index=False)
+        if fetched.attrs.get("failed_years"):
+            balance_note = f"KRX 순보유잔고 {fetched.attrs['failed_years']}년 수집 실패 — 해당 연도 결측"
+            print(f"[!] {balance_note}")
     except Exception as e:
-        print(f"[!] KRX 순보유잔고 갱신 실패({type(e).__name__}) — 기존 캐시 사용")
+        if os.path.exists(bal):
+            stale_last = pd.read_csv(bal, dtype={"dt": str}).dt.max()
+            balance_note = f"KRX 순보유잔고 갱신 실패({type(e).__name__}) — 캐시 사용 중, 최신 {stale_last}까지(오늘 {today})"
+        else:
+            balance_note = f"KRX 순보유잔고 갱신 실패({type(e).__name__}) — 캐시도 없어 전체 결측"
+        print(f"[!] {balance_note}")
     if os.path.exists(bal):
         b = pd.read_csv(bal, dtype={"dt": str})
         b["순보유잔고"] = b.bal_qty
         b["잔고증감"] = b.bal_qty.diff()
         d = d.merge(b[["dt", "순보유잔고", "잔고증감"]], on="dt", how="left")
-    return d.sort_values("dt").reset_index(drop=True)
+    result = d.sort_values("dt").reset_index(drop=True)
+    # pandas .attrs는 merge/sort_values를 거치면 사라지므로 마지막 객체에 붙인다 —
+    # show()가 이 사실을 표에 붙여 출력한다(콘솔 스크롤로 위 print를 놓쳐도 보이게).
+    if balance_note:
+        result.attrs["순보유잔고_note"] = balance_note
+    return result
 
 
 def show(code, d, days=10):
     print(f"\n{'='*96}\n{NAMES.get(code, code)}({code})\n{'='*96}")
+    if d.attrs.get("순보유잔고_note"):
+        print(f"[!] {d.attrs['순보유잔고_note']}")
     t = d.tail(days)
     money = lambda v: f"{v:,.0f}" if pd.notna(v) else "-"
     signed = lambda v: f"{v:+,.0f}" if pd.notna(v) else "-"

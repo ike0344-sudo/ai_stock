@@ -152,19 +152,33 @@ class TintedHeader(QHeaderView):
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, str(text or ""))
 
 
-def _num(v: str) -> int:
+def _num(v: str) -> int | None:
     """API 는 '--264' 처럼 부호를 겹쳐 주고, 0782 CSV 는 '-24,744' 처럼 쉼표를 넣는다.
-    앞 부호만 살리고 나머지 장식은 다 버린다."""
+    앞 부호만 살리고 나머지 장식은 다 버린다. 파싱 안 되면(플레이스홀더 "-", 빈
+    문자열 등) None — "데이터 없음"과 진짜 0을 구분한다(realtime_feed.py:69와 같은
+    스타일). 예전엔 try/except 자체가 없어 예상 밖 문자에 그냥 예외를 던졌다."""
     s = str(v).strip().replace(",", "")
+    if not s:
+        return None
     neg = s.startswith("-")
-    return -int(s.lstrip("+-") or 0) if neg else int(s.lstrip("+-") or 0)
+    core = s.lstrip("+-")
+    if not core.isdigit():
+        return None
+    n = int(core)
+    return -n if neg else n
 
 
 def diff(prev: dict | None, cur: dict) -> dict | None:
-    """직전 누적과의 차 = 0782 의 '증감'. 첫 응답은 견줄 곳이 없어 아무것도 못 낸다."""
+    """직전 누적과의 차 = 0782 의 '증감'. 첫 응답은 견줄 곳이 없어 아무것도 못 낸다.
+
+    한쪽이라도 None(파싱 실패/데이터 없음)이면 그 항목의 증감도 None — 모르는 값끼리
+    빼서 가짜 증감을 만들지 않는다."""
     if prev is None:
         return None
-    return {k: cur.get(k, 0) - prev.get(k, 0) for k, _ in COLS}
+    return {
+        k: (cur.get(k) - prev.get(k)) if cur.get(k) is not None and prev.get(k) is not None else None
+        for k, _ in COLS
+    }
 
 
 def load_csv(path: Path) -> list:
@@ -187,11 +201,17 @@ def load_csv(path: Path) -> list:
     return out
 
 
-def _fmt(v: int) -> str:
+def _fmt(v: int | None) -> str:
+    # None = 데이터 없음(파싱 실패 등) — 0782 의 기존 '-' 표기를 그대로 쓴다.
+    # 예전엔 `if v:` 가 None 도 falsy 라 "0"으로 찍어, 모르는 값을 진짜 0처럼 보여줬다.
+    if v is None:
+        return "-"
     return f"{v:+,}" if v else "0"
 
 
-def _color(v: int) -> str:
+def _color(v: int | None) -> str:
+    if v is None:
+        return ZERO
     return UP if v > 0 else (DOWN if v < 0 else ZERO)
 
 
@@ -595,7 +615,9 @@ class Window(QMainWindow):
             s.setName(ko)
             s.setPen(QPen(QColor(LINE_COLOR[key]), 1.6))
             for x, (_t, cum, _d) in enumerate(old):
-                v = cum[key]
+                v = cum.get(key)
+                if v is None:               # 데이터 없음 — 가짜 0을 그리지 말고 점을 건너뛴다
+                    continue
                 lo, hi = min(lo, v), max(hi, v)
                 s.append(x, v)
             self.chart.addSeries(s)
@@ -608,8 +630,15 @@ class Window(QMainWindow):
             idx_series.setName("지수")
             idx_series.setPen(QPen(QColor("#000000"), 1.2))
             for x, (_t, cum, _d) in enumerate(old):
-                idx_series.append(x, cum.get(IDX_KEY, 0))
-            self.chart.addSeries(idx_series)
+                v = cum.get(IDX_KEY)
+                if v is not None:
+                    idx_series.append(x, v)
+            if idx_series.points():
+                self.chart.addSeries(idx_series)
+            else:
+                # 모든 포인트가 파싱 실패였다 — 빈 축을 그리는 대신 아예 안 그린다.
+                # (아직 chart.addSeries를 안 했으니 removeSeries는 필요 없다)
+                idx_series = None
         ax_x = QCategoryAxis()
         ax_x.setRange(0, len(old) - 1)
         # 눈금을 다 세우면 글자가 겹친다 — 정각만 세운다(0782 도 시(時) 단위다).

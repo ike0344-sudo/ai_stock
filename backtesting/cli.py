@@ -431,8 +431,18 @@ def _run_download_universe(args) -> None:
             lookback_days=args.liquidity_lookback_days,
             market=args.market,
         )
+    fetch_failures = universe.attrs.get("fetch_failures", [])
+    if fetch_failures:
+        # "후보가 원래 적었다"와 "수집이 실패해 빠졌다"를 구분해서 보여준다 — 실패 비율이
+        # 높으면 유니버스가 작은 게 아니라 수집이 깨진 것이다(state/agent_reports/
+        # data-agent_20260910-1701_tradingagents_salvage.md §3-1).
+        print(f"[!] {len(fetch_failures)}종목 조회/파싱 실패로 후보에서 제외됨 (재실행 시 복구될 수 있음): {', '.join(fetch_failures)}")
+
     if universe.empty:
-        print("조건을 만족하는 종목이 없습니다.")
+        if fetch_failures:
+            print("조건을 만족하는 종목이 없습니다 — 다만 위 실패 목록이 원인일 수 있으니 재실행을 검토하세요.")
+        else:
+            print("조건을 만족하는 종목이 없습니다.")
         return
 
     daily_dir = os.path.join(args.data_dir, "stocks", "daily")

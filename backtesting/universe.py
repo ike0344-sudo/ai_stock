@@ -5,6 +5,7 @@
 당일 기준 상위 후보군을 먼저 저렴하게 추리고, 그 후보군에 대해서만 실제 일봉
 데이터로 최근 N거래일 평균 거래대금을 계산해 정확한 임계값을 적용한다.
 """
+import logging
 import os
 
 import duckdb
@@ -14,6 +15,8 @@ from kiwoom_client import KiwoomClient
 from . import minute_store
 from .entry_filters import _day_return
 from .screener import top_by_trading_value
+
+logger = logging.getLogger(__name__)
 
 TRADE_VALUE_UNIT_TO_EOK = 100  # trde_prica는 백만원 단위. 1억원 = 100백만원.
 
@@ -45,11 +48,16 @@ def build_liquid_universe(
     candidates = top_by_trading_value(client, top_n=candidate_pool_size, market=market)
 
     rows = []
+    failed_codes = []
     for _, row in candidates.iterrows():
         stock_code = row["stock_code"]
         try:
             payload = client.get_daily_chart(stock_code)
-        except Exception:
+        except Exception as exc:
+            # 조용히 continue하면 "API 실패로 빠짐"과 "거래대금 미달로 탈락"이
+            # 결과 DataFrame에서 구분 안 된다 — 최소한 로그에는 원인을 남긴다.
+            logger.warning("build_liquid_universe: %s 일봉 조회 실패, 후보에서 제외 (%s)", stock_code, exc)
+            failed_codes.append(stock_code)
             continue
 
         records = payload.get("stk_dt_pole_chart_qry", [])[:lookback_days]
@@ -58,7 +66,9 @@ def build_liquid_universe(
 
         try:
             trade_values = [int(r["trde_prica"]) for r in records]
-        except (KeyError, ValueError):
+        except (KeyError, ValueError) as exc:
+            logger.warning("build_liquid_universe: %s 일봉 레코드 파싱 실패, 후보에서 제외 (%s)", stock_code, exc)
+            failed_codes.append(stock_code)
             continue
 
         avg_value_eok = (sum(trade_values) / len(trade_values)) / TRADE_VALUE_UNIT_TO_EOK
@@ -71,9 +81,20 @@ def build_liquid_universe(
                 }
             )
 
+    if failed_codes:
+        logger.warning(
+            "build_liquid_universe: 후보 %d개 중 %d개가 조회/파싱 실패로 제외됨 (%s)",
+            len(candidates), len(failed_codes), ", ".join(failed_codes),
+        )
+
     result = pd.DataFrame(rows)
     if not result.empty:
         result = result.sort_values("avg_trading_value_eok", ascending=False).reset_index(drop=True)
+    # 호출자(cli.py 등)가 "후보가 원래 적었다"와 "수집이 실패해 빠졌다"를 구분할 수
+    # 있도록 반환값에 얹는다 — DataFrame 컬럼/행은 안 건드리므로 기존 소비자는 영향 없음
+    # (pandas.DataFrame.attrs는 merge/sort_values 등을 거치면 사라지므로 반드시 마지막
+    # 객체에 붙인다).
+    result.attrs["fetch_failures"] = failed_codes
     return result
 
 
@@ -111,21 +132,37 @@ def build_topn_union_universe(
 
     per_day: dict[str, list[tuple[str, int]]] = {}
     name_by_code: dict[str, str] = {}
+    failed_codes = []  # 일봉 조회 자체가 실패한 종목 — "top_n에 든 적 없음"과 구분해 로그로 남긴다.
 
     for _, row in all_stocks.iterrows():
         stock_code = row["stock_code"]
         name_by_code[stock_code] = row["name"]
         try:
             payload = client.get_daily_chart(stock_code)
-        except Exception:
+        except Exception as exc:
+            logger.warning("build_topn_union_universe: %s 일봉 조회 실패, 스캔에서 제외 (%s)", stock_code, exc)
+            failed_codes.append(stock_code)
             continue
 
+        skipped_records = 0
         for record in payload.get("stk_dt_pole_chart_qry", [])[:lookback_days]:
             try:
                 trade_value = int(record["trde_prica"])
             except (KeyError, ValueError):
+                skipped_records += 1
                 continue
             per_day.setdefault(record["dt"], []).append((stock_code, trade_value))
+        if skipped_records:
+            logger.warning(
+                "build_topn_union_universe: %s 레코드 %d건 파싱 실패, 해당 날짜만 제외",
+                stock_code, skipped_records,
+            )
+
+    if failed_codes:
+        logger.warning(
+            "build_topn_union_universe: 전체 %d종목 중 %d종목이 조회 실패로 스캔에서 제외됨 (%s)",
+            len(all_stocks), len(failed_codes), ", ".join(failed_codes),
+        )
 
     union_codes: set[str] = set()
     for entries in per_day.values():
@@ -137,6 +174,8 @@ def build_topn_union_universe(
     )
     if not result.empty:
         result = result.sort_values("stock_code").reset_index(drop=True)
+    # build_liquid_universe와 같은 이유로 마지막 객체에 붙인다.
+    result.attrs["fetch_failures"] = failed_codes
     return result
 
 

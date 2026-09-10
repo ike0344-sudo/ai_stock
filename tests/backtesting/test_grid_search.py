@@ -1,3 +1,4 @@
+import logging
 from datetime import date
 
 import numpy as np
@@ -86,6 +87,34 @@ def test_run_rule_based_computes_benchmark_buy_and_hold_return(monkeypatch):
     assert len(results) == 1
     expected_benchmark = (20.0 / 12.0 - 1) * 100
     assert results[0].benchmark_oos_return_pct == pytest.approx(expected_benchmark)
+
+
+def test_run_rule_based_logs_and_skips_failed_stock_load(monkeypatch, caplog):
+    """조회 실패 종목(예: API 오류)이 "데이터 원래 없음"과 구분 없이 조용히 사라지던
+    문제 - universe.py build_liquid_universe와 같은 패턴으로 로그를 남기고, 결과에서는
+    빠지되 나머지 종목은 그대로 계산돼야 한다."""
+    candles = _daily_candles()
+
+    def _load_or_fail(client, stock_code, *a, **k):
+        if stock_code == "000660":
+            raise RuntimeError("API 오류")
+        return candles
+
+    monkeypatch.setattr(grid_search, "load_history", _load_or_fail)
+
+    with caplog.at_level(logging.WARNING, logger="backtesting.grid_search"):
+        results = grid_search.run_rule_based(
+            client=object(),
+            stock_codes=["005930", "000660"],
+            strategy=MovingAverageCrossover(),
+            param_grid={"short_window": [2], "long_window": [5]},
+            start=date(2026, 1, 1),
+            end=date(2026, 3, 1),
+        )
+
+    assert [r.stock_code for r in results] == ["005930"]
+    assert "000660" in caplog.text
+    assert "1" in caplog.text  # 요약 로그에 실패 건수 1이 찍혀야 함
 
 
 def test_run_rule_based_skips_invalid_param_combo(monkeypatch):
@@ -185,3 +214,32 @@ def test_run_ml_walk_forward_produces_valid_result_structure(monkeypatch):
         assert result.strategy_name == "ml_day_trading"
         assert result.out_of_sample.num_trades >= 0
         assert result.in_sample.num_trades >= 0
+
+
+def test_run_ml_walk_forward_logs_and_skips_failed_stock_load(monkeypatch, caplog):
+    candles = _minute_candles()
+
+    def _load_or_fail(client, stock_code, *a, **k):
+        if stock_code == "000660":
+            raise RuntimeError("API 오류")
+        return candles
+
+    monkeypatch.setattr(grid_search, "load_history", _load_or_fail)
+
+    with caplog.at_level(logging.WARNING, logger="backtesting.grid_search"):
+        results = grid_search.run_ml_walk_forward(
+            client=object(),
+            stock_codes=["005930", "000660"],
+            param_grid={"buy_threshold": [0.5]},
+            start=date(2026, 1, 1),
+            end=date(2026, 1, 10),
+            train_days=5,
+            test_days=2,
+            step_days=2,
+            label_horizon_minutes=5,
+            label_return_threshold=0.0005,
+        )
+
+    assert all(r.stock_code == "005930" for r in results)
+    assert "000660" in caplog.text
+    assert "1" in caplog.text
