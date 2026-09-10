@@ -411,6 +411,80 @@ def test_risk_state_lock_retries_on_transient_permission_error(tmp_path, monkeyp
     assert not os.path.exists(lock_path)  # 정상 해제됨
 
 
+def test_risk_state_lock_release_retries_on_transient_permission_error(tmp_path, monkeypatch):
+    """2026-09-10 risk-agent 조사(risk-agent_20260910-182840_risk_lock_hang.md)에서 확정된
+    버그: finally의 os.remove가 Windows 공유위반(WinError 32/PermissionError)으로 실패하면
+    `except OSError: pass`가 조용히 삼켜 락 파일이 우리 토큰을 단 채 영구 orphan됐다 —
+    이후 그 프로세스가 살아있는 한 `_should_reclaim_lock`이 절대 회수 안 해 다른 대기자가
+    무한정지한다. 획득쪽 테스트(test_risk_state_lock_retries_on_transient_permission_error)와
+    같은 방식으로 os.remove를 모킹해 첫 시도만 실패시켜 결정적으로 재현한다(무한대기 대신)."""
+    path = str(tmp_path / "risk_state.json")
+    lock_path = path + ".lock"
+    real_remove = os.remove
+    call_count = {"n": 0}
+
+    def flaky_remove(p, *a, **k):
+        if p == lock_path:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise PermissionError(32, "simulated transient Windows share violation")
+        return real_remove(p, *a, **k)
+
+    monkeypatch.setattr(os, "remove", flaky_remove)
+
+    with risk_state_lock(path):
+        pass  # 정상 임계구역 — 문제는 여기가 아니라 빠져나갈 때(finally)
+
+    assert call_count["n"] >= 2  # 최소 1번 실패 + 1번 재시도로 성공
+    assert not os.path.exists(lock_path)  # 재시도 끝에 정상 해제됨 — orphan 안 남음
+
+
+def test_risk_state_lock_release_logs_when_retries_exhausted(tmp_path, monkeypatch, caplog):
+    """재시도해도 끝내 안 풀리면(예: 소유 프로세스가 락 파일에 대해 뭔가를 계속 열어두는
+    드문 상황) 조용히 넘어가지 않고 최소한 로그를 남긴다 — "조용히 사라진 릴리스"가 안
+    보이는 것 자체가 이 버그를 여기까지 키운 원인이었다(risk-agent 보고서 §5)."""
+    path = str(tmp_path / "risk_state.json")
+    lock_path = path + ".lock"
+
+    def always_fail_remove(p, *a, **k):
+        if p == lock_path:
+            raise PermissionError(32, "simulated persistent Windows share violation")
+        raise AssertionError(f"unexpected os.remove call: {p}")
+
+    monkeypatch.setattr(os, "remove", always_fail_remove)
+
+    with caplog.at_level("ERROR", logger="backtesting.risk_manager"):
+        with risk_state_lock(path):
+            pass  # 여기서도 문제는 finally — 상한(LOCK_RELEASE_MAX_RETRIES)까지 재시도 후 포기해야 함
+
+    assert os.path.exists(lock_path)  # 끝내 실패했으니 orphan으로 남는 것 자체는 맞다
+    assert any("risk_state_lock 해제 실패" in rec.message for rec in caplog.records)
+
+
+def test_risk_state_lock_release_treats_missing_lock_file_as_already_released(tmp_path, caplog):
+    """2026-09-10 lead 지적: FileNotFoundError는 OSError의 서브클래스라 해제 재시도의
+    `except OSError`에 걸린다 — 그런데 락 파일이 이미 없는 건 실패가 아니라 목적
+    달성(지울 게 없음)이다. 회수 경로(risk_state_lock 획득쪽의 `_should_reclaim_lock`
+    시간기준 백업)가 우리보다 먼저 지운 경우가 실제로 있을 수 있다(PID 생존확인이
+    None을 주고 임계구역이 LOCK_STALE_SECONDS를 넘겨 오래 걸리는 드문 경우). 이걸
+    OSError로 잡아 20회 재시도하면 (a) 최대 1초를 헛되이 태우고 (b) 사실과 반대되는
+    "orphan으로 남았을 수 있음" 로그를 남기는 거짓 경보가 된다 — 재시도 전에 먼저
+    잡아 즉시 성공 처리해야 한다."""
+    path = str(tmp_path / "risk_state.json")
+    lock_path = path + ".lock"
+
+    with caplog.at_level("ERROR", logger="backtesting.risk_manager"):
+        with risk_state_lock(path):
+            # 임계구역 안에서 다른 프로세스가 회수 경로로 우리 락을 지운 상황을 흉내낸다.
+            os.remove(lock_path)
+            start = time.monotonic()
+
+    elapsed = time.monotonic() - start
+    assert elapsed < 0.2  # 재시도(0.05초 x 20 = 최대 1초)로 시간을 헛되이 태우면 안 됨
+    assert not os.path.exists(lock_path)
+    assert not any("risk_state_lock 해제 실패" in rec.message for rec in caplog.records)  # 거짓 경보 없음
+
+
 def test_risk_state_lock_release_does_not_delete_foreign_lock(tmp_path):
     """2026-08-30 정적분석으로 찾은 결함: LOCK_STALE_SECONDS(원래 120초)를 넘겨 아직
     살아서 일하는 중인 보유자의 락을, 다른 대기자가 죽은 줄 알고 stale로 훔쳐 자기

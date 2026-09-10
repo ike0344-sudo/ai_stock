@@ -9,6 +9,7 @@ portfolio_sim.py의 "슬롯 N개, 없으면 스킵" 개념을 백테스트에서
 관리하고, 실제 배정 금액(allocated_capital)은 호출자가 정해서 넘긴다.
 """
 import json
+import logging
 import os
 import threading
 import time
@@ -19,6 +20,8 @@ from datetime import date, datetime
 
 import psutil
 import yaml
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_RISK_LIMITS_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "risk_limits.yaml")
 
@@ -113,6 +116,14 @@ LOCK_STALE_SECONDS = 600  # 2026-08-30 정적분석으로 120초의 실제 결�
 # 백업(같은 프로세스 안에서 스레드가 진짜로 멈춘 경우, PID 재사용으로 생존확인이
 # 잘못 True를 준 경우 등)이라 넉넉히 잡아도 무방하다.
 LOCK_POLL_INTERVAL_SECONDS = 0.05
+LOCK_RELEASE_MAX_RETRIES = 20  # 획득쪽(os.open, while True)과 같은 간격(LOCK_POLL_INTERVAL_SECONDS)
+# 으로 재시도하되, 해제쪽은 상한을 둔다(최대 1초) — 여기서 맞서는 경합은
+# _should_reclaim_lock의 `with open(...) as f: f.read()`처럼 열자마자 닫히는 찰나의
+# 읽기뿐이라 몇 번이면 대부분 풀린다(2026-09-10 finally의 os.remove PermissionError를
+# 조용히 삼켜 락이 영구 orphan되던 결함 수정). 획득쪽의 while True는 상한이 없는 게
+# 별개의 기존 결정이라 이번엔 안 건드린다 — 해제쪽까지 무한 재시도로 맞추면 finally를
+# 영원히 못 빠져나가는 새로운 교착을 만들 뿐이라 대칭이 아니라 상한을 추가하는 쪽을
+# 택했다.
 
 
 def _lock_owner_alive(token: bytes) -> bool | None:
@@ -205,13 +216,36 @@ def risk_state_lock(risk_state_path: str):
     try:
         yield
     finally:
-        try:
-            with open(lock_path, "rb") as f:
-                current = f.read()
-            if current == token:  # 우리 락이 맞을 때만 지운다 — 남의 락을 지우지 않음
-                os.remove(lock_path)
-        except OSError:
-            pass
+        released = False
+        last_error: OSError | None = None
+        for _ in range(LOCK_RELEASE_MAX_RETRIES):
+            try:
+                with open(lock_path, "rb") as f:
+                    current = f.read()
+                if current == token:  # 우리 락이 맞을 때만 지운다 — 남의 락을 지우지 않음
+                    os.remove(lock_path)
+                released = True
+                break
+            except FileNotFoundError:
+                # 락 파일이 이미 없다 — 회수 경로(_should_reclaim_lock 시간기준 백업 등)가
+                # 우리보다 먼저 지웠더라도 지울 게 없다는 점에서 결과는 같다: 목적 달성.
+                # OSError보다 먼저 잡아야 한다(FileNotFoundError는 OSError의 서브클래스라
+                # 아래 except에 걸리면 실제로는 없는 파일을 재시도만 하다 거짓 orphan
+                # 로그를 남기게 된다, 2026-09-10 lead 지적).
+                released = True
+                break
+            except OSError as exc:  # Windows 공유위반(WinError 32) 등 — 획득쪽과 동일하게 재시도
+                last_error = exc
+                time.sleep(LOCK_POLL_INTERVAL_SECONDS)
+        if not released:
+            # 여기서도 조용히 삼키면 락 파일이 우리 토큰을 단 채 영구 orphan되고, 소유자(우리
+            # 자신)가 살아있는 한 _should_reclaim_lock이 절대 회수 안 해 다른 대기자를 영원히
+            # 막는다(2026-09-10 risk-agent 조사로 확정) — 최소한 로그는 남겨 무슨 일이
+            # 있었는지 보이게 한다.
+            logger.error(
+                "risk_state_lock 해제 실패 — 락 파일이 orphan으로 남았을 수 있음: %s (마지막 오류: %r)",
+                lock_path, last_error,
+            )
 
 
 def roll_to_new_day_if_needed(
