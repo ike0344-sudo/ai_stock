@@ -10,6 +10,8 @@ from backtesting.strategies.rsi_strategy import RsiStrategy
 from backtesting.strategies.vcp_breakout import VcpBreakout
 from backtesting.types import Signal
 
+from ._lookahead import assert_signals_do_not_use_future_data
+
 
 def _candles(closes: list[float]) -> pd.DataFrame:
     index = pd.date_range("2026-01-01", periods=len(closes), freq="D")
@@ -170,3 +172,64 @@ def test_new_high_volume_divergence_exit_sells_on_lower_volume_local_high():
     assert signals.iloc[22] == Signal.HOLD  # 국소고점 자체가 아님
     assert signals.iloc[23] == Signal.SELL  # 국소고점 + 직전 국소고점보다 거래량 감소(다이버전스)
     assert signals.iloc[24] == Signal.HOLD  # 국소고점이지만 직전 국소고점보다 거래량 증가
+
+
+# --- look-ahead 방어 (돌연변이 테스트) ---
+# tests/backtesting/ml/test_features.py:test_features_do_not_use_future_data 와 동일한 방식을
+# 실제 매매신호를 내는 전략 레이어로 확장 (state/agent_reports/
+# strategy-agent_20260910-153500_tradingagents_salvage.md §2). 코드가 shift(1)로 맞게 짜여
+# 있음은 이미 확인했지만, 리팩터 중 shift 하나가 빠져도 잡아줄 회귀가 지금까지 없었다.
+
+_LOOKAHEAD_CLOSES = [100 + (i % 7) - 3 + i * 0.05 for i in range(30)]
+_LOOKAHEAD_HIGH = [c + 1 for c in _LOOKAHEAD_CLOSES]
+_LOOKAHEAD_LOW = [c - 1 for c in _LOOKAHEAD_CLOSES]
+_LOOKAHEAD_VOLUME = [100 + (i % 5) * 30 for i in range(30)]
+
+
+def test_ma_crossover_signals_do_not_use_future_data():
+    candles = _candles(_LOOKAHEAD_CLOSES)
+    assert_signals_do_not_use_future_data(
+        MovingAverageCrossover(), {"short_window": 2, "long_window": 5}, candles, check_until=25,
+    )
+
+
+def test_rsi_signals_do_not_use_future_data():
+    candles = _candles(_LOOKAHEAD_CLOSES)
+    assert_signals_do_not_use_future_data(
+        RsiStrategy(), {"period": 5, "buy_below": 40, "sell_above": 60}, candles, check_until=25,
+    )
+
+
+def test_new_high_swing_signals_do_not_use_future_data():
+    candles = _ohlcv(_LOOKAHEAD_HIGH, _LOOKAHEAD_LOW, _LOOKAHEAD_CLOSES, _LOOKAHEAD_VOLUME)
+    assert_signals_do_not_use_future_data(
+        NewHighSwing(), {"n_day_high": 5, "exit_low_days": 3}, candles, check_until=25,
+    )
+
+
+def test_vcp_breakout_signals_do_not_use_future_data():
+    candles = _ohlcv(_LOOKAHEAD_HIGH, _LOOKAHEAD_LOW, _LOOKAHEAD_CLOSES, _LOOKAHEAD_VOLUME)
+    assert_signals_do_not_use_future_data(
+        VcpBreakout(), {"n_day_high": 5, "exit_low_days": 3}, candles, check_until=25,
+    )
+
+
+def test_new_high_leg_exit_signals_do_not_use_future_data():
+    candles = _ohlcv(_LOOKAHEAD_HIGH, _LOOKAHEAD_LOW, _LOOKAHEAD_CLOSES, _LOOKAHEAD_VOLUME)
+    assert_signals_do_not_use_future_data(
+        NewHighLegExit(), {"n_day_high": 5}, candles, check_until=25,
+    )
+
+
+def test_new_high_volume_divergence_exit_signals_do_not_use_future_data():
+    candles = _ohlcv(_LOOKAHEAD_HIGH, _LOOKAHEAD_LOW, _LOOKAHEAD_CLOSES, _LOOKAHEAD_VOLUME)
+    assert_signals_do_not_use_future_data(
+        NewHighVolumeDivergenceExit(), {"n_day_high": 5}, candles, check_until=25,
+    )
+
+
+def test_pullback_reentry_signals_do_not_use_future_data():
+    candles = _ohlcv(_LOOKAHEAD_HIGH, _LOOKAHEAD_LOW, _LOOKAHEAD_CLOSES, _LOOKAHEAD_VOLUME)
+    assert_signals_do_not_use_future_data(
+        PullbackReentry(), {"n_day_high": 5}, candles, check_until=25,
+    )

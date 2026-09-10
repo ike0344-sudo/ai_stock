@@ -560,7 +560,7 @@ def test_run_trading_skips_when_market_closed(monkeypatch, capsys):
     monkeypatch.setenv("MAX_DAILY_LOSS_KRW", "300000")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
-    monkeypatch.setattr(cli, "_build_client", lambda: object())
+    monkeypatch.setattr(cli, "_build_client", lambda **kwargs: object())
     monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: False)
     calls = []
     monkeypatch.setattr(cli, "run_trading_loop", lambda *a, **k: calls.append((a, k)))
@@ -571,13 +571,34 @@ def test_run_trading_skips_when_market_closed(monkeypatch, capsys):
     assert "통합장 시간이 아닙니다" in capsys.readouterr().out
 
 
+def test_run_trading_builds_client_for_order_path_not_batch_keys(monkeypatch, capsys):
+    """bf0b62a("실주문만은 기존 앱키로")의 불변식 회귀 테스트 — 주문 경로는
+    반드시 _build_client(batch=False)로 불러야 한다. 배치키로 되돌아가도
+    아무 테스트도 안 깨지던 사각지대를 없앤다."""
+    monkeypatch.setattr(cli, "load_dotenv", lambda: None)
+    monkeypatch.setenv("MAX_DAILY_LOSS_KRW", "300000")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
+    monkeypatch.setenv("KIWOOM_IS_MOCK", "true")
+    build_client_calls = []
+    monkeypatch.setattr(cli, "_build_client", lambda **kwargs: build_client_calls.append(kwargs) or "client-obj")
+    monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
+    monkeypatch.setattr(cli, "load_model", lambda path: "trained")
+    monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "run_trading_loop", lambda *a, **k: None)
+
+    cli._run_trading(_trading_args())
+
+    assert build_client_calls == [{"batch": False}]
+
+
 def test_run_trading_starts_loop_with_env_values_when_market_open(monkeypatch, capsys):
     monkeypatch.setattr(cli, "load_dotenv", lambda: None)
     monkeypatch.setenv("MAX_DAILY_LOSS_KRW", "300000")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
     monkeypatch.setenv("KIWOOM_IS_MOCK", "true")
-    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "_build_client", lambda **kwargs: "client-obj")
     monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     monkeypatch.setattr(cli, "load_model", lambda path: f"trained:{path}")
     monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
@@ -610,7 +631,7 @@ def test_run_trading_clamps_max_concurrent_positions_above_yaml_limit(monkeypatc
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
     monkeypatch.setenv("KIWOOM_IS_MOCK", "true")
-    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "_build_client", lambda **kwargs: "client-obj")
     monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     monkeypatch.setattr(cli, "load_model", lambda path: "trained")
     config_calls = []
@@ -641,7 +662,7 @@ def test_run_trading_refuses_live_without_confirm_file(monkeypatch, capsys, tmp_
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
     monkeypatch.setenv("KIWOOM_IS_MOCK", "false")
     monkeypatch.setattr(cli, "LIVE_TRADING_CONFIRM_PATH", str(tmp_path / "LIVE_TRADING_CONFIRMED"))  # 존재하지 않음
-    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "_build_client", lambda **kwargs: "client-obj")
     monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
     calls = []
@@ -664,7 +685,7 @@ def test_run_trading_refuses_live_with_wrong_confirm_content(monkeypatch, capsys
     confirm_path = tmp_path / "LIVE_TRADING_CONFIRMED"
     confirm_path.write_text("", encoding="utf-8")
     monkeypatch.setattr(cli, "LIVE_TRADING_CONFIRM_PATH", str(confirm_path))
-    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "_build_client", lambda **kwargs: "client-obj")
     monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
     calls = []
@@ -691,7 +712,7 @@ def test_run_trading_refuses_live_with_yesterdays_date(monkeypatch, capsys, tmp_
     yesterday = (date.today() - timedelta(days=1)).isoformat()
     confirm_path.write_text(f"{cli.LIVE_TRADING_CONFIRM_TOKEN} {yesterday}", encoding="utf-8")
     monkeypatch.setattr(cli, "LIVE_TRADING_CONFIRM_PATH", str(confirm_path))
-    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "_build_client", lambda **kwargs: "client-obj")
     monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
     calls = []
@@ -717,7 +738,7 @@ def test_run_trading_starts_live_and_shows_banner_when_confirmed_today(monkeypat
     confirm_path = tmp_path / "LIVE_TRADING_CONFIRMED"
     confirm_path.write_text(f"{cli.LIVE_TRADING_CONFIRM_TOKEN} {date.today().isoformat()}", encoding="utf-8")
     monkeypatch.setattr(cli, "LIVE_TRADING_CONFIRM_PATH", str(confirm_path))
-    monkeypatch.setattr(cli, "_build_client", lambda: SimpleNamespace(base_url="https://api.kiwoom.com"))
+    monkeypatch.setattr(cli, "_build_client", lambda **kwargs: SimpleNamespace(base_url="https://api.kiwoom.com"))
     monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
     calls = []
@@ -747,7 +768,7 @@ def test_run_trading_blocks_strategy1_live_regardless_of_confirm_file(monkeypatc
     confirm_path = tmp_path / "LIVE_TRADING_CONFIRMED"
     confirm_path.write_text(f"{cli.LIVE_TRADING_CONFIRM_TOKEN} {date.today().isoformat()}", encoding="utf-8")
     monkeypatch.setattr(cli, "LIVE_TRADING_CONFIRM_PATH", str(confirm_path))  # 완벽한 확인 파일이어도
-    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "_build_client", lambda **kwargs: "client-obj")
     monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     calls = []
     monkeypatch.setattr(cli, "run_trading_loop", lambda *a, **k: calls.append((a, k)))
@@ -766,7 +787,7 @@ def test_run_trading_blocks_any_non_strategy2_name_live(monkeypatch, capsys):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
     monkeypatch.setenv("KIWOOM_IS_MOCK", "false")
-    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "_build_client", lambda **kwargs: "client-obj")
     monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     calls = []
     monkeypatch.setattr(cli, "run_trading_loop", lambda *a, **k: calls.append((a, k)))
@@ -788,7 +809,7 @@ def test_run_trading_allows_strategy2_live_past_retirement_block(monkeypatch, ca
     confirm_path = tmp_path / "LIVE_TRADING_CONFIRMED"
     confirm_path.write_text(f"{cli.LIVE_TRADING_CONFIRM_TOKEN} {date.today().isoformat()}", encoding="utf-8")
     monkeypatch.setattr(cli, "LIVE_TRADING_CONFIRM_PATH", str(confirm_path))
-    monkeypatch.setattr(cli, "_build_client", lambda: SimpleNamespace(base_url="https://api.kiwoom.com"))
+    monkeypatch.setattr(cli, "_build_client", lambda **kwargs: SimpleNamespace(base_url="https://api.kiwoom.com"))
     monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
     calls = []
@@ -808,7 +829,7 @@ def test_run_trading_does_not_block_strategy1_mock(monkeypatch, capsys):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
     monkeypatch.setenv("KIWOOM_IS_MOCK", "true")
-    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "_build_client", lambda **kwargs: "client-obj")
     monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     monkeypatch.setattr(cli, "load_model", lambda path: "trained")
     monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
@@ -829,7 +850,7 @@ def test_run_trading_does_not_touch_mock_path(monkeypatch, capsys):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
     monkeypatch.setenv("KIWOOM_IS_MOCK", "true")
-    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "_build_client", lambda **kwargs: "client-obj")
     monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     monkeypatch.setattr(cli, "load_model", lambda path: "trained")
     monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
@@ -847,7 +868,7 @@ def test_run_trading_derives_paths_from_strategy_when_not_explicit(monkeypatch):
     monkeypatch.setenv("MAX_DAILY_LOSS_KRW", "300000")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
-    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "_build_client", lambda **kwargs: "client-obj")
     monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     monkeypatch.setattr(cli, "load_model", lambda path: f"trained:{path}")
     monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
@@ -877,7 +898,7 @@ def test_run_trading_writes_strategy_config_snapshot(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
     monkeypatch.setenv("KIWOOM_IS_MOCK", "true")
-    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "_build_client", lambda **kwargs: "client-obj")
     monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     monkeypatch.setattr(cli, "load_model", lambda path: "trained")
     monkeypatch.setattr(cli, "run_trading_loop", lambda *a, **k: None)
@@ -904,7 +925,7 @@ def test_run_trading_dispatches_strategy_2_to_oversold_loop_without_loading_mode
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
     monkeypatch.setenv("KIWOOM_IS_MOCK", "true")
-    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "_build_client", lambda **kwargs: "client-obj")
     monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     monkeypatch.setattr(cli, "_write_strategy_config", lambda *a, **k: None)
     model_calls = []
@@ -936,7 +957,7 @@ def test_run_trading_strategy_2_config_snapshot_has_no_ml_fields(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token123")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat456")
     monkeypatch.setenv("KIWOOM_IS_MOCK", "true")
-    monkeypatch.setattr(cli, "_build_client", lambda: "client-obj")
+    monkeypatch.setattr(cli, "_build_client", lambda **kwargs: "client-obj")
     monkeypatch.setattr(cli, "wait_until_extended_market_open", lambda **kwargs: True)
     monkeypatch.setattr(cli, "run_oversold_trading_loop", lambda *a, **k: None)
     config_calls = []

@@ -4,6 +4,8 @@ import pytest
 from backtesting.strategies.envelope import EnvelopeStrategy
 from backtesting.types import Signal
 
+from ._lookahead import assert_signals_do_not_use_future_data
+
 
 def _candles(closes: list[float]) -> pd.DataFrame:
     index = pd.date_range("2026-01-01", periods=len(closes), freq="D")
@@ -69,3 +71,14 @@ def test_rejects_unknown_exit_mode():
         EnvelopeStrategy().evaluate(
             candles, {"ma_window": 3, "envelope_pct": 0.05, "exit_mode": "not_a_real_mode"}
         )
+
+
+def test_signals_do_not_use_future_data():
+    # tests/backtesting/ml/test_features.py:test_features_do_not_use_future_data 와 같은
+    # 돌연변이 방식 — state/agent_reports/strategy-agent_20260910-153500_tradingagents_salvage.md §2
+    closes = [100 + (i % 7) - 3 + i * 0.05 for i in range(30)]
+    candles = _candles(closes)
+
+    assert_signals_do_not_use_future_data(
+        EnvelopeStrategy(), {"ma_window": 3, "envelope_pct": 0.05}, candles, check_until=25,
+    )
