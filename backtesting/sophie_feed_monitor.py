@@ -54,6 +54,13 @@ DEFAULT_LOG_PATH = "kospi-theme-engine/dist/logs/app.log"
 LOG_STALE_SECONDS = 180.0    # 30초 주기 하트비트가 이만큼 안 찍히면 이상
 TICK_STALL_SECONDS = 180.0   # 장중에 틱이 이만큼 안 늘면 이상
 
+# 마감 동시호가(15:20~15:30)는 단일가라 **체결이 없다** — 틱이 멎는 게 정상이다.
+# 10분이 통째로 멈추니 TICK_STALL_SECONDS(180초)를 매일 넘겨 거짓 경보가 났다
+# (2026-09-10 실측: 15:21부터 틱 6,256,509 에서 고정). app/notify.py 가 장전
+# 동시호가 08:50~09:00 를 같은 이유로 묵음 처리하는 것과 같은 근거다.
+# 하트비트(로그 줄) 자체는 계속 찍혀야 하므로 그 검사는 이 구간에도 그대로 둔다.
+CLOSING_AUCTION = (15 * 60 + 20, 15 * 60 + 30)
+
 _HEARTBEAT_RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+\s.*가동 중 · 틱 (\d+)"
 )
@@ -67,6 +74,12 @@ def is_market_hours(now: datetime) -> bool:
         return False
     minutes = now.hour * 60 + now.minute
     return 9 * 60 <= minutes <= 15 * 60 + 30
+
+
+def in_closing_auction(now: datetime) -> bool:
+    """지금이 마감 동시호가인가. 체결이 없으니 "틱이 안 는다"로 죽었다고 보면 안 된다."""
+    minutes = now.hour * 60 + now.minute
+    return CLOSING_AUCTION[0] <= minutes < CLOSING_AUCTION[1]
 
 
 def find_last_heartbeat(log_path: str, tail_bytes: int = 65536) -> tuple[datetime, int] | None:
@@ -115,6 +128,11 @@ def check_feed_health(
         return False, f"장중인데 로그 하트비트가 {age:.0f}초째 안 찍힘(앱이 멈췄거나 죽음)", prev_tick, prev_tick_seen_at
 
     if tick != prev_tick:
+        return True, "", tick, time.monotonic()
+
+    if in_closing_auction(now):
+        # 멈춘 시각을 지금으로 밀어 둔다 — 안 그러면 15:30 에 장이 끝나기 직전
+        # "10분째 안 늚"으로 한 번 터진다.
         return True, "", tick, time.monotonic()
 
     if prev_tick_seen_at is not None:

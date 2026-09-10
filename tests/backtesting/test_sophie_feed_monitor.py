@@ -5,6 +5,7 @@ from backtesting import sophie_feed_monitor
 from backtesting.sophie_feed_monitor import (
     check_feed_health,
     count_ai_stock_instances,
+    in_closing_auction,
     find_last_heartbeat,
     is_market_hours,
     run_sophie_feed_monitor_loop,
@@ -277,3 +278,40 @@ def test_run_loop_notifies_duplicate_and_resolution(monkeypatch, tmp_path):
 
     assert notified_dup == [2]      # 전이 시점 1번만
     assert notified_resolved == [1]
+
+
+def test_마감_동시호가에는_틱이_멎어도_정상(monkeypatch, tmp_path):
+    """15:20~15:30 은 단일가라 체결이 없다 — 2026-09-10 에 틱 6,256,509 에서 10분 고정.
+    180초 문턱을 매일 넘겨 거짓 경보가 나갔다."""
+    path = _write_log(tmp_path, [
+        "2026-09-10 15:26:11,291 INFO    [engine] app.engine.runner: 가동 중 · 틱 6256509 · 종목 200 · 테마 23",
+    ])
+    now = datetime(2026, 9, 10, 15, 26, 15, tzinfo=SEOUL)      # 목요일 마감 동시호가
+    monkeypatch.setattr(sophie_feed_monitor.time, "monotonic", lambda: 2000.0)
+
+    ok, reason, tick, seen_at = check_feed_health(
+        path, prev_tick=6256509, prev_tick_seen_at=1000.0, now=now)   # 이미 1000초째 멈춤
+
+    assert ok is True and reason == ""
+    assert seen_at == 2000.0, "멈춘 시각을 밀어야 15:30 직전에 한 번 터지지 않는다"
+
+
+def test_동시호가_직전은_그대로_판정한다(monkeypatch, tmp_path):
+    """15:19 까지는 진짜 체결이 있어야 한다 — 구간을 넓게 잡으면 진짜 장애를 놓친다."""
+    path = _write_log(tmp_path, [
+        "2026-09-10 15:19:11,291 INFO    [engine] app.engine.runner: 가동 중 · 틱 6256509 · 종목 200 · 테마 23",
+    ])
+    now = datetime(2026, 9, 10, 15, 19, 15, tzinfo=SEOUL)
+    monkeypatch.setattr(sophie_feed_monitor.time, "monotonic", lambda: 2000.0)
+
+    ok, reason, _, _ = check_feed_health(
+        path, prev_tick=6256509, prev_tick_seen_at=1000.0, now=now)
+
+    assert ok is False and "안 늚" in reason
+
+
+def test_in_closing_auction_경계():
+    assert not in_closing_auction(datetime(2026, 9, 10, 15, 19, 59, tzinfo=SEOUL))
+    assert in_closing_auction(datetime(2026, 9, 10, 15, 20, 0, tzinfo=SEOUL))
+    assert in_closing_auction(datetime(2026, 9, 10, 15, 29, 59, tzinfo=SEOUL))
+    assert not in_closing_auction(datetime(2026, 9, 10, 15, 30, 0, tzinfo=SEOUL))
