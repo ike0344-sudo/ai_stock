@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from backtesting import top35_job
-from backtesting.top35_job import Top35JobState, _finished_successfully_today, _should_run_daily_update, get_status, start_job
+from backtesting.top35_job import _errored_recently, Top35JobState, _finished_successfully_today, _should_run_daily_update, get_status, start_job
 
 
 @pytest.fixture(autouse=True)
@@ -144,23 +144,23 @@ def test_progress_callback_updates_state_while_running(monkeypatch):
 
 
 def test_should_run_daily_update_true_when_time_passed_and_not_run_today():
-    now = datetime(2026, 7, 25, 15, 40)
+    now = datetime(2026, 7, 24, 15, 40)      # 금요일
     assert _should_run_daily_update(now, last_success_date=None, hour=15, minute=40) is True
 
 
 def test_should_run_daily_update_false_before_scheduled_time():
-    now = datetime(2026, 7, 25, 15, 39)
+    now = datetime(2026, 7, 24, 15, 39)
     assert _should_run_daily_update(now, last_success_date=None, hour=15, minute=40) is False
 
 
 def test_should_run_daily_update_false_when_already_run_today():
-    now = datetime(2026, 7, 25, 16, 0)
-    assert _should_run_daily_update(now, last_success_date="2026-07-25", hour=15, minute=40) is False
+    now = datetime(2026, 7, 24, 16, 0)
+    assert _should_run_daily_update(now, last_success_date="2026-07-24", hour=15, minute=40) is False
 
 
 def test_should_run_daily_update_true_on_new_day_even_if_run_yesterday():
-    now = datetime(2026, 7, 26, 15, 40)
-    assert _should_run_daily_update(now, last_success_date="2026-07-25", hour=15, minute=40) is True
+    now = datetime(2026, 7, 27, 15, 40)      # 월요일
+    assert _should_run_daily_update(now, last_success_date="2026-07-24", hour=15, minute=40) is True
 
 
 # ---- _finished_successfully_today: 실패 시 같은 날 재시도가 필요한지 판단의 근거 ----
@@ -258,3 +258,32 @@ def test_no_alert_without_recipient(monkeypatch):
 
     assert _wait_until(lambda: get_status()["status"] == "done")
     assert calls == []
+
+
+def test_주말에는_돌지_않는다():
+    """토요일엔 장도 없고 키움은 점검 페이지(HTML)를 준다 — 2026-09-12 에 1분마다 실패 알림."""
+    assert _should_run_daily_update(datetime(2026, 9, 12, 15, 40), None, 15, 40) is False   # 토
+    assert _should_run_daily_update(datetime(2026, 9, 13, 15, 40), None, 15, 40) is False   # 일
+
+
+def test_전체_실패_직후엔_바로_다시_돌지_않는다():
+    now = datetime(2026, 9, 14, 15, 45)
+    just = {"status": "error", "finished_at": datetime(2026, 9, 14, 15, 44).isoformat()}
+    old = {"status": "error", "finished_at": datetime(2026, 9, 14, 15, 10).isoformat()}
+    assert _errored_recently(just, now) is True
+    assert _errored_recently(old, now) is False
+    assert _errored_recently({"status": "done", "finished_at": now.isoformat()}, now) is False
+
+
+def test_같은_실패는_하루_한_번만_알린다(monkeypatch, notify_calls):
+    monkeypatch.setattr(top35_job, "_last_error_alert", ("", ""))
+
+    def blow_up(client, data_dir, market, on_progress=None):
+        raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+    monkeypatch.setattr(top35_job, "update_top35", blow_up)
+    for _ in range(3):
+        start_job("key", "secret", True)
+        assert _wait_until(lambda: get_status()["status"] == "error")
+    assert len(notify_calls) == 1
+    assert "HTML" in notify_calls[0][2][0][2]

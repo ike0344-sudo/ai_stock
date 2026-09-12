@@ -20,6 +20,10 @@ from .updater import update_top35
 DAILY_UPDATE_HOUR = 15
 DAILY_UPDATE_MINUTE = 40
 SCHEDULER_POLL_SECONDS = 60.0
+# 잡 전체가 실패한 뒤 다시 시도하기까지. 예전엔 폴링 주기(60초)마다 다시 돌아, 키움이
+# 점검 페이지(HTML)를 주는 토요일엔 15:40 부터 자정까지 1분마다 실패 알림이 갔다
+# (2026-09-12). 실패 원인은 대개 몇 분 안에 안 풀리는 것들이다.
+RETRY_AFTER_ERROR_SECONDS = 30 * 60
 
 
 @dataclass
@@ -43,6 +47,7 @@ _lock = threading.Lock()
 # 토큰을 들고 다니게 만들지 않기 위함). 비어 있으면 알림을 건너뛴다.
 _bot_token = ""
 _chat_id = ""
+_last_error_alert: tuple[str, str] = ("", "")   # (날짜, 메시지) — 같은 실패는 하루 한 번만 알린다
 
 
 def get_status() -> dict:
@@ -104,11 +109,20 @@ def _run_job(appkey: str, secretkey: str, is_mock: bool, data_dir: str, market: 
                             [(r["stock_code"], r["name"], r["status"])
                              for r in results if r["status"] != "ok"])
     except Exception as exc:
+        global _last_error_alert
+        msg = str(exc)
+        if "Expecting value" in msg:
+            # requests 의 .json() 이 HTML 을 받으면 이 문구다 — 키움이 점검 중일 때 토큰
+            # 엔드포인트가 "시스템 점검 알림" 페이지를 200 으로 돌려준다(2026-09-12 토요일 실측).
+            msg = "키움 API 가 JSON 대신 HTML 을 돌려줌 — 점검 중일 가능성 (" + msg + ")"
         with _lock:
             _state.status = "error"
-            _state.error_message = str(exc)
+            _state.error_message = msg
             _state.finished_at = datetime.now().isoformat()
-        _notify_failure(0, 0, [("-", "잡 전체 실패", str(exc))])
+        key = (datetime.now().date().isoformat(), msg)
+        if key != _last_error_alert:
+            _last_error_alert = key
+            _notify_failure(0, 0, [("-", "잡 전체 실패", msg)])
 
 
 def _notify_failure(fail_count: int, total: int, failures: list[tuple[str, str, str]]) -> None:
@@ -131,9 +145,18 @@ def _should_run_daily_update(now: datetime, last_success_date: str | None, hour:
     "실행한 적 있는지"가 아니라 "성공한 적 있는지"를 본다 — 그래야 실패(status="error")한
     날은 오늘 안에서 계속 재시도된다(대시보드의 수동 "top35 업데이트" 버튼을 없앤 대신,
     실패 시 사람이 다시 눌러줄 필요 없이 스케줄러가 스스로 다시 시도해야 한다)."""
+    if now.weekday() >= 5:
+        return False        # 주말엔 갱신할 장이 없다. 공휴일은 못 가리지만 그날은 실패 1회로 끝난다
     if last_success_date == now.date().isoformat():
         return False
     return (now.hour, now.minute) >= (hour, minute)
+
+
+def _errored_recently(status: dict, now: datetime, within_sec: float = RETRY_AFTER_ERROR_SECONDS) -> bool:
+    """방금 전체 실패했으면 within_sec 동안은 다시 안 돈다 — 1분마다 같은 실패를 반복하지 않게."""
+    if status["status"] != "error" or not status["finished_at"]:
+        return False
+    return (now - datetime.fromisoformat(status["finished_at"])).total_seconds() < within_sec
 
 
 def _finished_successfully_today(status: dict, today: str) -> bool:
@@ -157,7 +180,8 @@ def _daily_scheduler_loop(
             status = get_status()
             if _finished_successfully_today(status, today):
                 _last_auto_success_date = today
-            elif _should_run_daily_update(now, _last_auto_success_date, hour, minute) and status["status"] != "running":
+            elif (_should_run_daily_update(now, _last_auto_success_date, hour, minute)
+                  and status["status"] != "running" and not _errored_recently(status, now)):
                 # 실패(error)했거나 아직 안 돌았으면 시도 — start_job은 이미 running 중이면
                 # 스스로 거부하므로 여기서 막지 않아도 안전하지만, 불필요한 스레드 생성을 줄인다.
                 start_job(appkey, secretkey, is_mock, data_dir, market)
