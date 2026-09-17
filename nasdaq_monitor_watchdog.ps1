@@ -219,7 +219,9 @@ function Invoke-BaselineVerifyOnce {
 # auto_develop과 같은 "주기적으로 딱 한 번" 성격이라 같은 패턴을 쓴다. 장 마감 후
 # 정정 시세까지 반영되도록 16시 이후에만 돌리고, 하루에 한 번만 돈다.
 $dailyReportHour = 16
-$dailyReportStuckThresholdSeconds = 3 * 3600
+# 유니버스가 2,000종목으로 늘어 백필이 3.6시간 걸린다(2026-09-15 실측 13,093초). 3시간이면
+# 멀쩡히 도는 회차를 멈춘 것으로 보고 하나를 더 띄워, 둘이 data/ 를 동시에 쓴다.
+$dailyReportStuckThresholdSeconds = 6 * 3600
 
 function Test-DailyReportDue {
     if ((Get-Date).Hour -lt $dailyReportHour) { return $false }
@@ -247,11 +249,21 @@ function Test-DailyReportDue {
 
     if (-not (Test-Path $finishedPath)) { return $true }
     try {
-        # 마지막 완료가 오늘이면 이미 돈 것 (실패였어도 같은 날 재시도는 안 한다 —
-        # API 한도/장애가 원인일 때 5분마다 재시도하면 상황을 더 나쁘게 만든다)
+        # **오늘 시작해서** 끝난 것이 있으면 이미 돈 것 (실패였어도 같은 날 재시도는 안 한다 —
+        # API 한도/장애가 원인일 때 5분마다 재시도하면 상황을 더 나쁘게 만든다).
+        #
+        # 예전엔 **완료 날짜**만 봤다. 백필이 3시간 넘게 걸려서, 밤에 시작한 회차가 자정을
+        # 넘겨 끝나면 그 완료가 "오늘 돈 것"으로 읽혀 **다음 날 회차가 통째로 건너뛰어졌다**
+        # (2026-09-15 22:05 시작 -> 09-16 01:43 완료 -> 09-16 16:00 회차 없음 -> 09-17 아침
+        # 소피증권이 "일봉이 밀린 종목 2,124개"로 떴다). 시작 날짜로 본다.
         $finished = [double](Get-Content $finishedPath -Raw | ConvertFrom-Json).finished_at
-        $finishedLocal = [DateTimeOffset]::FromUnixTimeSeconds([long]$finished).ToLocalTime().Date
-        return $finishedLocal -lt (Get-Date).Date
+        if (-not (Test-Path $startedPath)) {
+            return [DateTimeOffset]::FromUnixTimeSeconds([long]$finished).ToLocalTime().Date -lt (Get-Date).Date
+        }
+        $startedAt = [double](Get-Content $startedPath -Raw | ConvertFrom-Json).started_at
+        $startedLocal = [DateTimeOffset]::FromUnixTimeSeconds([long]$startedAt).ToLocalTime().Date
+        $ranToday = ($startedLocal -eq (Get-Date).Date) -and ($finished -ge $startedAt)
+        return -not $ranToday
     } catch {
         return $false
     }
