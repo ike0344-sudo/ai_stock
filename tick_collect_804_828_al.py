@@ -25,15 +25,21 @@ state/agent_reports/data-agent_20260830-xxxxxx.md 참고.
 
     python tick_collect_804_828_al.py
 """
+import argparse
 import concurrent.futures
 import json
 import os
 import sys
 import threading
 import time
+import zlib
 from datetime import datetime, time as dtime
 
 import requests
+
+# 윈도우 콘솔은 cp949라 "—" 같은 문자에서 print가 터진다(2026-09-20: 마지막 줄에서
+# 실제로 죽음 — 로그 파일은 UTF-8이라 멀쩡했다). 화면 출력 때문에 수집이 죽지 않게 한다.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 sys.path.insert(0, "C:/Users/ike03/Desktop/code/ai_stock")
 os.chdir("C:/Users/ike03/Desktop/code/ai_stock")
@@ -43,7 +49,7 @@ import pandas as pd
 
 from backtesting.universe import daily_top_n_from_local
 from data_exclude import MEGA_CAP_EXCLUDE
-from kiwoom_client import KiwoomClient, raise_if_error
+from kiwoom_client import KiwoomClient, batch_keys, raise_if_error
 
 START_DATE = "2026-08-04"
 END_DATE = "2026-08-28"
@@ -184,10 +190,30 @@ def _fetch_once(client: KiwoomClient, code: str, log_once: list[bool]) -> tuple[
     by_date: dict[str, list[dict]] = {}
     min_date_seen = None
     pages = 0
+    page_retries = 0
     while True:
         pause_if_market_hours(log_once)
         wait_out_rate_limit_pause()
-        payload = client.request_tr("ka10079", body, path="/api/dostk/chart", cont_yn=cont_yn, next_key=next_key)
+        try:
+            payload = client.request_tr("ka10079", body, path="/api/dostk/chart", cont_yn=cont_yn, next_key=next_key)
+        except requests.exceptions.HTTPError as exc:
+            # 429/5xx를 여기서 안 잡으면 예외가 collect_one까지 튀어 지금까지 모은
+            # 수백~수천 페이지를 통째로 버리고 그 종목을 처음부터 다시 받는다.
+            # 2026-09-20 실측: 429가 3~4분마다, 종목당 6분 — 거의 모든 종목이 한 번은
+            # 맞으므로 버리는 비용이 크다. 같은 페이지(cont_yn/next_key)부터 이어받는다.
+            status_code = exc.response.status_code if exc.response is not None else None
+            if status_code is None or (status_code != 429 and status_code < 500):
+                raise
+            page_retries += 1
+            if page_retries > 10:
+                raise
+            if status_code == 429:
+                trigger_rate_limit_pause(code)
+            else:
+                log(f"{code}: 서버오류 {status_code} - 같은 페이지부터 재시도({page_retries}/10)")
+                time.sleep(5)
+            continue
+        page_retries = 0
         pages += 1
         raise_if_error(payload)
         chunk = payload.get("stk_tic_chart_qry", [])
@@ -245,8 +271,15 @@ def collect_one(client: KiwoomClient, shared_token: SharedToken, code: str, log_
         try:
             by_date, min_date_seen, pages = _fetch_once(client, code, log_once)
         except requests.exceptions.HTTPError as exc:
-            if exc.response is not None and exc.response.status_code == 429:
+            status_code = exc.response.status_code if exc.response is not None else None
+            if status_code == 429:
                 trigger_rate_limit_pause(code)
+                by_date = {}
+            elif status_code is not None and status_code >= 500:
+                # 서버측 일시 장애(2026-09-20 실측: 502 Bad Gateway). 429와 같은
+                # 일시 오류인데 예외로 던지면 그 종목이 통째로 error 처리돼
+                # 다음 실행까지 밀린다 — 아래 재시도 루프에 태운다.
+                log(f"{code}: {attempts}번째 시도 서버오류 {status_code} - 재시도")
                 by_date = {}
             else:
                 raise
@@ -300,11 +333,38 @@ def process_one(code: str, shared_token: SharedToken, log_once: list[bool]) -> t
     return code, status
 
 
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser()
+    p.add_argument("--start", help=f"수집 시작일 YYYY-MM-DD (기본 {START_DATE})")
+    p.add_argument("--end", help=f"수집 종료일 YYYY-MM-DD (기본 {END_DATE})")
+    p.add_argument("--concurrency", type=int, default=MAX_CONCURRENCY,
+                   help=f"동시 워커 수 (기본 {MAX_CONCURRENCY}, 실측 안전한도 {MEASURED_SAFE_CONCURRENCY})")
+    p.add_argument("--shard", default="1/1",
+                   help="유니버스 분할 (예: 2/2 = 두 번째 조각만). 조각마다 진행/로그가 분리된다")
+    p.add_argument("--batch-key", action="store_true",
+                   help="KIWOOM_BATCH_* 앱키로 요청 — 레이트리밋이 앱키 단위라 다른 조각과 분리된다")
+    return p.parse_args()
+
+
 def main() -> None:
     global APPKEY, SECRET, IS_MOCK
+    global START_DATE, END_DATE, PROGRESS_PATH, LOG_PATH, PROGRESS_REPORT_PATH, MAX_CONCURRENCY
+    args = parse_args()
+    MAX_CONCURRENCY = args.concurrency
+    shard_i, shard_n = (int(x) for x in args.shard.split("/"))
+    if args.start or args.end or shard_n > 1:
+        # 기간을 바꿔 돌릴 때는 진행/로그도 기간별로 분리한다 — 지난 회차의 done
+        # 목록을 물려받으면 새 기간을 통째로 건너뛴다.
+        START_DATE = args.start or START_DATE
+        END_DATE = args.end or END_DATE
+        tag = f"{START_DATE.replace('-', '')}_{END_DATE.replace('-', '')}"
+        if shard_n > 1:
+            tag += f"_s{shard_i}of{shard_n}"
+        PROGRESS_PATH = f"state/tick_collection/progress_al_{tag}.json"
+        LOG_PATH = f"state/tick_collection/log_al_{tag}.txt"
+        PROGRESS_REPORT_PATH = f"{REPORT_DIR}/data-agent_tick_al_progress_{tag}.md"
     load_dotenv("C:/Users/ike03/Desktop/code/ai_stock/.env")
-    APPKEY = os.environ["KIWOOM_APPKEY"]
-    SECRET = os.environ["KIWOOM_SECRETKEY"]
+    APPKEY, SECRET = batch_keys() if args.batch_key else (os.environ["KIWOOM_APPKEY"], os.environ["KIWOOM_SECRETKEY"])
     IS_MOCK = os.environ.get("KIWOOM_IS_MOCK", "true").lower() == "true"
     bootstrap = KiwoomClient(APPKEY, SECRET, is_mock=IS_MOCK)
     bootstrap.issue_token()
@@ -312,10 +372,16 @@ def main() -> None:
     log_once = [False]
 
     universe = build_universe()
+    if shard_n > 1:
+        # 종목코드 해시로 나눈다 — 유니버스 순서에 기대면 안 된다. 2026-09-20에
+        # enumerate 순서로 잘랐다가 두 프로세스의 순서가 서로 달라(집합 순회 순서)
+        # 32종목이 중복 수집되고 20종목이 통째로 빠졌다. crc32는 프로세스가 달라도
+        # 같은 값이라 조각이 절대 겹치거나 빠지지 않는다.
+        universe = [c for c in universe if zlib.crc32(c.encode()) % shard_n == shard_i - 1]
     progress = load_progress()
     progress["total"] = len(universe)
     save_progress(progress)
-    log(f"대상 {len(universe)}종목 (8/04~8/28 top35 합집합 + 032820/030530, 005930/000660 제외, 통합 _AL)")
+    log(f"대상 {len(universe)}종목 ({START_DATE}~{END_DATE} top35 합집합 + 032820/030530, 005930/000660 제외, 통합 _AL)")
 
     done = set(progress["done"])
     partial = set(progress.get("partial", []))
