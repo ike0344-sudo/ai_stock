@@ -8,15 +8,28 @@ from __future__ import annotations
 from typing import Any
 
 from .conditions.ast import (
-    Condition, ConstOperand, FieldOperand, Group, IndOperand, MarketOperand, ParamRef, iter_operands,
+    Condition, ConstOperand, ExprOperand, FieldOperand, Group, IndOperand, MarketOperand, ParamRef, PosOperand,
+    iter_operands,
 )
-from .conditions.catalog import INDICATORS, resolve_params
+from .conditions.catalog import INDICATORS, MINUTE_TIMEFRAMES, resolve_params
 from .spec import BuilderStrategy, LegacyStrategy, Spec
 
 FIELD_KO = {"open": "시가", "high": "고가", "low": "저가", "close": "종가", "volume": "거래량", "value": "거래대금"}
 INDEX_KO = {"kospi": "코스피", "kosdaq": "코스닥"}
+POS_KO = {
+    "return_pct": "보유 수익률", "bars_held": "보유 봉 수", "minutes_held": "보유 분", "max_return_pct": "보유 중 최고 수익률",
+    "drawdown_pct": "보유 중 최고가 대비 하락률", "entry_price": "매수가",  # drawdown_pct 는 양수 % = 최고가보다 N% 아래
+}
+_PCT_POS = {"return_pct", "max_return_pct", "drawdown_pct"}  # 상수와 비교하면 오른쪽에 % 를 붙인다("보유 수익률이 5% 이상")
+TF_PREFIX = {"daily_prev": "일봉(전일 확정) ", "daily_live": "일봉(장중 실시간) "}
 # 봉 개수 창으로 굴러가는 지표 — 분봉 모드에선 날 경계를 넘어 이어진다(lead 판정 2026-09-25, 리셋 옵션 없음)
 _ROLLING = {"sma", "ema", "rsi", "rsi_wilder", "highest", "lowest", "change_pct", "atr", "bb_upper", "bb_lower", "vol_ratio"}
+_WINDOW_PARAMS = {"n", "n1", "fast", "slow", "conv_n", "span_n"}  # 창 길이를 받는 파라미터 이름 — 카탈로그의 다른 롤링 지표도 잡는다
+
+
+def _is_rolling(name: str) -> bool:
+    d = INDICATORS.get(name)
+    return name in _ROLLING or bool(d and d.category in ("trend", "oscillator", "volume") and any(p.name in _WINDOW_PARAMS for p in d.params))
 LEGACY_KO = {
     "ma_crossover": "이동평균 크로스", "rsi": "RSI 과매도·과매수", "envelope": "엔벨로프 평균회귀",
     "new_high_swing": "N일 신고가 스윙", "pullback_reentry": "눌림목 재돌파(폐기됨)",
@@ -78,41 +91,73 @@ def _ind(op: IndOperand, unit: str) -> str:
         return f"거래량의 {n}{unit} 평균 대비 배수"
     if op.name == "value_rank":
         return "그날 거래대금 순위" if p["lookback"] == 1 else f"{f['lookback']}일 평균 거래대금 순위"
-    return INDICATORS[op.name].label_ko
+    d = INDICATORS[op.name]  # 그 밖의 지표: 이름 + 기본값과 다른 파라미터(예: MACD 선(fast=8, slow=21))
+    extra = [f"{k}={f[k]}" for k in p if p[k] != d.param(k).default]
+    return d.label_ko + (f"({', '.join(extra)})" if extra else "")
+
+
+def _tf_unit(tf: str, unit: str) -> str:
+    """그 시간 단위 자신의 봉 단위 — N분봉은 '봉', 일봉 계열은 '일', bar 는 실행 모드 단위."""
+    return "봉" if tf in MINUTE_TIMEFRAMES else "일" if tf in TF_PREFIX else unit
+
+
+def _tf_prefix(tf: str) -> str:
+    return f"{MINUTE_TIMEFRAMES[tf]}분봉 " if tf in MINUTE_TIMEFRAMES else TF_PREFIX.get(tf, "")
 
 
 def _operand(op: Any, unit: str) -> str:
     if isinstance(op, ConstOperand):
         return _fmt(op.value)
+    if isinstance(op, PosOperand):
+        return POS_KO[op.name]
+    if isinstance(op, ExprOperand):
+        sym = {"+": "+", "-": "−", "*": "×", "/": "÷"}[op.op]
+        return f"({_operand(op.left, unit)} {sym} {_operand(op.right, unit)})"
     if isinstance(op, MarketOperand):
         n = _fmt(op.params.get("n", 20 if op.name == "sma" else 1))
         what = {"close": "종가", "sma": f"{n}일 이동평균", "change_pct": f"{n}일 등락률(%)"}[op.name]  # 지수는 일봉 자료
         return f"{'전일 ' if unit == '봉' else ''}{INDEX_KO[op.index]} {what}"  # 분봉·틱 모드는 D−1 값
-    text = FIELD_KO[op.name] if isinstance(op, FieldOperand) else _ind(op, unit)
+    u = _tf_unit(op.tf, unit)
+    text = FIELD_KO[op.name] if isinstance(op, FieldOperand) else _ind(op, u)
     if op.offset:
-        text = f"{op.offset}{unit} 전 {text}"
+        text = f"{op.offset}{u} 전 {text}"  # 며칠·몇 봉 전은 그 피연산자 자신의 시간 단위로
+    text = _tf_prefix(op.tf) + text
     if not (isinstance(op.mul, (int, float)) and op.mul == 1):
         text = f"{text}의 {_fmt(op.mul)}배"
     return text
 
 
-def _cond(c: Condition, unit: str) -> tuple[str, bool, str]:
-    """(연결 전 어간, 명사형 여부, 평서문). 동사형은 '고/면', 명사형은 '이고/이면' 이 붙는다."""
-    left, right = _operand(c.left, unit), _operand(c.right, unit)
+# 조건 하나의 어간 종류 — verb: 어간+고/면 · noun: 어간+이고/이면 · past(받침 끝 어간: 넘·-했·않): 어간+고/으면
+def _cond(c: Condition, unit: str) -> tuple[str, str, str]:
+    """(연결 전 어간, 종류, 평서문)."""
+    left = _operand(c.left, unit)
     subj = f"{left}{josa(left, '이/가')}"
-    obj = f"{right}{josa(right, '을/를')}"
-    if c.op == "gt":
-        stem = f"{subj} {obj} 넘"
-        return stem, False, stem + "는다"
-    if c.op == "cross_above":
-        stem = f"{subj} {obj} 상향 돌파하"
-        return stem, False, stem[:-1] + "한다"
-    if c.op == "cross_below":
-        stem = f"{subj} {obj} 하향 이탈하"
-        return stem, False, stem[:-1] + "한다"
-    word = {"gte": "이상", "lt": "미만", "lte": "이하"}[c.op]
-    stem = f"{subj} {right} {word}"
-    return stem, True, stem + "이다"
+    hold = f"{c.hold}{unit} 연속으로 " if c.hold > 1 else ""
+    if c.op == "is_true":
+        stem, kind, plain = f"{subj} 성립하", "verb", f"{subj} 성립한다"
+    elif c.op == "is_false":
+        stem, kind, plain = f"{subj} 성립하지 않", "past", f"{subj} 성립하지 않는다"
+    else:
+        right = _operand(c.right, unit)
+        if isinstance(c.left, PosOperand) and c.left.name in _PCT_POS and isinstance(c.right, ConstOperand):
+            right += "%"
+        obj = f"{right}{josa(right, '을/를')}"
+        if c.op == "gt":
+            stem, kind, plain = f"{subj} {obj} 넘", "past", f"{subj} {obj} 넘는다"  # 받침 있는 어간 → 끝에서 '넘으면'
+        elif c.op == "cross_above":
+            stem, kind, plain = f"{subj} {obj} 상향 돌파하", "verb", f"{subj} {obj} 상향 돌파한다"
+        elif c.op == "cross_below":
+            stem, kind, plain = f"{subj} {obj} 하향 이탈하", "verb", f"{subj} {obj} 하향 이탈한다"
+        elif c.op == "cross_above_within":
+            stem = f"최근 {c.within}{unit} 안에 {subj} {obj} 상향 돌파했"
+            kind, plain = "past", stem + "다"
+        elif c.op == "cross_below_within":
+            stem = f"최근 {c.within}{unit} 안에 {subj} {obj} 하향 이탈했"
+            kind, plain = "past", stem + "다"
+        else:
+            word = {"gte": "이상", "lt": "미만", "lte": "이하"}[c.op]
+            stem, kind, plain = f"{subj} {right} {word}", "noun", f"{subj} {right} {word}이다"
+    return hold + stem, kind, hold + plain
 
 
 def _plain(g: Group, unit: str) -> str:
@@ -120,36 +165,59 @@ def _plain(g: Group, unit: str) -> str:
     return joiner.join(_item(i, unit)[2] for i in g.items)
 
 
-def _item(i: Condition | Group, unit: str) -> tuple[str, bool, str]:
+def _item(i: Condition | Group, unit: str) -> tuple[str, str, str]:
     if isinstance(i, Group):
+        if i.negate:  # 그룹 전체 부정 — 값 없음(NaN)인 봉은 참이 되지 않는다(평가기 규칙)
+            stem = f"({_plain(i, unit)}) 조건이 성립하지 않"
+            return stem, "past", stem + "는다"
         inner = "(" + _plain(i, unit) + ")"
-        return inner, True, inner
+        return inner, "noun", inner
     return _cond(i, unit)
 
 
 def narrate_group(g: Group, unit: str = "일") -> str:
     """'A를 넘고 B 이상이면' 꼴. 빈 그룹은 빈 문자열."""
-    parts = [_item(i, unit) for i in g.items]
+    if not g.items:
+        return ""
+    if g.negate:
+        return f"({_plain(g, unit)}) 조건이 성립하지 않으면"
     mid = "고" if g.logic == "all" else "거나"
     out = []
-    for k, (stem, noun, _) in enumerate(parts):
+    parts = [_item(i, unit) for i in g.items]
+    for k, (stem, kind, _) in enumerate(parts):
         last = k == len(parts) - 1
-        end = "면" if last else mid
-        out.append(stem + ("이" + end if noun else end))
+        if kind == "noun":
+            out.append(stem + "이" + ("면" if last else mid))
+        elif kind == "past":
+            out.append(stem + ("으면" if last else mid))
+        else:
+            out.append(stem + ("면" if last else mid))
     return " ".join(out)
 
 
 def _exits_text(spec: Spec) -> str:
     e = spec.exits
+    close_note = " (종가가 선을 넘으면 다음 봉 시가에)" if e.take_profit_mode == "close" else ""
     parts = []
     if e.stop_loss_pct is not None:
         parts.append(f"손절 -{_fmt(e.stop_loss_pct)}%")
+    if e.breakeven_after_pct is not None:
+        parts.append(f"최고 수익률 {_fmt(e.breakeven_after_pct)}% 를 넘으면 손절선을 매수가로")
     if e.take_profit_pct is not None:
-        parts.append(f"익절 +{_fmt(e.take_profit_pct)}%")
+        parts.append(f"익절 +{_fmt(e.take_profit_pct)}%{close_note}")
+    if e.take_profit_levels:
+        steps = []
+        for lv in e.take_profit_levels:  # fraction 은 그 선에서 "남은 수량" 중 파는 비율
+            rest = "나머지 전부" if lv.fraction >= 1 else f"남은 수량의 {lv.fraction * 100:g}%"
+            steps.append(f"+{_fmt(lv.pct)}% 에 {rest}")
+        parts.append("분할 익절 " + ", ".join(steps) + close_note)
     if e.trailing_stop_pct is not None:
-        parts.append(f"고점 대비 -{_fmt(e.trailing_stop_pct)}% 트레일링")
+        act = f"(최고 수익률 {_fmt(e.trail_activate_pct)}% 를 넘은 뒤부터)" if e.trail_activate_pct is not None else ""
+        parts.append(f"고점 대비 -{_fmt(e.trailing_stop_pct)}% 트레일링{act}")
     if e.max_holding_bars is not None:
         parts.append(f"최대 {_fmt(e.max_holding_bars)}봉 보유")
+    if e.max_holding_minutes is not None:
+        parts.append(f"{_fmt(e.max_holding_minutes)}분 보유 후 종가 청산")
     return ", ".join(parts)
 
 
@@ -166,11 +234,10 @@ def narrate(spec: Spec) -> str:
     elif isinstance(s, LegacyStrategy):
         ps = ", ".join(f"{k}={_fmt(v)}" for k, v in s.params.items())
         lines.append(f"기존 전략 '{LEGACY_KO[s.name]}'({s.name}) 규칙을 그대로 쓴다" + (f": {ps}." if ps else "."))
-    if intra and isinstance(s, BuilderStrategy) and any(
-        isinstance(o, IndOperand) and o.name in _ROLLING
-        for g in (s.entry, s.exit) for o in iter_operands(g)
-    ):
+    leaves = [o for g in (s.entry, s.exit) for o in iter_operands(g)] if isinstance(s, BuilderStrategy) else []
+    if intra and any(isinstance(o, IndOperand) and o.tf in ("bar", *MINUTE_TIMEFRAMES) and _is_rolling(o.name) for o in leaves):
         lines.append("※ 분봉 N봉 지표(이동평균·최고가 등)는 전날 봉을 포함해 계산하므로 장 시작 직후 신호는 전날 흐름의 영향을 받는다.")
+    # (daily_prev 는 "오늘 장 시작 전에 알 수 있는 값" — 설계 §3.2 v0.3: highest/lowest(오늘 제외)도 D−N..D−1 이라 별도 주의문 없음)
     if spec.mode == "intraday" and spec.intraday is not None and spec.intraday.source == "krx":
         lines.append("※ KRX 분봉 기준 — NXT 체결이 빠져 거래량·거래대금이 통합보다 20~40% 작다(같은 임계값이 더 엄격해진다).")
     if spec.tick is not None and spec.mode == "tick" and spec.tick.entry_source == "catalog":

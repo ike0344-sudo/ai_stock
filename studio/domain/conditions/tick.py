@@ -68,6 +68,8 @@ class TickGrid:
     cnt: np.ndarray  # 초당 체결 건수
     val: np.ndarray  # 초당 체결대금(가격×수량)
     buy: np.ndarray  # 초당 틱룰 매수 체결량
+    sell: np.ndarray | None = None  # 초당 틱룰 매도 체결량(체결강도용)
+    seen: np.ndarray | None = None  # 그 초까지 체결이 한 번이라도 있었나(첫 체결 전 앞채움 가격을 신호에 못 쓰게)
 
 
 @dataclass(frozen=True, eq=False)
@@ -105,6 +107,8 @@ def build_grid(day: TickDay) -> TickGrid:
         cnt=np.bincount(sec, minlength=N).astype(float),
         val=np.bincount(sec, weights=prc * qty, minlength=N),
         buy=np.bincount(sec, weights=np.where(direction > 0, qty, 0.0), minlength=N),
+        sell=np.bincount(sec, weights=np.where(direction < 0, qty, 0.0), minlength=N),
+        seen=np.cumsum(np.bincount(sec, minlength=N)) > 0,
     )
 
 
@@ -160,6 +164,49 @@ def buy_ratio_hits(grid: TickGrid, w_min: int, min_ratio: float) -> np.ndarray:
     return np.isfinite(r) & (r >= min_ratio)
 
 
+def trade_strength_series(grid: TickGrid, w_sec: int) -> np.ndarray:
+    """s 초의 체결강도 = `[s−w, s)` 틱룰 매수량 ÷ 매도량 × 100. 매도 0·매수 있음 → inf, 둘 다 0 → NaN."""
+    wb, ws = _window_sum(grid.buy, int(w_sec)), _window_sum(grid.sell, int(w_sec))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r = np.where(ws > 0, wb / ws * 100.0, np.where(wb > 0, np.inf, np.nan))
+    return np.where(np.isnan(wb), np.nan, r)  # 창이 세션 시작 앞에 걸치면 값 없음
+
+
+def trade_strength_hits(grid: TickGrid, w_sec: int, min_strength: float) -> np.ndarray:
+    r = trade_strength_series(grid, w_sec)
+    return ~np.isnan(r) & (r >= min_strength)
+
+
+def block_count_series(day: TickDay, w_sec: int, min_value: float) -> np.ndarray:
+    """s 초의 대량 체결 건수 = `[s−w, s)` 안에서 **한 번의 체결대금(가격×수량) ≥ min_value** 인 체결 수."""
+    sec = np.asarray(day.sec, dtype=np.int64)
+    big = np.asarray(day.prc, dtype=float) * np.asarray(day.qty, dtype=float) >= float(min_value)
+    return _window_sum(np.bincount(sec[big], minlength=N).astype(float), int(w_sec))
+
+
+def block_trades_hits(day: TickDay, w_sec: int, min_value: float, min_count: int = 1) -> np.ndarray:
+    c = block_count_series(day, w_sec, min_value)
+    return ~np.isnan(c) & (c >= min_count)
+
+
+def prior_n_high(dates: Any, highs: Any, day: dt.date, n: int) -> float:
+    """`day` 보다 **엄격히 앞선** 마지막 n 거래일 고가의 최댓값(D−1 까지). n 일이 안 되면 NaN. `dates` 는 오름차순 date 들."""
+    d = np.asarray(list(dates), dtype="datetime64[D]")
+    h = np.asarray(highs, dtype=float)
+    k = int(np.searchsorted(d, np.datetime64(day), side="left"))  # day 미만 개수
+    if k < n:
+        return float("nan")
+    w = h[k - n:k]
+    return float(np.nanmax(w)) if np.isfinite(w).any() else float("nan")
+
+
+def daily_breakout_hits(grid: TickGrid, level: float) -> np.ndarray:
+    """px[s] > D−1 까지 n일 최고가(level). 첫 체결 전(앞채움 가격)엔 신호 없음. level 이 NaN 이면 전부 False."""
+    if not np.isfinite(level):
+        return np.zeros(N, dtype=bool)
+    return grid.seen & (grid.px > level)
+
+
 def _hms(s: str) -> int:
     parts = [int(x) for x in s.split(":")]
     parts += [0] * (3 - len(parts))
@@ -187,14 +234,17 @@ def _pair(v: Any, a: str, b: str) -> tuple[float, float]:
 
 def detect_signals(
     day: TickDay, *, breakout_min: int | None = None, value_speed: Any = None, buy_ratio: Any = None,
+    trade_strength: Any = None, block_trades: Any = None, daily_breakout: Any = None,
     time_from: str = "09:00:00", time_to: str = "15:30:00", cooldown_sec: int = 300,
 ) -> TickEvents:
     """켜진 조건을 전부 AND → 시간 범위 → 쿨다운 → 각 신호의 진입 체결(s 보다 엄격히 뒤 첫 체결).
 
     value_speed = (w분, ratio) 또는 `.w/.ratio` 를 가진 객체, buy_ratio = (w분, min) 또는 `.w/.min` 객체.
+    trade_strength = (w초, min강도%) / `.w/.min`, block_trades = (w초, min_value[, min_count]) / `.w/.min_value/.min_count`,
+    daily_breakout = (n, level) / `.n/.level` — level = D−1 까지 n일 최고가(`prior_n_high` 로 호출부가 계산).
     """
-    if breakout_min is None and value_speed is None and buy_ratio is None:
-        raise ValueError("틱 조건이 하나도 없음 (breakout_min·value_speed·buy_ratio 중 하나 필요)")
+    if all(c is None for c in (breakout_min, value_speed, buy_ratio, trade_strength, block_trades, daily_breakout)):
+        raise ValueError("틱 조건이 하나도 없음 (breakout_min·value_speed·buy_ratio·trade_strength·block_trades·daily_breakout 중 하나 필요)")
     grid = build_grid(day)
     hit = time_mask(time_from, time_to)
     if breakout_min is not None:
@@ -205,6 +255,18 @@ def detect_signals(
     if buy_ratio is not None:
         w, mn = _pair(buy_ratio, "w", "min")
         hit &= buy_ratio_hits(grid, int(w), float(mn))
+    if trade_strength is not None:
+        w, mn = _pair(trade_strength, "w", "min")
+        hit &= trade_strength_hits(grid, int(w), float(mn))
+    if block_trades is not None:
+        if hasattr(block_trades, "w"):
+            w, mv, mc = block_trades.w, block_trades.min_value, getattr(block_trades, "min_count", 1)
+        else:
+            w, mv, mc = block_trades[0], block_trades[1], (block_trades[2] if len(block_trades) > 2 else 1)
+        hit &= block_trades_hits(day, int(w), float(mv), int(mc))
+    if daily_breakout is not None:
+        _, level = _pair(daily_breakout, "n", "level")
+        hit &= daily_breakout_hits(grid, float(level))
     sig = apply_cooldown(np.flatnonzero(hit), int(cooldown_sec))
     j = np.searchsorted(day.sec, sig, side="right")  # s 보다 엄격히 뒤 첫 체결
     has = j < len(day.sec)
@@ -216,11 +278,21 @@ def detect_signals(
     )
 
 
-def detect_from_spec(day: TickDay, tick_cfg: Any) -> TickEvents:
-    """`spec.tick`(entry_source='catalog') → 신호. tick_cfg 는 duck typing(`.catalog`, `.cooldown_sec`)."""
+def detect_from_spec(day: TickDay, tick_cfg: Any, daily_high_level: float | None = None) -> TickEvents:
+    """`spec.tick`(entry_source='catalog') → 신호. tick_cfg 는 duck typing(`.catalog`, `.cooldown_sec`).
+
+    새 조건(trade_strength·block_trades·daily_breakout)은 칸이 없는 옛 명세도 받도록 getattr 로 읽는다.
+    daily_breakout 이 켜져 있으면 `daily_high_level`(= `prior_n_high` 결과)을 반드시 줘야 한다 — 틱 하루치엔 일봉이 없다.
+    """
     c = tick_cfg.catalog
+    db = getattr(c, "daily_breakout", None)
+    if db is not None:
+        if daily_high_level is None:
+            raise ValueError("daily_breakout 조건에는 D−1 까지 n일 최고가(daily_high_level)가 필요함")
+        db = (db.n if hasattr(db, "n") else db[0], daily_high_level)
     return detect_signals(
         day, breakout_min=c.breakout_min, value_speed=c.value_speed, buy_ratio=c.buy_ratio,
+        trade_strength=getattr(c, "trade_strength", None), block_trades=getattr(c, "block_trades", None), daily_breakout=db,
         time_from=c.time_from, time_to=c.time_to, cooldown_sec=tick_cfg.cooldown_sec,
     )
 
