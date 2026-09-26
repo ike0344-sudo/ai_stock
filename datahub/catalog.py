@@ -16,6 +16,16 @@ from pydantic import BaseModel, ConfigDict, model_validator
 CATALOG_YAML = Path(__file__).resolve().with_name("catalog.yaml")
 
 
+def state_base() -> Path:
+    """`state/...`(장부·잠금·허브 상태 파일)이 놓이는 기준 폴더. 기본은 `root()`.
+    실데이터를 읽어야 해서 `DATAHUB_ROOT` 를 못 바꾸는 테스트(패리티 등)가 **실제 장부·잠금을 건드리지 않게** `DATAHUB_STATE_BASE` 로
+    상태만 옮길 수 있다(2026-09-26: 테스트가 실제 장부에 30줄을 남기고 실제 daily_minute 잠금을 잡았다).
+    `DATAHUB_ROOT` 가 지정돼 있으면 그 임시 루트가 이미 격리이므로 이 값은 무시한다."""
+    if not os.environ.get("DATAHUB_ROOT") and os.environ.get("DATAHUB_STATE_BASE"):
+        return Path(os.environ["DATAHUB_STATE_BASE"])
+    return root()
+
+
 def root() -> Path:
     """저장소 루트. 호출마다 읽는다 — 테스트가 환경변수로 바꿀 수 있게."""
     return Path(os.environ.get("DATAHUB_ROOT") or Path(__file__).resolve().parent.parent)
@@ -135,6 +145,6 @@ def path(dataset_id: str, **fmt: str) -> Path:
 def lock_base(resource: str) -> Path:
     """잠금 경로(확장자 전). risk_state_lock 이 뒤에 `.lock` 을 붙인다."""
     try:
-        return root() / load().locks[resource].path
+        return state_base() / load().locks[resource].path
     except KeyError:
         raise KeyError(f"카탈로그에 없는 잠금: {resource}") from None

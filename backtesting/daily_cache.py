@@ -10,11 +10,15 @@
 """
 import glob
 import os
+import secrets
+import threading
+import time
 
 import pandas as pd
 
 DAILY_DIR = os.path.join("data", "stocks", "daily")
 CACHE_PATH = os.path.join("data", "cache", "daily_all.parquet")
+_REPLACE_RETRIES, _REPLACE_SLEEP = 40, 0.05
 
 
 def _needs_rebuild(csvs: list[str]) -> bool:
@@ -42,9 +46,19 @@ def load_daily_all(daily_dir: str = DAILY_DIR, cache_path: str = CACHE_PATH) -> 
     df = pd.concat(parts, ignore_index=True)
 
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-    tmp = f"{cache_path}.{os.getpid()}.tmp"   # 도중에 죽어도 반쪽 캐시가 안 남게 원자적 교체 — PID 를 붙여 동시 재생성끼리 tmp 를 안 밟게
+    # 도중에 죽어도 반쪽 캐시가 안 남게 원자적 교체. tmp 이름은 호출마다 달라야 한다 — pid 만 쓰면 같은 프로세스의 스레드들(8780 서버 스레드풀의
+    # 동시 요청)이 같은 tmp 를 덮어쓰고 서로의 os.replace 를 깨뜨린다(jobrunner.store 와 같은 결함, 2026-09-26)
+    tmp = f"{cache_path}.{os.getpid()}.{threading.get_ident()}.{secrets.token_hex(3)}.tmp"
     df.to_parquet(tmp, index=False)
-    os.replace(tmp, cache_path)
+    for attempt in range(_REPLACE_RETRIES):  # Windows: 다른 스레드가 방금 교체했거나 읽는 중이면 PermissionError — 잠깐 뒤 다시(jobrunner.store 와 같은 처리)
+        try:
+            os.replace(tmp, cache_path)
+            break
+        except PermissionError:
+            if attempt == _REPLACE_RETRIES - 1:
+                os.remove(tmp)
+                raise
+            time.sleep(_REPLACE_SLEEP)
     return df
 
 

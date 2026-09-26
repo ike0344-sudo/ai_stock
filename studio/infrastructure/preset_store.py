@@ -7,10 +7,14 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
+import threading
 from pathlib import Path
 from typing import Any, Mapping
 
 from studio.application.services import PresetNotFound
+
+from .fsutil import retry_perm
 
 NAME_RE = re.compile(r"^[\w가-힣\- ]{1,40}$")
 
@@ -46,14 +50,18 @@ class FilePresetStore:
         p = self._path(name)
         if not p.exists():
             raise PresetNotFound(name)
-        return json.loads(p.read_text(encoding="utf-8-sig"))
+        return json.loads(retry_perm(p.read_text, "utf-8-sig"))
 
     def put(self, name: str, spec: Mapping[str, Any]) -> None:
         p = self._path(name)
         self.root.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
+        tmp = p.with_name(f".{p.name}.{os.getpid()}.{threading.get_ident()}.{secrets.token_hex(3)}.tmp")  # 스레드·호출마다 다른 이름 — 같은 프로세스의 동시 저장이 서로의 tmp 를 안 밟게
         tmp.write_text(json.dumps(spec, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        os.replace(tmp, p)
+        try:
+            retry_perm(os.replace, tmp, p)  # 같은 이름을 동시에 저장·읽으면 Windows 가 잠깐 거부한다
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            raise
 
     def delete(self, name: str) -> None:
         p = self._path(name)

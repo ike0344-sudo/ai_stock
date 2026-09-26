@@ -15,7 +15,7 @@ LEDGER_LOCK = "state/locks/datahub_ledger"
 
 
 def _dir() -> Path:
-    return catalog.root() / "state" / "datahub"
+    return catalog.state_base() / "state" / "datahub"
 
 
 def file_for(when: datetime) -> Path:
@@ -27,7 +27,7 @@ def append(event: dict) -> None:
     line = json.dumps({"ts": now.isoformat(timespec="seconds"), **event}, ensure_ascii=False) + "\n"
     p = file_for(now)
     p.parent.mkdir(parents=True, exist_ok=True)
-    with risk_state_lock(str(catalog.root() / LEDGER_LOCK)):
+    with risk_state_lock(str(catalog.state_base() / LEDGER_LOCK)):
         with p.open("a", encoding="utf-8", newline="") as fh:
             fh.write(line)
 

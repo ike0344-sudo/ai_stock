@@ -4,6 +4,7 @@
 같은 (규칙, 대상)은 하루 한 번만 보낸다(`state/datahub/alerts_sent.json`).
 규칙별 켜기/끄기는 카탈로그 기본값 위에 `state/datahub/overrides.json` 의 `alerts` 가 덮는다.
 """
+import threading
 import json
 import os
 from dataclasses import dataclass
@@ -25,7 +26,7 @@ class Alert:
 
 
 def _dir() -> Path:
-    return catalog.root() / "state" / "datahub"
+    return catalog.state_base() / "state" / "datahub"
 
 
 def enabled_rules() -> dict[str, bool]:
@@ -50,7 +51,7 @@ def _read(name: str, default):
 
 def _write(name: str, data) -> None:
     _dir().mkdir(parents=True, exist_ok=True)
-    tmp = _dir() / f"{name}.{os.getpid()}.tmp"
+    tmp = _dir() / f"{name}.{os.getpid()}.{threading.get_ident()}.tmp"
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     tmp.replace(_dir() / name)
 
@@ -185,7 +186,7 @@ def dispatch(alerts: list[Alert], now: datetime | None = None, send=telegram_sen
             last[a.id] = {"ts": now.isoformat(timespec="seconds"), "message": a.message}
             _write("alerts_last.json", last)
     _dir().mkdir(parents=True, exist_ok=True)
-    tmp = _sent_path().with_name(f"alerts_sent.json.{os.getpid()}.tmp")
+    tmp = _sent_path().with_name(f"alerts_sent.json.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_text(json.dumps(sent, ensure_ascii=False), encoding="utf-8")
     tmp.replace(_sent_path())
     return fresh

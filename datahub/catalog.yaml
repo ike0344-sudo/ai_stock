@@ -68,7 +68,8 @@ datasets:
     writers:
       - {id: fetch_minute, cmd: kospi-theme-engine/scripts/fetch_minute.py, triggers: ["watchdog:minute_refresh", hub, manual]}
     readers: [소피증권 prepare, 거래대금 순위, 연구]
-    freshness: {rule: max_age_days, good: 14, warn: 21}
+    # 수집기(fetch_minute)는 평소 대금 min_value_eok 억 미만 종목을 일부러 안 받는다 — 판정도 그 대상만 본다(값은 fetch_minute --min-tv 기본값과 같아야 함, 테스트 P9)
+    freshness: {rule: max_age_days, good: 14, warn: 21, min_value_eok: 100}
     retention: overwrite_20d
     notes: fetch_minute 이 갱신마다 최근 20거래일로 통째로 교체 — 이력은 minute_al_archive 가 보관
 

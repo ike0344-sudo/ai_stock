@@ -3,6 +3,7 @@
 판정은 좋음(good) / 주의(warn) / 나쁨(bad) 3단계. 시계·달력·데이터 표를 인자로 받는 순수 함수가 중심이라
 테스트가 시각을 주입할 수 있다. 무거운 pandas·pyarrow 는 필요한 함수 안에서만 import 한다.
 """
+import threading
 import csv
 import hashlib
 import json
@@ -100,7 +101,7 @@ def universe_codes() -> set[str]:
 
 
 def _state_dir() -> Path:
-    return catalog.root() / "state" / "datahub"
+    return catalog.state_base() / "state" / "datahub"
 
 
 INACTIVE_MAX_AGE_DAYS = 8          # 이보다 오래 갱신 안 된 목록은 믿지 않는다 — 정지가 풀린 종목이 영영 제외되는 사고를 막는다
@@ -138,7 +139,7 @@ def write_inactive(stock_list: dict[str, dict], candidates: list[str], as_of: da
             codes[c] = {"reason": "거래정지(추정)", "detail": "일봉 조회가 빈 응답 — 표시는 없지만 받을 데이터가 없음"}
     p = _state_dir() / "inactive_codes.json"
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_text(json.dumps({"as_of": as_of.isoformat(), "source": "kiwoom ka10099", "codes": codes},
                               ensure_ascii=False, indent=1), encoding="utf-8")
     tmp.replace(p)
@@ -195,6 +196,73 @@ def verdict_max_age(dates: dict[str, str], today: date, good: int = 14, warn: in
     v = "good" if age <= good else "warn" if age <= warn else "bad"
     return {"verdict": v, "reason": f"최빈 최신일 {mode} ({age}일 전)", "n_codes": len(dates),
             "last_date_mode": mode, "age_days": age, "behind_share": round(behind / len(dates), 3)}
+
+
+# ---------- 통합 분봉의 "수집 대상" — fetch_minute.py 의 기본 대상과 같은 규칙(테스트 P9 가 하한 값이 같은지 확인) ----------
+_TV_CACHE: dict[tuple[str, int, int], float] = {}
+
+
+def avg_trading_value(code: str, days: int = 20) -> float:
+    """최근 days 거래일 평균 거래대금(종가×거래량, 원). 일봉이 없거나 못 읽으면 무한대(=대상에 남김) — fetch_minute.avg_trading_value 와 같다."""
+    p = catalog.path("daily", code=code)
+    try:
+        st = p.stat()
+    except OSError:
+        return float("inf")
+    key = (str(p), st.st_mtime_ns, days)
+    if key in _TV_CACHE:
+        return _TV_CACHE[key]
+    try:
+        with p.open(encoding="utf-8-sig") as fh:
+            head = fh.readline().strip().split(",")
+            ci, vi = head.index("close"), head.index("volume")
+            rows = [ln.strip().split(",") for ln in fh]
+    except (OSError, ValueError):
+        return float("inf")
+    vals = []
+    for f in rows[-days:]:
+        try:
+            vals.append(float(f[ci]) * float(f[vi]))
+        except (IndexError, ValueError):
+            pass
+    v = sum(vals) / len(vals) if vals else float("inf")
+    if len(_TV_CACHE) > 20000:
+        _TV_CACHE.clear()
+    _TV_CACHE[key] = v
+    return v
+
+
+def minute_al_targets(min_value_eok: float) -> set[str]:
+    """통합 분봉 수집 대상 = 소피증권 유니버스 ∩ 테마 종목 중 평소(20일) 대금 ≥ min_value_eok 억. 재료를 못 읽으면 빈 집합."""
+    uni_p = catalog.root() / UNIVERSE_CSV[1]
+    themes_p = catalog.root() / "data" / "themes.csv"
+    if not uni_p.is_file() or not themes_p.is_file():
+        return set()
+    with uni_p.open(encoding="utf-8-sig", newline="") as fh:
+        uni = {r["code"] for r in csv.DictReader(fh) if r.get("code")}
+    with themes_p.open(encoding="utf-8-sig", newline="") as fh:
+        themes = {(r.get("stock_code") or "").strip() for r in csv.DictReader(fh)}
+    return {c for c in uni & themes if avg_trading_value(c) >= min_value_eok * 1e8}
+
+
+def verdict_minute_al(dates: dict[str, str], targets: set[str], today: date, good: int, warn: int,
+                      stale_share: float = 0.02) -> dict:
+    """수집 대상 종목만 본다(수집기가 일부러 안 받는 저대금 종목의 옛 파일은 판정에서 뺀다).
+    최빈 최신일 나이로 좋음/주의/나쁨 → 대상 중 최빈일보다 5일 넘게 뒤처진(또는 파일 없는) 종목이 stale_share 를 넘으면 최소 '주의'."""
+    scoped = {c: dates.get(c, "") for c in targets}
+    have = {c: d for c, d in scoped.items() if d}
+    if not have:
+        return {"verdict": "bad", "reason": "수집 대상 파일 없음", "n_codes": 0, "n_targets": len(targets), "stale_codes": sorted(targets)[:50]}
+    r = verdict_max_age(have, today, good, warn)
+    mode = date.fromisoformat(r["last_date_mode"])
+    stale_codes = sorted(c for c, d in scoped.items() if not d or (mode - date.fromisoformat(d)).days > 5)
+    share = len(stale_codes) / len(targets)
+    r.update(n_targets=len(targets), n_stale=len(stale_codes), stale_codes=stale_codes[:50], stale_share=round(share, 3))
+    if stale_codes:
+        r["reason"] += f" · 대상 {len(targets)}종목 중 {len(stale_codes)}종목 낡음"
+        if share > stale_share and r["verdict"] == "good":
+            r["verdict"] = "warn"
+    return r
 
 
 def archive_coverage() -> dict:
@@ -404,7 +472,12 @@ def dataset_status(dataset_id: str, now: datetime | None = None, cal: Calendar |
         r = verdict_last_trading_day(dates, now, cal, universe_codes(), set(inactive_codes()),
                                      d.freshness.get("deadline", "07:30"))
     elif rule == "max_age_days":
-        r = verdict_max_age(latest_dates(dataset_id), now.date(), d.freshness.get("good", 14), d.freshness.get("warn", 21))
+        dates_ = latest_dates(dataset_id)
+        if d.freshness.get("min_value_eok"):
+            r = verdict_minute_al(dates_, minute_al_targets(d.freshness["min_value_eok"]), now.date(),
+                                  d.freshness.get("good", 14), d.freshness.get("warn", 21))
+        else:
+            r = verdict_max_age(dates_, now.date(), d.freshness.get("good", 14), d.freshness.get("warn", 21))
     elif rule == "archive_superset":
         r = archive_coverage()
     elif rule == "tick_window":

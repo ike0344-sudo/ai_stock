@@ -13,7 +13,14 @@ from tests.studio.api.conftest import BASE
 
 
 def read(path):
-    return json.loads(path.read_text(encoding="utf-8"))
+    """하트비트는 0.05초마다 tmp+교체로 갱신된다 — Windows 는 교체 순간 읽으면 PermissionError/빈 파일이라 짧게 다시 읽는다(테스트 읽기 쪽 경쟁)."""
+    for i in range(20):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (PermissionError, ValueError):
+            if i == 19:
+                raise
+            time.sleep(0.02)
 
 
 def test_format_and_immediate_first_beat(root, disp):

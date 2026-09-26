@@ -105,3 +105,25 @@ def test_masker_env_by_name(monkeypatch, tmp_path):
     monkeypatch.setenv("PLAIN_VAR", "plain-value-9999")
     m = Masker.from_env(tmp_path)
     assert m.mask("tok-value-9999 plain-value-9999") == "**** plain-value-9999"
+
+
+def test_concurrent_writes_from_threads_of_one_process_never_fail(store):
+    """진행률 폴링 스레드와 작업 스레드는 같은 progress.json 을 같은 프로세스에서 동시에 쓴다 — 임시 파일 이름이 pid 뿐이면
+    서로의 tmp 를 덮어써 os.replace 가 FileNotFoundError/PermissionError 로 죽고 작업이 failed 가 된다(2026-09-26 실측: 1600회 중 70회)."""
+    import threading
+    a = make(store, "ok")
+    errs = []
+
+    def w():
+        for i in range(300):
+            try:
+                store.write_progress(a["job_id"], pct=float(i % 100), stage="x")
+            except Exception as e:  # noqa: BLE001
+                errs.append(type(e).__name__)
+
+    ts = [threading.Thread(target=w) for _ in range(4)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert errs == []
+    assert store.read_progress(a["job_id"])["stage"] == "x"
+    assert not [p for p in store.job_dir(a["job_id"]).iterdir() if p.name.endswith(".tmp")]  # 임시 파일이 남지 않는다

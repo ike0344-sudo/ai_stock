@@ -144,7 +144,11 @@ def test_handler_reports_waiting_lock(world, monkeypatch):
             f"타임라인(초, 단계, 메시지, 로그크기)={timeline[-6:]}, log 끝: {world.store.log_path(j['job_id']).read_text(encoding='utf-8', errors='replace')[-600:]}")
     assert seen, diag
     assert seen[0]["resource"] == "daily_minute" and "python" in (seen[0]["owner"] or "").lower()
-    assert world.store.read(j["job_id"])["status"] == "succeeded"
+    final = world.store.read(j["job_id"])
+    assert final["status"] == "succeeded", (
+        f"status={final['status']} error={final.get('error')!r} 대기 표시 {elapsed:.1f}초 뒤 도착 · "
+        f"log: {world.store.log_path(j['job_id']).read_text(encoding='utf-8', errors='replace')[-1500:]} · "
+        f"DATAHUB_ROOT={os.environ.get('DATAHUB_ROOT')} FAKE={os.environ.get(jobs.FAKE_ENV)}")
 
 
 def test_archive_job_runs_in_process(world):

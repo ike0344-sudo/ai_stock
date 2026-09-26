@@ -18,6 +18,7 @@ import json
 import os
 import re
 import secrets
+import threading
 import time
 from pathlib import Path
 from typing import Any, Iterable
@@ -48,7 +49,9 @@ def now_iso() -> str:
 
 def atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    # 임시 파일 이름은 호출마다 다르게 — pid 만 쓰면 같은 프로세스의 스레드들(진행률 폴링 스레드 + 작업 스레드)이 같은 tmp 를
+    # 덮어쓰고 서로의 os.replace 를 FileNotFoundError 로 만든다(작업이 failed 로 끝남 — 2026-09-26 실측 재현).
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.{secrets.token_hex(3)}.tmp")
     tmp.write_text(text, encoding="utf-8")
     for attempt in range(_WRITE_RETRIES):
         try:

@@ -41,3 +41,34 @@ def test_새_종목이_생겨도_잡는다(tmp_path):
     time.sleep(0.01)
     _write(d, "000660", 200)
     assert len(load_daily_all(str(d), cache)) == 2
+
+
+def test_같은_프로세스의_스레드가_동시에_다시_만들어도_깨지지_않는다(tmp_path, monkeypatch):
+    """8780 서버 스레드풀에서 두 요청이 동시에 캐시를 재생성 — tmp 이름이 pid 뿐이면 서로의 tmp 를 덮어써 os.replace 가 죽는다."""
+    import threading
+
+    from backtesting import daily_cache
+
+    d = tmp_path / "daily"; d.mkdir()
+    for i in range(300):
+        _write(d, f"{i:06d}", 100 + i)
+    cache = tmp_path / "c.parquet"
+    monkeypatch.setattr(daily_cache, "CACHE_PATH", str(cache))  # 재생성 판단이 이 경로를 본다
+    errs = []
+    for _ in range(4):  # 라운드마다 캐시를 지워 모든 스레드가 재생성 경로를 타게 한다
+        cache.unlink(missing_ok=True)
+        gate = threading.Barrier(6)
+
+        def run():
+            gate.wait()
+            try:
+                assert len(load_daily_all(str(d), str(cache))) == 300
+            except Exception as e:  # noqa: BLE001
+                errs.append(type(e).__name__)
+
+        ts = [threading.Thread(target=run) for _ in range(6)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+    assert errs == []
+    assert len(load_daily_all(str(d), str(cache))) == 300
+    assert not list(tmp_path.glob("*.tmp"))  # 임시 파일이 남지 않는다

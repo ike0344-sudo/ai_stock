@@ -212,7 +212,7 @@ def _raise_if(ctx) -> None:
 
 
 def tick_run_path(job_id: str) -> Path:
-    return catalog.root() / "state" / "datahub" / "tick_runs" / f"{job_id}.json"
+    return catalog.state_base() / "state" / "datahub" / "tick_runs" / f"{job_id}.json"
 
 
 def collect_ticks(ctx):

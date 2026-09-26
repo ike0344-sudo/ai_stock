@@ -8,12 +8,15 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import shutil
-import time
+import threading
 from pathlib import Path
 from typing import Any, Mapping
 
 import pandas as pd
+
+from .fsutil import retry_perm
 
 RUN_ID_RE = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{6}$")
 _METRIC_KEYS = ("total_return_pct", "cagr_pct", "max_drawdown_pct", "sharpe", "num_trades", "win_rate_pct",
@@ -40,7 +43,7 @@ class FileRunFiles:
         return (self._dir(run_id) / name).exists()
 
     def read_json(self, run_id: str, name: str) -> dict[str, Any]:
-        return json.loads((self._dir(run_id) / name).read_text(encoding="utf-8"))
+        return json.loads(retry_perm((self._dir(run_id) / name).read_text, "utf-8"))  # 다른 스레드가 meta.json 을 교체하는 순간의 공유 위반은 재시도
 
     def read_trades(self, run_id: str) -> pd.DataFrame:
         return pd.read_parquet(self._dir(run_id) / "trades.parquet")
@@ -88,17 +91,13 @@ class FileRunFiles:
     def patch_meta(self, run_id: str, patch: Mapping[str, Any]) -> dict[str, Any]:
         d = self._dir(run_id)
         meta = self.read_json(run_id, "meta.json") | dict(patch)
-        tmp = d / f".meta.{os.getpid()}.tmp"
+        tmp = d / f".meta.{os.getpid()}.{threading.get_ident()}.{secrets.token_hex(3)}.tmp"  # 같은 실행을 스레드 둘이 동시에 고쳐도 tmp 가 안 겹치게
         tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-        for attempt in range(20):  # Windows: 다른 프로세스가 읽는 중이면 교체가 잠깐 거부된다
-            try:
-                os.replace(tmp, d / "meta.json")
-                break
-            except PermissionError:
-                if attempt == 19:
-                    tmp.unlink(missing_ok=True)
-                    raise
-                time.sleep(0.05)
+        try:
+            retry_perm(os.replace, tmp, d / "meta.json")  # Windows: 다른 스레드·프로세스가 읽는 중이면 교체가 잠깐 거부된다
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            raise
         self._cache.pop(run_id, None)
         return meta
 

@@ -8,11 +8,15 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from studio.application.formula_service import FormulaNotFound
+
+from .fsutil import retry_perm
 
 NAME_RE = re.compile(r"^[가-힣A-Za-z0-9_\- ]{1,40}$")
 
@@ -30,7 +34,7 @@ class FileFormulaStore:
         return self.root / f"{name}.json"
 
     def _read(self, p: Path) -> dict[str, Any]:
-        return json.loads(p.read_text(encoding="utf-8-sig"))
+        return json.loads(retry_perm(lambda: p.read_text(encoding="utf-8-sig")))  # 동시 저장이 교체하는 순간 Windows 가 잠깐 거부한다
 
     def list(self) -> list[dict[str, Any]]:
         if not self.root.is_dir():
@@ -64,9 +68,12 @@ class FileFormulaStore:
         rec = {"name": name, "text": text, "description": description,
                "created_at": created or datetime.now().isoformat(timespec="seconds")}
         self.root.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(rec, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        os.replace(tmp, p)
+        tmp = p.with_name(f".{p.name}.{os.getpid()}.{threading.get_ident()}.{secrets.token_hex(3)}.tmp")  # 스레드·호출마다 다른 이름
+        try:
+            tmp.write_text(json.dumps(rec, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            retry_perm(os.replace, tmp, p)
+        finally:
+            tmp.unlink(missing_ok=True)
         return rec
 
     def delete(self, name: str) -> None:

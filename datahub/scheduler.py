@@ -35,7 +35,7 @@ class NotHubOwned(Exception):
 
 
 def _dir() -> Path:
-    return catalog.root() / "state" / "datahub"
+    return catalog.state_base() / "state" / "datahub"
 
 
 def _read(name: str, default):
@@ -48,7 +48,7 @@ def _read(name: str, default):
 def _write(name: str, data) -> None:
     p = _dir() / name
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(f"{name}.{os.getpid()}.tmp")
+    tmp = p.with_name(f"{name}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     tmp.replace(p)
 

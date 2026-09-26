@@ -15,6 +15,8 @@ import contextlib
 import json
 import logging
 import os
+import secrets
+import threading
 import time
 from pathlib import Path
 
@@ -24,7 +26,7 @@ INTERVAL_SECONDS = 15.0
 
 def write_beat(path: Path) -> bool:
     """한 번 쓴다. 실패(교체 중 공유위반 등)는 이번 박자만 건너뛴다 — 15초 뒤 다시, 문턱(120초)이 8번 여유."""
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.{secrets.token_hex(3)}.tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_text(json.dumps({"updated_at": time.time(), "pid": os.getpid()}), encoding="utf-8")

@@ -3,6 +3,7 @@
 명령을 **만들기만** 한다 — 실행은 작업 실행기(jobrunner, module-2 뒤쪽)가 한다. 그래서 서버 없이 테스트된다.
 허브가 띄우는 수집은 환경변수 `DATAHUB_TRIGGER=hub`·`DATAHUB_JOB_ID` 를 달아 장부가 출처를 안다.
 """
+import threading
 import json
 import os
 import sys
@@ -122,7 +123,7 @@ def archive_minute_al(codes: list[str] | None = None) -> Command:
 
 
 def _attempts_path():
-    return catalog.root() / "state" / "datahub" / "tick_attempts.json"
+    return catalog.state_base() / "state" / "datahub" / "tick_attempts.json"
 
 
 def load_attempts() -> dict:
@@ -136,7 +137,7 @@ def load_attempts() -> dict:
 def _save(state: dict) -> None:
     p = _attempts_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
     tmp.replace(p)
 

@@ -8,6 +8,7 @@
 - 날짜를 인덱스로 저장한다(_resample_minute 이 index.normalize() 로 날짜별로 자른다).
 - `merge` 는 잠금을 잡지 않는다 — 호출자(fetch_minute·CLI)가 이미 `write("minute_al")` 안에 있다.
 """
+import threading
 import os
 from pathlib import Path
 
@@ -66,7 +67,7 @@ def merge(code: str, *frames: pd.DataFrame | None) -> dict:
     if len(df) < before:
         raise RuntimeError(f"{code}: 병합 후 행이 줄었다({before} -> {len(df)}) — 저장하지 않는다")
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     df.to_parquet(tmp, compression="zstd")
     os.replace(tmp, p)
     return {"before": before, "after": len(df)}
