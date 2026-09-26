@@ -16,6 +16,7 @@ from backtesting.final_strategy import (
     generate_signals,
     train_and_save_final_model,
 )
+from backtesting.final_strategy import MIN_TRADE_VALUE
 from backtesting.ml_entry_filter import FEATURE_COLUMNS, load_model, predict_quality_proba
 
 
@@ -28,8 +29,11 @@ def _daily(dates: list[str], closes: list[float]) -> pd.DataFrame:
 
 def _rising_minute(day: str, closes: list[float]) -> pd.DataFrame:
     index = pd.date_range(f"{day} 09:00", periods=len(closes), freq="1min")
+    # 분당 거래대금(종가x거래량)이 MIN_TRADE_VALUE를 넘도록 종가에서 역산한다 —
+    # 하한 상수가 바뀌어도 픽스처가 조용히 신호를 잃지 않게 리터럴을 쓰지 않는다.
+    volume = int(MIN_TRADE_VALUE / min(closes)) + 1
     return pd.DataFrame(
-        {"open": closes, "high": closes, "low": closes, "close": closes, "volume": [20_000_000] * len(closes)},
+        {"open": closes, "high": closes, "low": closes, "close": closes, "volume": [volume] * len(closes)},
         index=index,
     )
 
