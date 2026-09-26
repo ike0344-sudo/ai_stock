@@ -159,6 +159,7 @@ function IndFields({ op, onChange, cat, mode, tid }: { op: IndOperand; onChange:
         onChange={(name) => onChange(indOperand(cat, name, op))} />
       {def && <Popover content={<IndicatorInfo def={def} />} trigger="click"><InfoCircleOutlined style={{ cursor: 'pointer', color: '#8c8c8c' }} data-testid={`${tid}-info`} /></Popover>}
       {(def?.params ?? []).map((p) => {
+        const dailyUnit = mode !== 'intraday' && mode !== 'tick' || (op.tf ?? '').startsWith('daily') // 일봉 실행·일봉 시간 단위면 서버 라벨 끝의 "(봉)" 을 "(일)" 로(문장 카드 슬롯 단위와 같은 규칙)
         const v = op.params?.[p.name] ?? p.default
         if (p.kind === 'enum') {
           return <Select key={p.name} size="small" style={{ width: 84 }} value={v as string} options={(p.choices ?? []).map((c) => ({ value: c, label: FIELD_KO[c] ?? c }))} onChange={(x) => setParam(p.name, x)} />
@@ -168,7 +169,7 @@ function IndFields({ op, onChange, cat, mode, tid }: { op: IndOperand; onChange:
         }
         return (
           <Space key={p.name} size={2}>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>{p.label}</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>{dailyUnit ? p.label.replace(/\(봉\)$/, '(일)') : p.label}</Typography.Text>
             <NumField hint={p.name === 'n' ? `${op.name}_n` : p.name} min={p.lo ?? undefined} max={p.hi ?? undefined} step={p.kind === 'float' ? 0.1 : 1} width={72}
               value={v as number} onChange={(x) => setParam(p.name, x as ParamValue)} data-testid={`${tid}-param-${p.name}`} />
           </Space>

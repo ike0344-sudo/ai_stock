@@ -3,7 +3,7 @@
 // 문장에 안 맞는 조건은 카드 대신 직접 조립 행 그대로(풀이 + 그 자리에서 편집), "직접 조립(고급)" 탭으로 전체를 옛 조립기로 볼 수 있다.
 import { CopyOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { Button, Card, Input, InputNumber, Modal, Radio, Segmented, Select, Skeleton, Space, Tooltip, Typography } from 'antd'
+import { Button, Card, Input, InputNumber, Modal, Radio, Segmented, Select, Skeleton, Space, Tag, Tooltip, Typography } from 'antd'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError } from '@/api/client'
 import { buildTemplate, matchTemplates } from '@/api/studio'
@@ -175,7 +175,7 @@ function SentenceCard({ tpl, match, mode, barMinutes, source, actions, onChange 
         </Space>
         {actions}
       </Space>
-      <div><Typography.Text type="secondary" style={{ fontSize: 12 }} data-testid="card-hint">{tpl.hint}</Typography.Text></div>
+      <div><Typography.Text type="secondary" style={{ fontSize: 12 }} data-testid="card-hint">{tpl.hint}</Typography.Text>{tpl.auto && <Tag style={{ marginLeft: 6 }} data-testid="card-auto">기본 문장</Tag>}</div>
       {tpl.warn && <div><Typography.Text type="warning" style={{ fontSize: 12 }} data-testid="card-warn">⚠ {tpl.warn}</Typography.Text></div>}
       {errText.length > 0 && <div><Typography.Text type="danger" style={{ fontSize: 12 }} data-testid="card-error">{errText.join(' · ')}</Typography.Text></div>}
       {sentence && !errText.length && <span hidden data-testid="card-built">{sentence}</span>}
@@ -184,43 +184,67 @@ function SentenceCard({ tpl, match, mode, barMinutes, source, actions, onChange 
 }
 
 // ───────────── [+ 조건 추가] 템플릿 고르기 ─────────────
+/** 검색 — 낱말 전부 포함(대소문자 무시), 문장·예시·설명·분류·태그(사용 지표 이름) 대상 */
+const matchesQuery = (t: CondTemplate, q: string): boolean => {
+  const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (!words.length) return true
+  const hay = `${t.sentence} ${t.example} ${t.hint} ${t.category_label} ${t.tags.join(' ')}`.toLowerCase()
+  return words.every((w) => hay.includes(w))
+}
+
 function TemplatePicker({ open, onClose, tpl, role, mode, barMinutes, source, onPick }: {
   open: boolean; onClose: () => void; tpl: CondTemplates; role: 'entry' | 'exit'; mode: Mode; barMinutes: number; source: string; onPick: (c: Condition) => void
 }) {
   const [q, setQ] = useState('')
-  const [cat, setCat] = useState('all')
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  useEffect(() => { if (open) { setQ(''); setCat('all'); setErr(null) } }, [open])
-  const list = useMemo(() => {
-    const n = q.trim().toLowerCase()
-    return tpl.templates.filter((t) => (role === 'exit' || t.role !== 'exit') && (cat === 'all' || t.category === cat)
-      && (!n || `${t.sentence} ${t.example} ${t.hint} ${t.category_label} ${t.tags.join(' ')}`.toLowerCase().includes(n)))
-  }, [tpl, role, cat, q])
+  const listRef = useRef<HTMLDivElement>(null)
+  useEffect(() => { if (open) { setQ(''); setErr(null) } }, [open])
   const cats = tpl.categories.filter((c) => c.key !== 'exit' || role === 'exit')
+  const groups = useMemo(() => cats.map((c) => ({ ...c, items: tpl.templates.filter((t) => t.category === c.key && (role === 'exit' || t.role !== 'exit') && matchesQuery(t, q)) })).filter((g) => g.items.length > 0),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tpl, role, q])
+  const searching = q.trim() !== ''
+  const total = groups.reduce((n, g) => n + g.items.length, 0)
 
   const pick = async (t: CondTemplate) => {
     if (!t.available || busy) return
     setBusy(true); setErr(null)
     try { onPick((await buildTemplate(t.id, undefined, mode, barMinutes, source)).condition) } catch (e) { setErr(e instanceof ApiError ? e.message : String(e)) } finally { setBusy(false) }
   }
+  // 분류 버튼 = 그 분류로 스크롤(다른 분류를 숨기지 않는다)
+  const goto = (key: string) => {
+    const box = listRef.current
+    const el = box?.querySelector<HTMLElement>(`[data-cat="${key}"]`)
+    if (box && el) box.scrollTo?.({ top: el.offsetTop, behavior: 'smooth' })
+  }
+
+  const row = (t: CondTemplate) => (
+    <Tooltip key={t.id} title={t.available ? undefined : t.reason}>
+      <div role="button" tabIndex={t.available ? 0 : -1} aria-disabled={!t.available} data-testid={`tpl-${t.id}`} onClick={() => void pick(t)} onKeyDown={(e) => { if (e.key === 'Enter') void pick(t) }}
+        style={{ padding: '4px 8px', borderRadius: 4, cursor: t.available ? 'pointer' : 'not-allowed', opacity: t.available ? 1 : 0.45, border: '1px solid rgba(128,128,128,0.25)', lineHeight: 1.35 }}>
+        <div style={{ fontSize: 13 }}><Typography.Text strong>{t.example}</Typography.Text>{t.auto && <Tag style={{ marginLeft: 4, fontSize: 11, lineHeight: '16px', padding: '0 4px' }}>기본 문장</Tag>}</div>
+        <div><Typography.Text type="secondary" style={{ fontSize: 11 }}>{t.available ? t.hint : t.reason}</Typography.Text></div>
+      </div>
+    </Tooltip>
+  )
 
   return (
-    <Modal open={open} onCancel={onClose} footer={null} width={720} title="어떤 조건을 넣을까요? — 문장을 고르면 빈칸만 채우면 돼요" destroyOnHidden data-testid="tpl-picker">
-      <Space direction="vertical" style={{ width: '100%' }} size={8}>
-        <Input.Search allowClear autoFocus placeholder="검색 — 예: 거래대금, 골든크로스, 신고가, 급등" value={q} onChange={(e) => setQ(e.target.value)} data-testid="tpl-search" />
-        <Segmented size="small" value={cat} onChange={(v) => setCat(String(v))} data-testid="tpl-cats" options={[{ label: '전체', value: 'all' }, ...cats.map((c) => ({ label: c.label, value: c.key }))]} />
+    <Modal open={open} onCancel={onClose} footer={null} width="min(1500px, 96vw)" style={{ top: 12 }} title="어떤 조건을 넣을까요? — 문장을 고르면 빈칸만 채우면 돼요" destroyOnHidden data-testid="tpl-picker">
+      <Space direction="vertical" style={{ width: '100%' }} size={6}>
+        <Input.Search allowClear autoFocus placeholder="검색 — 예: 거래대금, 골든크로스, 엔벨로프, CCI, 일목" value={q} onChange={(e) => setQ(e.target.value)} data-testid="tpl-search" />
+        <Space wrap size={4} data-testid="tpl-cats">
+          <Typography.Text type="secondary" style={{ fontSize: 12 }} data-testid="tpl-count">{searching ? `${total}개 문장이 맞아요` : `문장 ${total}개 전부 아래에 있어요`} · 분류로 이동:</Typography.Text>
+          {groups.map((g) => <Button key={g.key} size="small" onClick={() => goto(g.key)} data-testid={`tpl-cat-${g.key}`}>{g.label} ({g.items.length})</Button>)}
+        </Space>
         {err && <Typography.Text type="danger">{err}</Typography.Text>}
-        <div style={{ maxHeight: 440, overflowY: 'auto' }} data-testid="tpl-list">
-          {list.length === 0 && <Typography.Text type="secondary">맞는 문장이 없어요 — 다른 말로 검색하거나 [직접 조립(고급)] 을 써 보세요</Typography.Text>}
-          {list.map((t) => (
-            <Tooltip key={t.id} title={t.available ? undefined : t.reason}>
-              <div role="button" tabIndex={t.available ? 0 : -1} aria-disabled={!t.available} data-testid={`tpl-${t.id}`} onClick={() => void pick(t)} onKeyDown={(e) => { if (e.key === 'Enter') void pick(t) }}
-                style={{ padding: '8px 10px', borderRadius: 6, cursor: t.available ? 'pointer' : 'not-allowed', opacity: t.available ? 1 : 0.45, borderBottom: '1px solid rgba(128,128,128,0.2)' }}>
-                <div><Typography.Text strong>{t.example}</Typography.Text> <Typography.Text type="secondary" style={{ fontSize: 12 }}>· {t.category_label}</Typography.Text></div>
-                <div><Typography.Text type="secondary" style={{ fontSize: 12 }}>{t.available ? t.hint : t.reason}</Typography.Text></div>
-              </div>
-            </Tooltip>
+        <div ref={listRef} style={{ maxHeight: 'calc(100vh - 230px)', overflowY: 'auto', position: 'relative' }} data-testid="tpl-list">
+          {groups.length === 0 && <Typography.Text type="secondary">맞는 문장이 없어요 — 다른 말로 검색하거나 [직접 조립(고급)] 을 써 보세요</Typography.Text>}
+          {groups.map((g) => (
+            <div key={g.key} data-cat={g.key} data-testid={`tpl-group-${g.key}`} style={{ marginBottom: 10 }}>
+              <div style={{ position: 'sticky', top: 0, zIndex: 1, padding: '2px 0', background: 'var(--ant-color-bg-elevated, #fff)' }}><Typography.Text strong>{g.label}</Typography.Text> <Typography.Text type="secondary">({g.items.length})</Typography.Text></div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 4 }}>{g.items.map(row)}</div>
+            </div>
           ))}
         </div>
       </Space>

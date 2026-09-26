@@ -3,7 +3,7 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Route, Routes } from 'react-router-dom'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { OP_LABEL, categoryOf, indicatorSupport, indicatorTree, isUnaryOp, isWithinOp, matchesQuery, timeframeOptions } from '@/lib/conditionMeta'
 import { applyRecipe, changeOp, newSpec, setTickEntrySource } from '@/lib/spec'
 import { BacktestPage } from '@/pages/BacktestPage'
@@ -944,6 +944,8 @@ describe('문장 빈칸 채우기 카드 (설계서 §5.5, c10)', () => {
         slots: [{ name: 'x', kind: 'number', label: '몇 %', default: 1, unit: '%', lo: 0.1, hi: 30, integer: false }] },
       { id: 'pos_profit', category: 'exit', category_label: '팔 때(청산)', sentence: '산 가격보다 {x}% 이상 올랐다(수익)', example: '산 가격보다 5% 이상 올랐다(수익)', hint: '수익이 나면 팔아요.', warn: '', tags: ['익절'], role: 'exit', available: true, reason: '',
         slots: [{ name: 'x', kind: 'number', label: '몇 %', default: 5, unit: '%', lo: 0.1, hi: 1000, integer: false }] },
+      { id: 'env_up', category: 'candle', category_label: '오르내림·캔들', sentence: '{tf}가격이 엔벨로프({n}봉) 위쪽 선을 넘었다', example: '가격이 엔벨로프(20봉) 위쪽 선을 넘었다', hint: '엔벨로프 위쪽 선을 뚫으면 참이에요.', warn: '', tags: ['엔벨로프', 'envelope_upper'], role: 'both', available: true, reason: '', auto: true,
+        slots: [{ name: 'n', kind: 'number', label: '몇 봉', default: 20, unit: '봉', lo: 2, hi: 500, integer: true }] },
       { id: 'cum_value', category: 'volume', category_label: '거래량·거래대금', sentence: '오늘 지금까지 거래대금이 {x}억 이상이다', example: '오늘 지금까지 거래대금이 100억 이상이다', hint: '오늘 누적이에요.', warn: '', tags: ['누적'], role: 'both', available: false, reason: '분봉 실행에서만 쓸 수 있어요', slots: [] },
     ],
   }
@@ -959,6 +961,7 @@ describe('문장 빈칸 채우기 카드 (설계서 §5.5, c10)', () => {
     },
     'POST /api/meta/condition-templates/match': (call) => ({
       data: (call.body as { conditions: Condition[] }).conditions.map((c) => (c.left.kind === 'ind' && c.left.name === 'value_eok' ? { id: 'value_eok', category: 'volume', values: { x: num(c), cmp: c.op }, sentence: `거래대금이 ${num(c)}억 이상이다` }
+        : c.right?.kind === 'ind' && c.right.name === 'envelope_upper' ? { id: 'env_up', category: 'candle', values: { n: 20 }, sentence: '가격이 엔벨로프(20봉) 위쪽 선을 넘었다' }
         : c.left.kind === 'ind' && c.left.name === 'change_pct' ? { id: 'change_up', category: 'candle', values: { x: num(c) }, sentence: '가격이 직전 봉보다 이상 올랐다' } : null)),
     }),
     ...over,
@@ -1003,6 +1006,9 @@ describe('문장 빈칸 채우기 카드 (설계서 §5.5, c10)', () => {
     page()
     await userEvent.click(await screen.findByTestId('cards-strategy.entry-add'))
     const picker = await screen.findByTestId('tpl-picker')
+    // 처음 열면 분류를 접지 않고 전부 보인다(사용자 규칙: 정보는 접지 말고 다 보여주기)
+    for (const id of ['value_eok', 'change_up', 'env_up', 'cum_value']) expect(within(picker).getByTestId(`tpl-${id}`)).toBeInTheDocument()
+    expect(within(picker).getByTestId('tpl-count')).toHaveTextContent('전부 아래에')
     expect(within(picker).getByTestId('tpl-cum_value')).toHaveAttribute('aria-disabled', 'true')
     expect(within(picker).queryByTestId('tpl-pos_profit')).not.toBeInTheDocument()
     await userEvent.type(within(picker).getByRole('searchbox'), '급등')
@@ -1015,6 +1021,36 @@ describe('문장 빈칸 채우기 카드 (설계서 §5.5, c10)', () => {
     page()
     await userEvent.click(await screen.findByTestId('cards-strategy.exit-add'))
     expect(await screen.findByTestId('tpl-pos_profit')).toBeInTheDocument()
+  })
+
+  it('분류 버튼은 그 분류로 스크롤만 한다 — 다른 분류를 숨기지 않는다', async () => {
+    mockApi(tplRoutes())
+    page()
+    await userEvent.click(await screen.findByTestId('cards-strategy.entry-add'))
+    const picker = await screen.findByTestId('tpl-picker')
+    const scrollTo = vi.fn()
+    ;(within(picker).getByTestId('tpl-list') as HTMLElement).scrollTo = scrollTo
+    await userEvent.click(within(picker).getByTestId('tpl-cat-candle'))
+    expect(scrollTo).toHaveBeenCalledTimes(1)
+    for (const g of ['volume', 'candle']) expect(within(picker).getByTestId(`tpl-group-${g}`)).toBeInTheDocument()
+    expect(within(picker).getByTestId('tpl-value_eok')).toBeInTheDocument()
+    expect(within(picker).getByTestId('tpl-cat-volume')).toHaveTextContent('거래량·거래대금 (')
+  })
+
+  it('검색: 낱말이 전부 들어간 문장만(태그의 지표 이름도), 맞는 분류는 저절로 펼쳐지고 자동 문장에는 "기본 문장" 표시 — 고르면 카드에도 표시', async () => {
+    mockApi(tplRoutes({ 'POST /api/meta/condition-templates/build': (call) => (call.body as { id: string }).id === 'env_up'
+      ? { data: { condition: { left: { kind: 'field', name: 'close' }, op: 'gt', right: { kind: 'ind', name: 'envelope_upper', params: { n: 20 } } }, sentence: '가격이 엔벨로프(20봉) 위쪽 선을 넘었다', values: { n: 20 } } } : { data: { condition: eokCond(20), sentence: 'x', values: {} } } }))
+    page()
+    await userEvent.click(await screen.findByTestId('cards-strategy.entry-add'))
+    const picker = await screen.findByTestId('tpl-picker')
+    await userEvent.type(within(picker).getByRole('searchbox'), 'ENVELOPE_upper 위쪽')
+    const row = await within(picker).findByTestId('tpl-env_up')
+    expect(row).toHaveTextContent('기본 문장')
+    expect(within(picker).queryByTestId('tpl-value_eok')).not.toBeInTheDocument()
+    expect(within(picker).getByTestId('tpl-count')).toHaveTextContent('1개 문장이 맞아요')
+    await userEvent.click(row)
+    const card = await screen.findByTestId('card-env_up', {}, { timeout: 4000 })
+    expect(within(card).getByTestId('card-auto')).toHaveTextContent('기본 문장')
   })
 
   it('빈칸 값이 틀리면 서버가 알린 쉬운 말이 카드에 빨갛게 뜨고 명세는 안 바뀐다', async () => {
@@ -1076,5 +1112,18 @@ describe('기간 칸 데이터 범위 표시 (19:22) — 불러오는 중과 진
     await userEvent.click(screen.getByTestId('ranges-retry'))
     await waitFor(() => expect(screen.getByTestId('panel-period')).toHaveTextContent('데이터 2'))
     expect(calls.filter((c) => c.path.startsWith('/api/meta/data-ranges')).length).toBeGreaterThanOrEqual(2)
+  })
+})
+
+
+describe('파라미터 라벨 단위 (22:06 execution-agent c12 편지)', () => {
+  it('일봉 실행이면 서버 라벨 끝의 "(봉)" 이 "(일)" 로, 분봉 실행이면 "(봉)" 그대로 — 한글 라벨은 서버 값 그대로', async () => {
+    const cat = { ...realCatalog, indicators: realCatalog.indicators.map((d) => (d.name === 'lowest' ? { ...d, params: d.params.map((p) => (p.name === 'n' ? { ...p, label: '가장 긴 평균 기간(봉)' } : p)) } : d)) }
+    mockApi(routes({}, cat))
+    page()
+    const exit = await screen.findByTestId('group-strategy.exit')
+    expect(exit).toHaveTextContent('가장 긴 평균 기간(일)')
+    await toIntraday()
+    await waitFor(() => expect(screen.getByTestId('group-strategy.exit')).toHaveTextContent('가장 긴 평균 기간(봉)'))
   })
 })

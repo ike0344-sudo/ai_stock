@@ -410,6 +410,8 @@ export interface CondTemplate {
   hint: string; warn: string; tags: string[]
   role: 'entry' | 'exit' | 'both'
   available: boolean; reason: string
+  /** true = 카탈로그로 자동 만든 기본 문장(손문장보다 딱딱하다) — 카드에 "기본 문장" 표시 */
+  auto?: boolean
   slots: TplSlot[]
 }
 export interface CondTemplates { mode: Mode; bar_minutes: number; source: string; categories: { key: string; label: string }[]; templates: CondTemplate[] }
