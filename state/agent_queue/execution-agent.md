@@ -43,3 +43,9 @@
 
 - [x] (완료 2026-09-26) (lead 지시 2026-09-26 16:45, studio-conditions c9 — 사용자 "몇분봉에 몇억 이상") **수식 숫자에 억·만 단위**
       `M5.VALUE >= 20억`, `5000만`, `1.5억`, `1억5000만` 같은 숫자를 해석(억=1e8, 만=1e4, 조=1e12). 모호하면 오류 위치로. 기존 수식 결과 불변 + 단위 테스트. git commit 금지. 보고: STATUS 한 줄.
+
+- [x] (완료 2026-09-26, 보고: state/agent_reports/execution-agent_20260926-183534_conditions_c10_templates.md) (lead 지시 2026-09-26 18:30 — **사용자 "조건식 만드는게 좀 어려운데 좀 더 쉽게 직관적으로 만들 수 있게 해줘"**) **조건 템플릿(문장 빈칸 채우기) — 도메인 + API**
+      설계서 §5.5(v0.6). `studio/domain/conditions/templates.py`: 약 40개 문장 템플릿(분류·문장·빈칸(숫자+단위/시간 단위/선택지, 범위·기본값)·모드·예시·진입/청산) + `build(값)→조건 AST` + `match(AST)→(id, 값)|None`.
+      예: "{tf} 이 직전 봉보다 {x}% 이상 올랐다"(change_pct n=1, tf), "{tf} 거래대금이 {x}억 {cmp}"(value_eok), "종가가 {n}일 최고가를 넘었다"(일봉 highest / 분봉에선 D.HIGHEST), "{a}일선이 {b}일선 위", "RSI({n})가 {x} 이하", "매수가 대비 {x}% 수익"(pos.return_pct) …
+      지표 이름·파라미터는 카탈로그(`/api/meta/indicators`)와 맞출 것. API: `studio/api/routes/templates.py`(GET `/api/meta/condition-templates?mode=`) — **app.py 연결·화면은 monitoring-agent 몫, 끝나면 편지**.
+      테스트: 템플릿마다 build → `validate_against` 통과(지원 모드), build→match 되돌리기 동일, 골든 몇 개, 문장이 풀이 문장과 어긋나지 않는지. 사용자에게 보이는 문장은 쉬운 말. git commit 금지. 보고: STATUS + 짧은 보고서(템플릿 전체 목록 표).

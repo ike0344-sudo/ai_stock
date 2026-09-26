@@ -672,3 +672,8 @@
       설계서 §3.4c(v0.5). `ind_volume.py`(data-agent 파일 — 고치기 직전 다시 읽고 Edit)·`tick.py`·TickCatalog 칸·카탈로그 메타(정의·억 단위·예시).
       분봉 대금은 종가×거래량 근사(경고), 틱은 가격×수량 정확값. 틱 창은 `(s−w, s]`, 진입은 s 뒤(기존 규칙). 레시피 2개(분봉 5분봉 ≥20억+양봉+VWAP 위 / 틱 최근 1분 ≥10억).
       테스트: 손계산(5분봉 묶음 대금·합·틱 창 경계) + 카나리아. 끝나면 monitoring(화면 억 단위)·strategy(풀이 문장) 에 편지. git commit 금지. 보고: STATUS + 짧은 보고서.
+
+- [x] (lead 지시 2026-09-26 17:20 — **사용자 "백테스트 중에 시각효과, 차트가 지나가는 모습 만들어줘"**) **엔진 진행 중 중간 곡선 보내기(실행 중 실시간 수익곡선용)**
+      지금 진행률은 단계(load/signals/engine/metrics)만 알린다. 엔진(일봉 포트폴리오·단일·분봉·틱) 봉 루프에서 **약 200점 이하로 솎아** `{date, equity, cash, n_positions, n_trades, last_event?}` 를
+      progress 콜백으로 보내고, 서비스·작업 처리기가 `ctx.progress(..., extra={"live_curve": [...]})`(또는 jobrunner 가 받는 모양 — monitoring-agent 와 맞춰라)로 progress.json 에 누적(최대 300점, 파일 크기 상한).
+      규칙: **결과 불변**(진행 콜백 켜고 끔에 따라 거래·지표 동일 테스트), 오버헤드 ≤5%(실측), 그리드·워크포워드는 조합 단위 진행만(곡선 없음 가능). 끝나면 monitoring-agent 에 모양 편지. git commit 금지. 보고: STATUS 한 줄.
