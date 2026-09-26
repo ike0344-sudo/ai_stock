@@ -130,27 +130,50 @@ def _resample_minute(df: pd.DataFrame, target_minutes: int) -> pd.DataFrame:
     return pd.concat(parts).sort_index()
 
 
+def _read_local(path_no_ext: str) -> pd.DataFrame | None:
+    """같은 이름의 parquet이 있으면 그걸, 없으면 CSV를 읽는다.
+
+    분봉은 파일 하나가 3MB대라 parquet이 확실히 유리하다 — 실측(2026-09-24,
+    무작위 12종목): 용량 81% 절감(3.25GB→0.60GB), 읽기 2.8배.
+    **반면 일봉(55KB)·월봉(13KB)은 parquet이 5~10배 느리다** — 메타데이터
+    오버헤드가 본문보다 커서다. 그래서 형식을 강제하지 않고 **있는 것을 쓴다**:
+    parquet으로 바꾸면 이득인 것만 바꾸면 되고, 코드는 그대로 둔다.
+
+    전환 중에 두 형식이 섞여 있어도 동작해야 하므로 parquet을 먼저 본다.
+    """
+    pq = f"{path_no_ext}.parquet"
+    csv = f"{path_no_ext}.csv"
+    # **CSV 가 더 새것이면 CSV 를 읽는다.** 분봉을 갱신하는 쪽(updater.update_minute,
+    # backfill_universe 등)은 CSV 에만 쓴다 — parquet 을 우선하기만 하면 매일 갱신된
+    # 내용이 무시되고 낡은 parquet 이 조용히 읽힌다(에러도 안 나서 더 위험하다).
+    # 실제로 전환 중 이 레이스를 겪었다: 2026-09-24 변환 도중 backfill_universe 가
+    # 같은 CSV 에 덧붙여, 10종목의 parquet 이 CSV 보다 행이 적은 채로 남았다.
+    # 갱신기가 parquet 까지 쓰게 되면 이 분기는 자연히 parquet 쪽으로 간다.
+    if os.path.exists(pq):
+        if not os.path.exists(csv) or os.path.getmtime(pq) >= os.path.getmtime(csv):
+            return pd.read_parquet(pq)
+    if os.path.exists(csv):
+        return pd.read_csv(csv, index_col=0, parse_dates=True)
+    return None
+
+
 def _load_local_series(code: str, interval: str, data_dir: str, subdir: str) -> pd.DataFrame | None:
-    """download-universe/update-top35가 저장한 로컬 CSV를 읽는다.
+    """download-universe/update-top35가 저장한 로컬 파일을 읽는다 (parquet 우선, CSV 폴백).
 
     분봉은 항상 1분봉으로 저장되어 있으므로, interval이 그보다 성긴 분 단위면
     로컬 1분봉을 재표본화해 맞춘다. 로컬 파일이 없으면 None (호출자가 API로 폴백).
     """
     if interval == "day":
-        path = os.path.join(data_dir, subdir, "daily", f"{code}.csv")
-        if not os.path.exists(path):
-            return None
-        return pd.read_csv(path, index_col=0, parse_dates=True)
+        return _read_local(os.path.join(data_dir, subdir, "daily", code))
 
-    path = os.path.join(data_dir, subdir, "minute", f"{code}.csv")
-    if not os.path.exists(path):
-        return None
     try:
         target_minutes = int(interval)
     except ValueError:
         return None
 
-    base = pd.read_csv(path, index_col=0, parse_dates=True)
+    base = _read_local(os.path.join(data_dir, subdir, "minute", code))
+    if base is None:
+        return None
     return _resample_minute(base, target_minutes)
 
 

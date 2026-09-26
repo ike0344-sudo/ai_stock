@@ -383,6 +383,44 @@ def test_load_local_series_returns_none_when_file_missing(tmp_path):
     assert result is None
 
 
+def test_load_local_series_reads_parquet_when_present(tmp_path):
+    """분봉 3.1GB를 parquet으로 옮겨도 읽는 쪽이 그대로 동작해야 한다."""
+    minute_dir = tmp_path / "stocks" / "minute"
+    minute_dir.mkdir(parents=True)
+    _minute_df("2026-01-01", ["09:00", "09:01", "09:02", "09:03"], [100, 102, 98, 101]).to_parquet(
+        minute_dir / "000660.parquet")
+
+    result = _load_local_series("000660", "5", str(tmp_path), "stocks")
+
+    assert result is not None and len(result) == 1
+
+
+def test_parquet_and_csv_give_identical_result(tmp_path):
+    """[회귀] 형식만 바꿨는데 값이 달라지면 안 된다 — 조용히 틀리는 종류라 눈에 안 보인다."""
+    df = _minute_df("2026-01-01", ["09:00", "09:01", "09:02", "09:03"], [100, 102, 98, 101])
+    for name, sub in (("csv", "a"), ("parquet", "b")):
+        d = tmp_path / sub / "stocks" / "minute"
+        d.mkdir(parents=True)
+        (df.to_csv if name == "csv" else df.to_parquet)(d / f"000660.{name}")
+
+    from_csv = _load_local_series("000660", "5", str(tmp_path / "a"), "stocks")
+    from_pq = _load_local_series("000660", "5", str(tmp_path / "b"), "stocks")
+
+    pd.testing.assert_frame_equal(from_csv, from_pq)
+
+
+def test_parquet_wins_over_csv_during_migration(tmp_path):
+    """전환 중엔 두 형식이 공존한다 — 어느 쪽을 읽는지 확정해 둔다(parquet 우선)."""
+    d = tmp_path / "stocks" / "daily"
+    d.mkdir(parents=True)
+    _df(["2026-01-01", "2026-01-02"]).to_csv(d / "000660.csv")
+    _df(["2026-01-01"]).to_parquet(d / "000660.parquet")
+
+    result = _load_local_series("000660", "day", str(tmp_path), "stocks")
+
+    assert len(result) == 1, "parquet이 있으면 parquet을 읽어야 한다"
+
+
 def test_load_local_series_resamples_minute_csv_to_requested_interval(tmp_path):
     minute_dir = tmp_path / "stocks" / "minute"
     minute_dir.mkdir(parents=True)
@@ -461,3 +499,23 @@ def test_load_index_history_uses_local_data_when_available(tmp_path):
     )
 
     assert len(result) > 0
+
+
+def test_stale_parquet_loses_to_newer_csv(tmp_path):
+    """갱신기(updater.update_minute 등)는 CSV 에만 쓴다 — parquet 을 무조건 우선하면
+    매일 갱신된 내용이 무시되고 낡은 parquet 이 **에러 없이** 읽힌다.
+    실제 사고: 2026-09-24 전환 중 backfill_universe 가 같은 CSV 에 덧붙여
+    10종목의 parquet 이 CSV 보다 행이 적은 채로 남았다."""
+    import os
+    import time
+
+    d = tmp_path / "stocks" / "daily"
+    d.mkdir(parents=True)
+    _df(["2026-01-01"]).to_parquet(d / "000660.parquet")        # 낡은 parquet (1행)
+    time.sleep(0.01)
+    _df(["2026-01-01", "2026-01-02"]).to_csv(d / "000660.csv")  # 더 새 CSV (2행)
+    os.utime(d / "000660.csv", (time.time() + 5, time.time() + 5))
+
+    result = _load_local_series("000660", "day", str(tmp_path), "stocks")
+
+    assert len(result) == 2, "CSV 가 더 새것이면 CSV 를 읽어야 한다(낡은 parquet 금지)"

@@ -227,10 +227,22 @@ class KiwoomClient:
     def get_minute_chart(self, stock_code: str, tic_scope: str = "1", exchange: str | None = None) -> dict:
         """주식분봉차트조회요청 (ka10080). tic_scope: 1/3/5/10/15/30/45/60분. 첫 페이지만 반환.
 
-        exchange 미지정 시 stex_tp 필드 자체를 안 보낸다 — 라이브로 확인한 결과 이
-        경우가 "1"(KRX)과 사실상 동일하게 동작한다(거래량/종가가 stex_tp="3"(통합)일
-        때만 눈에 띄게 달라짐 — 통합은 NXT 체결까지 섞여 같은 분봉의 거래량이 더 크고
-        종가도 달라짐). 명시적으로 "3"을 넘기면 그 분봉에 NXT 체결까지 포함된다."""
+        ⚠️ **stex_tp 는 이 TR 에서 무시된다. 거래소는 종목코드 접미사로 고른다.**
+        실측 2026-09-21 삼성전자 하루 거래대금(= 09:00~20:00 분봉 합):
+
+            stex_tp="1" / "2" / "3"  -> 전부 6.04조 (KRX 전용, 값이 완전히 동일)
+            코드 "005930"            -> 6.04조  KRX
+            코드 "005930_NX"         -> 3.16조  NXT
+            코드 "005930_AL"         -> 9.20조  통합(KRX+NXT)
+
+        같은 사실을 kospi-theme-engine/scripts/fetch_minute.py:89 가 2026-08-13 에
+        이미 적어뒀다("stex_tp 파라미터로는 바뀌지 않는다"). 통합 분봉이 필요하면
+        **코드에 _AL 을 붙여서** 부를 것 — exchange="3" 을 넘겨봐야 KRX 가 온다.
+
+        exchange 인자는 하위호환으로 남겨둔다(넘기면 body 에 실리기는 한다). 지우면
+        호출부가 전부 깨지는데, 지금 그 호출부들(live_monitor/trading_loop)이 이 값에
+        의존해 "통합을 쓰고 있다"고 믿고 있어 별도 정리가 필요하다 —
+        state/agent_reports/data-agent_20260921-2006_afterhours_top35.md 참고."""
         body = {"stk_cd": stock_code, "tic_scope": tic_scope, "upd_stkpc_tp": "1"}
         if exchange is not None:
             body["stex_tp"] = exchange
