@@ -3,6 +3,7 @@
 import { Alert, Card, Col, Descriptions, Row, Space, Table, Tag, Typography } from 'antd'
 import { KRX_WARNING } from '@/components/builder/ModePanels'
 import { DASH, fmtDate, fmtNum } from '@/lib/format'
+import { StockName, stockLabel, useStockNames } from '@/lib/stockNames'
 import type { DiffStats, IntradaySummary, RunDetail, TickRefineSummary, TickSummary } from '@/types/studio'
 
 const won = (v: number | null | undefined) => (v === null || v === undefined ? DASH : `${fmtNum(Math.round(v))}원`)
@@ -31,7 +32,9 @@ function Stat({ title, value, sub }: { title: string; value: React.ReactNode; su
 }
 
 /** 분봉 커버리지 — 기대 (날짜,종목) 쌍 중 분봉이 실제로 있던 쌍, 분봉이 아예 없던 종목, 종목별 보관 기간 */
-export function IntradayCoverage({ s, name }: { s: IntradaySummary; name: (code: string) => string }) {
+export function IntradayCoverage({ s }: { s: IntradaySummary }) {
+  const names = useStockNames()
+  const name = (c: string) => stockLabel(names, c)
   const periods = Object.entries(s.code_periods ?? {}).map(([code, [a, b]]) => ({ code, first: a, last: b }))
   return (
     <Space direction="vertical" size="small" style={{ width: '100%' }} data-testid="intraday-coverage">
@@ -39,14 +42,14 @@ export function IntradayCoverage({ s, name }: { s: IntradaySummary; name: (code:
       <Row gutter={[12, 12]}>
         <Col xs={12} md={6}><Stat title="분봉이 있던 (날짜, 종목) 쌍" value={`${fmtNum(s.used_pairs)} / ${fmtNum(s.expected_pairs)}`} sub={s.pairs_share === null ? '기대 쌍 없음' : `${(s.pairs_share * 100).toFixed(0)}% — 나머지는 거래 기회가 없었다`} /></Col>
         <Col xs={12} md={6}><Stat title="분봉이 있는 거래일" value={`${s.days_with_bars} / ${s.days_in_period}일`} sub="기간 안 거래일 대비" /></Col>
-        <Col xs={12} md={6}><Stat title="분봉 있는 종목" value={`${s.codes_with_minutes} / ${s.codes_requested}종목`} sub={s.codes_without_minutes.length ? `없는 종목: ${s.codes_without_minutes.slice(0, 5).join(', ')}${s.codes_without_minutes.length > 5 ? ' 외' : ''}` : '모두 있음'} /></Col>
+        <Col xs={12} md={6}><Stat title="분봉 있는 종목" value={`${s.codes_with_minutes} / ${s.codes_requested}종목`} sub={s.codes_without_minutes.length ? `없는 종목: ${s.codes_without_minutes.slice(0, 5).map(name).join(', ')}${s.codes_without_minutes.length > 5 ? ' 외' : ''}` : '모두 있음'} /></Col>
         <Col xs={12} md={6}><Stat title="지표 준비 구간" value={`${s.warmup_days}일`} sub="기간 앞에서 지표 계산용으로만 읽은 날" /></Col>
       </Row>
       {periods.length > 0 && (
         <Card size="small" title="쓴 종목별 그 출처의 보관 기간" data-testid="code-periods">
           <Table size="small" rowKey="code" dataSource={periods} pagination={{ pageSize: 10, hideOnSinglePage: true }}
             columns={[
-              { title: '종목', dataIndex: 'code', render: (c: string) => <span>{name(c)} <Typography.Text type="secondary">{c}</Typography.Text></span> },
+              { title: '종목', dataIndex: 'code', render: (c: string) => <StockName code={c} /> },
               { title: '보관 시작', dataIndex: 'first', render: fmtDate, sorter: (a, b) => a.first.localeCompare(b.first) },
               { title: '보관 끝', dataIndex: 'last', render: fmtDate, sorter: (a, b) => a.last.localeCompare(b.last) },
             ]} />

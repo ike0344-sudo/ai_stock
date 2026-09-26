@@ -10,6 +10,7 @@ import { useBars } from '@/api/studio'
 import { EChart } from '@/components/charts/EChart'
 import { fmtDate } from '@/lib/format'
 import { advance, dayOf, FINE_DAYS_PER_SEC, eventsBetween, focusCode, replayCandleOption, replayDays, replayEquityOption, replayMinuteOption, SPEEDS, statAt, TICK_MS } from '@/lib/replay'
+import { StockName, stockLabel, useStockNames } from '@/lib/stockNames'
 import type { EquityPoint, RunDetail, Trade } from '@/types/studio'
 
 const MAX_LIST = 10
@@ -21,7 +22,7 @@ function TradeList({ title, rows, kind, testid }: { title: string; rows: Trade[]
       {rows.length === 0 && <Typography.Text type="secondary">없음</Typography.Text>}
       {rows.slice(0, MAX_LIST).map((t, i) => (
         <div key={`${t.code}|${t.entry_ts}|${t.slice ?? 1}|${i}`} style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-          <span>{t.name ?? t.code}</span>
+          <StockName code={t.code} name={t.name} />
           <span style={{ color: kind === 'sell' && t.net_pct != null ? (t.net_pct >= 0 ? '#f5222d' : '#1677ff') : undefined }}>
             {kind === 'buy' ? `${Math.round(t.entry_price).toLocaleString('ko-KR')}원` : t.net_pct == null ? '' : `${(t.net_pct * 100).toFixed(2)}%`}
           </span>
@@ -33,6 +34,7 @@ function TradeList({ title, rows, kind, testid }: { title: string; rows: Trade[]
 }
 
 export function ReplayPanel({ d, equity, trades }: { d: RunDetail; equity: EquityPoint[]; trades: Trade[] }) {
+  const names = useStockNames()
   const [open, setOpen] = useState(false)
   const [playing, setPlaying] = useState(false)
   const [speed, setSpeed] = useState<number>(4)
@@ -112,7 +114,7 @@ export function ReplayPanel({ d, equity, trades }: { d: RunDetail; equity: Equit
         ))}
         {fine && (
           <div data-testid="replay-minute">
-            <Typography.Text type="secondary">{!settled || settled !== day ? `${day ? fmtDate(day) : ''} — 날짜가 멈추면 그날 분봉을 보여 준다` : focus ? `${fmtDate(day)} · ${focus.name ?? focus.code} 의 ${interval.replace('m', '분')}봉` : `${fmtDate(day)} — 이 날은 거래가 없어 보여 줄 분봉이 없다`}</Typography.Text>
+            <Typography.Text type="secondary">{!settled || settled !== day ? `${day ? fmtDate(day) : ''} — 날짜가 멈추면 그날 분봉을 보여 준다` : focus ? `${fmtDate(day)} · ${stockLabel(names, focus.code, focus.name)} 의 ${interval.replace('m', '분')}봉` : `${fmtDate(day)} — 이 날은 거래가 없어 보여 줄 분봉이 없다`}</Typography.Text>
             {minute.isError && <Alert type="warning" showIcon message="그날 분봉을 못 불러옴" />}
             {minuteOpt && <EChart option={minuteOpt} height={260} />}
           </div>

@@ -13,11 +13,13 @@ interface Props {
   value: string[]
   onChange: (codes: string[]) => void
   options?: CodeOption[]
+  /** 코드 → 종목명. 주면 고른 종목이 이름으로 보인다(코드는 툴팁) — 백테스트 종목 지정처럼 코드만 들고 있는 곳 */
+  names?: Record<string, string>
   max?: number
   placeholder?: string
 }
 
-export function CodesSelect({ value, onChange, options = [], max, placeholder = '종목명·코드 검색 또는 6자리 코드 붙여넣기' }: Props) {
+export function CodesSelect({ value, onChange, options = [], names, max, placeholder = '종목명·코드 검색 또는 6자리 코드 붙여넣기' }: Props) {
   const [bad, setBad] = useState<string[]>([])
   return (
     <>
@@ -28,7 +30,7 @@ export function CodesSelect({ value, onChange, options = [], max, placeholder = 
         value={value}
         placeholder={placeholder}
         tokenSeparators={[',', ' ', '\n']}
-        options={options.map((o) => ({ value: o.code, label: `${o.code} ${o.name ?? ''}`.trim() }))}
+        options={names ? [...new Set([...value, ...options.map((o) => o.code)])].map((c) => ({ value: c, label: names[c] ?? options.find((o) => o.code === c)?.name ?? c, title: c })) : options.map((o) => ({ value: o.code, label: `${o.code} ${o.name ?? ''}`.trim() }))}
         filterOption={(input, opt) => (opt?.label as string | undefined)?.toLowerCase().includes(input.toLowerCase()) ?? false}
         onChange={(vals: string[]) => {
           const upper = vals.map((v) => v.trim().toUpperCase())

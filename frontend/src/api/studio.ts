@@ -18,6 +18,11 @@ export const useDataRanges = (): Q<DataRanges> => useQuery({ queryKey: ['meta', 
 export const useRecipes = (): Q<Recipe[]> => useQuery({ queryKey: ['meta', 'recipes'], queryFn: () => apiGet<Recipe[]>('/api/meta/recipes'), staleTime: 5 * 60_000, retry: false })
 
 // ── 종목
+/** 코드 목록 → 이름(서버 종목 마스터 한 곳). 코드만 들고 있는 화면(종목 지정 목록)이 이름으로 보이게 */
+export const useCodeNames = (codes: string[]): Q<Record<string, string>> => {
+  const key = [...codes].sort().join(',')
+  return useQuery({ queryKey: ['stock-names', key], queryFn: () => apiGet<Record<string, string>>(`/api/stocks/names?codes=${key}`), enabled: codes.length > 0, staleTime: 10 * 60_000, retry: false })
+}
 export const useStockSearch = (q: string): Q<StockHit[]> =>
   useQuery({ queryKey: ['stocks', q], queryFn: () => apiGet<StockHit[]>(`/api/stocks?q=${encodeURIComponent(q)}`), enabled: q.trim().length > 0, staleTime: 60_000 })
 /** interval: 1d 또는 분봉(5m 등, 출처 al|krx). 분봉의 t 는 봉 끝 시각 */

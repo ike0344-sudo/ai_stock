@@ -184,3 +184,13 @@ describe('수집 탭 — API 없이도 작업 표는 살아 있다', () => {
     expect(screen.getByTestId('collect-daily')).toHaveTextContent('16시 전에는 어제까지가 최신')
   })
 })
+
+describe('CodesSelect names — 고른 종목이 이름으로 보인다 (21:10)', () => {
+  it('names 를 주면 태그가 종목명, 코드는 툴팁(title) — 이름을 모르는 코드는 코드 그대로', () => {
+    renderApp(<CodesSelect value={['005930', '999999']} names={{ '005930': '삼성전자' }} onChange={() => {}} />)
+    const sel = screen.getByTestId('codes-select')
+    expect(sel).toHaveTextContent('삼성전자')
+    expect(sel).toHaveTextContent('999999')
+    expect(sel).not.toHaveTextContent('005930')
+  })
+})

@@ -339,3 +339,20 @@ describe('분봉·틱 결과', () => {
     expect(calls.find((c) => c.path.includes('/bars'))!.path).toContain('source=krx')
   })
 })
+
+describe('종목 표기는 종목명으로 (21:10)', () => {
+  it('분봉 결과: 보관 기간 표·분봉 없는 종목·거래표·집중도 모두 서버가 준 names 로 이름이 보이고, 코드는 툴팁(title)으로만', async () => {
+    const periodCode = Object.keys((alDetail.summary.intraday as { code_periods: Record<string, string[]> }).code_periods)[0]
+    const noMinute = (alDetail.summary.intraday as { codes_without_minutes: string[] }).codes_without_minutes[0]
+    const d = { ...alDetail, names: { [periodCode]: '보관기간종목', [noMinute]: '분봉없는종목' } }
+    mockApi(resultRoutes(d as typeof alDetail, alTrades))
+    result(alDetail.run_id)
+    const cov = await screen.findByTestId('intraday-coverage')
+    const table = within(cov).getByTestId('code-periods')
+    expect(table).toHaveTextContent('보관기간종목')
+    expect(table).not.toHaveTextContent(periodCode) // 코드 글자는 화면에 없다
+    expect(within(table).getAllByTitle(periodCode).length).toBeGreaterThan(0) // 마우스를 올리면 코드
+    expect(cov).toHaveTextContent('분봉없는종목')
+    expect(cov).not.toHaveTextContent(noMinute)
+  })
+})

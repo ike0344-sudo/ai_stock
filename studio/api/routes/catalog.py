@@ -145,6 +145,13 @@ def intraday_sources(start: dt.date, end: dt.date, svc: Services = Depends(get_s
     return {"data": _ttl(svc, ("sources", start, end), lambda: stock_service.intraday_sources(svc.market_data(), start, end))}
 
 
+@router.get("/stocks/names")
+def stock_names(codes: str = Query("", max_length=4000), svc: Services = Depends(get_services)) -> dict[str, Any]:
+    """종목코드(쉼표 구분, 최대 300개) → 종목명 — 화면이 코드만 들고 있을 때(종목 지정 목록 등) 이름으로 바꿔 보이려고. 이름을 모르는 코드는 빠진다."""
+    lst = [c.strip() for c in codes.split(",") if c.strip()][:300]
+    return {"data": stock_service.names_of(svc.market_data(), lst)}
+
+
 @router.get("/stocks")
 def search_stocks(q: str = Query("", max_length=40), limit: int = Query(20, ge=1, le=50),
                   svc: Services = Depends(get_services)) -> dict[str, Any]:

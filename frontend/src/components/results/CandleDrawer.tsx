@@ -7,6 +7,7 @@ import { EChart } from '@/components/charts/EChart'
 import { candleOption, sliceAround } from '@/lib/chartOptions'
 import { fmtNum } from '@/lib/format'
 import { exitReason } from '@/lib/labels'
+import { StockName } from '@/lib/stockNames'
 import { isParam, type Num, type SpecJson, type Trade } from '@/types/studio'
 
 const PAD = 30
@@ -37,7 +38,7 @@ export function CandleDrawer({ trade, spec, params, onClose }: { trade: Trade | 
   }, [trade, bars.data, spec, params, fine])
 
   return (
-    <Drawer open={!!trade} onClose={onClose} size="large" title={trade ? `${trade.name ?? trade.code} (${trade.code}) 거래` : ''} destroyOnHidden data-testid="candle-drawer">
+    <Drawer open={!!trade} onClose={onClose} size="large" title={trade ? <span><StockName code={trade.code} name={trade.name} /> 거래</span> : ''} destroyOnHidden data-testid="candle-drawer">
       {trade && (
         <>
           <Descriptions size="small" column={2} style={{ marginBottom: 12 }} items={[

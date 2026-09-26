@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 from studio.domain.spec import Spec
 
+from . import stock_service
 from .backtest_service import run_backtest
 from .optimize_service import run_holdout_check, run_optimize, run_walkforward
 from .ports import HoldoutLedger, LegacyStrategies, MarketData, RunStore, TradingCalendar
@@ -53,12 +54,19 @@ class LiveCurve:
     """엔진 중간 곡선 점을 모아 progress.json 의 `live_curve` 로 싣는다 — {date, equity, cash, n_positions, n_trades, last_event}.
     상한(300)을 넘으면 절반으로 솎는다(마지막 점은 유지). 진행률을 쓸 때마다 같이 써야 다음 단계 쓰기에 안 지워진다(`extra()`)."""
 
-    def __init__(self, cap: int = LIVE_CURVE_MAX) -> None:
+    def __init__(self, cap: int = LIVE_CURVE_MAX, namer: Any = None) -> None:
         self.points: list[dict[str, Any]] = []
         self.cap = cap
+        self.namer = namer  # 코드 → 종목명(종목 마스터). last_event 에 name 을 채워 화면이 코드 대신 이름을 보이게 한다
 
     def add(self, pt: dict[str, Any]) -> None:
-        self.points.append({k: v for k, v in pt.items() if k != "frac"})
+        pt = {k: v for k, v in pt.items() if k != "frac"}
+        ev = pt.get("last_event")
+        if ev and self.namer is not None and not ev.get("name"):
+            name = self.namer(ev.get("code"))
+            if name:
+                pt["last_event"] = {**ev, "name": name}
+        self.points.append(pt)
         if len(self.points) > self.cap:
             self.points = self.points[:-1:2] + [self.points[-1]]
 
@@ -71,7 +79,14 @@ def run_backtest_job(ctx: Any) -> dict[str, Any]:
     spec = Spec.model_validate(payload["spec"])
     run_id = payload["run_id"]
     deps = _deps()
-    live = LiveCurve()
+    names: dict[str, str | None] = {}
+
+    def namer(code: str) -> str | None:
+        if code not in names:
+            names[code] = stock_service.names_of(deps.market_data, [code]).get(str(code))
+        return names[code]
+
+    live = LiveCurve(namer=namer)
     last_write = [0.0]
 
     def progress(stage: str, frac: float) -> None:

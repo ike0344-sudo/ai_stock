@@ -14,6 +14,7 @@ import pandas as pd
 from studio.domain.narration import narrate
 from studio.domain.spec import Spec
 
+from . import stock_service
 from .run_analysis import analyze, downsample
 from .services import Services
 from .spec_diff import diff_specs
@@ -86,14 +87,38 @@ def _require(svc: Services, run_id: str) -> None:
         raise RunNotFound(run_id)
 
 
+def _codes_in(trades: pd.DataFrame, summary: dict[str, Any]) -> list[str]:
+    """결과 화면에 코드로 나올 수 있는 모든 종목 — 거래·분봉 보관 기간 표·분봉 없는 종목·집중도 표."""
+    codes: list[str] = [str(c) for c in trades["code"].dropna().unique()] if "code" in trades.columns else []
+    it = summary.get("intraday") or {}
+    codes += [str(c) for c in (it.get("code_periods") or {})] + [str(c) for c in (it.get("codes_without_minutes") or [])]
+    conc = ((summary.get("robustness") or {}).get("concentration") or {}).get("by_code") or []
+    codes += [str(c) for row in conc for c in row.get("removed", [])]
+    return codes
+
+
+def _named(svc: Services, trades: pd.DataFrame) -> pd.DataFrame:
+    """이름이 빈 거래(옛 결과·마스터가 나중에 채워진 종목)는 종목 마스터로 채운다."""
+    if "code" not in trades.columns or not len(trades):
+        return trades
+    blank = trades["name"].isna() | (trades["name"].astype(str).str.strip() == "") if "name" in trades.columns else pd.Series(True, index=trades.index)
+    if not blank.any():
+        return trades
+    names = stock_service.names_of(svc.market_data(), trades.loc[blank, "code"])
+    out = trades.copy()
+    out.loc[blank, "name"] = out.loc[blank, "code"].map(names)
+    return out
+
+
 def run_detail(svc: Services, run_id: str) -> dict[str, Any]:
     """§4.2 GET /api/runs/{id}: meta·spec·summary·warnings + 읽을 때 계산한 분해(analysis)와 풀이 문장."""
     _require(svc, run_id)
     f = svc.run_files
     meta, spec_d, summary = f.read_json(run_id, "meta.json"), f.read_json(run_id, "spec.json"), f.read_json(run_id, "summary.json")
     initial = float((spec_d.get("portfolio") or {}).get("initial_capital") or 10_000_000)
+    trades = _named(svc, f.read_trades(run_id))
     try:
-        analysis = analyze(f.read_trades(run_id), f.read_equity(run_id), initial, svc.theme_groups())
+        analysis = analyze(trades, f.read_equity(run_id), initial, svc.theme_groups())
     except Exception as exc:  # 분해 실패가 결과 화면 전체를 막지 않게 — 원인을 화면에 보여준다
         analysis = {"error": f"{type(exc).__name__}: {exc}"}
     try:
@@ -102,12 +127,13 @@ def run_detail(svc: Services, run_id: str) -> dict[str, Any]:
         narration = None
     return clean({"run_id": run_id, "meta": meta, "spec": spec_d, "summary": summary, "warnings": meta.get("warnings", []),
                   "analysis": analysis, "narration": narration,
+                  "names": stock_service.names_of(svc.market_data(), _codes_in(trades, summary)),  # 화면의 모든 종목 표기를 이름으로 — 코드→이름 한 곳
                   "has_grid": svc.run_files.has(run_id, "grid.parquet"), "has_folds": svc.run_files.has(run_id, "folds.json")})
 
 
 def run_trades(svc: Services, run_id: str) -> list[dict[str, Any]]:
     _require(svc, run_id)
-    return frame_records(svc.run_files.read_trades(run_id))
+    return frame_records(_named(svc, svc.run_files.read_trades(run_id)))
 
 
 def run_equity(svc: Services, run_id: str) -> list[dict[str, Any]]:
@@ -138,7 +164,7 @@ def trades_csv(svc: Services, run_id: str) -> bytes:
     """Excel 이 한글을 바로 읽도록 UTF-8 BOM."""
     _require(svc, run_id)
     buf = io.StringIO()
-    svc.run_files.read_trades(run_id).to_csv(buf, index=False)
+    _named(svc, svc.run_files.read_trades(run_id)).to_csv(buf, index=False)
     return b"\xef\xbb\xbf" + buf.getvalue().encode("utf-8")
 
 

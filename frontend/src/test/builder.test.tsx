@@ -282,3 +282,21 @@ describe('복제해서 수정 (?from=)', () => {
     expect(screen.getByTestId('spec-name')).toHaveValue(`${sx.presetSpec.name} (복사)`)
   })
 })
+
+
+describe('종목 표기는 종목명으로 (21:10)', () => {
+  it('단일 종목 선택칸: 골라 둔 코드가 코드가 아니라 종목명으로 보인다', async () => {
+    mockApi(routes({ 'GET /api/stocks': { data: [{ code: '005930', name: '삼성전자', sector: null, market: '거래소' }] } }))
+    page()
+    await screen.findByTestId('backtest-page')
+    await userEvent.click(screen.getByRole('tab', { name: '일봉 · 단일 종목' }))
+    const sel = await screen.findByTestId('single-stock')
+    await userEvent.click(within(sel).getByRole('combobox'))
+    await userEvent.type(within(sel).getByRole('combobox'), '삼성')
+    await userEvent.click(await screen.findByText('삼성전자', { selector: '.ant-select-item-option-content' }))
+    await waitFor(() => expect(sel).toHaveTextContent('삼성전자'))
+    expect(sel).not.toHaveTextContent('005930')
+    await userEvent.clear(within(sel).getByRole('combobox')) // 검색어를 지워 목록이 비어도(선택값만 남아도) 이름으로 보인다
+    expect(sel).toHaveTextContent('삼성전자')
+  })
+})

@@ -48,7 +48,7 @@ export function PreviewTable({ data, loading, error }: { data?: PreviewResult; l
           expandable={{ rowExpandable: (r) => !!r.operands?.length, expandedRowRender: (r) => (
             <ul style={{ margin: 0, paddingLeft: 18 }}>{r.operands!.map((o) => <li key={o.text}>{o.text} — {fmtNum(o.left)} vs {fmtNum(o.right)}</li>)}</ul>) }}
           columns={[
-            { title: '종목', render: (_, r) => `${r.code} ${r.name ?? ''}` },
+            { title: '종목', render: (_, r) => <span title={r.name ? r.code : undefined}>{r.name || r.code}</span> },
             { title: '종가', dataIndex: 'close', render: (v: number) => fmtNum(v) },
             { title: '등락률', dataIndex: 'change_pct', render: (v: number | null) => (v === null ? '—' : <span style={{ color: v > 0 ? '#f5222d' : v < 0 ? '#1677ff' : undefined }}>{v > 0 ? '+' : ''}{v.toFixed(2)}%</span>) },
             { title: '거래대금', dataIndex: 'value', render: (v: number) => `${fmtNum(Math.round(v / 1e8))}억` },

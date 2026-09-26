@@ -9,6 +9,7 @@ import { ResultHeader } from '@/components/results/ResultHeader'
 import { TradesTable } from '@/components/results/TradesTable'
 import { IntradayCoverage, MinuteSourceBanner, TickRefineCard, TickSample } from '@/components/results/IntradayResult'
 import { ReplayPanel } from '@/components/results/ReplayPanel'
+import { StockNamesContext, type StockNames } from '@/lib/stockNames'
 import { HoldoutSection, OptimizeSection, WalkforwardSection } from '@/components/results/ValidationPanels'
 import { segmentBands } from '@/lib/validation'
 import type { IntradaySummary, OptimizeSummary, TickRefineSummary, TickSummary } from '@/types/studio'
@@ -27,17 +28,18 @@ export function ResultPage() {
       description={detail.error.status === 404 ? '삭제됐거나 번호가 틀렸습니다. 실행 기록에서 골라 주세요.' : undefined} />
   }
   const d = detail.data
-  const codeName = new Map((trades.data ?? []).map((t) => [t.code, t.name ?? t.code]))
+  const names: StockNames = { ...(d.names ?? {}), ...Object.fromEntries((trades.data ?? []).filter((t) => t.name).map((t) => [t.code, t.name as string])) }
   const analysis = d.analysis
   const warnings = [...new Set([...(d.warnings ?? []), ...(d.summary.warnings ?? [])])]
 
   return (
+    <StockNamesContext.Provider value={names}>
     <Space direction="vertical" size="large" style={{ width: '100%' }} data-testid="result-page">
       <MinuteSourceBanner d={d} />
       <ResultHeader d={d} />
       {d.narration && <Alert type="info" message="이 조건을 말로 풀면" description={<span style={{ whiteSpace: 'pre-line' }} data-testid="result-narration">{d.narration}</span>} />}
       <WarningBadges warnings={warnings} />
-      {d.summary.intraday ? <IntradayCoverage s={d.summary.intraday as IntradaySummary} name={(c) => codeName.get(c) ?? c} /> : null}
+      {d.summary.intraday ? <IntradayCoverage s={d.summary.intraday as IntradaySummary} /> : null}
       {d.summary.tick ? <TickSample t={d.summary.tick as TickSummary} /> : null}
       {d.summary.tick_refine ? <TickRefineCard r={d.summary.tick_refine as TickRefineSummary} /> : null}
       {kind === 'optimize' && d.summary.optimize ? <OptimizeSection d={d} /> : null}
@@ -72,5 +74,6 @@ export function ResultPage() {
           : trades.data ? <TradesTable trades={trades.data} spec={d.spec} params={d.meta.params ?? {}} /> : <Spin />}
       </div>
     </Space>
+    </StockNamesContext.Provider>
   )
 }

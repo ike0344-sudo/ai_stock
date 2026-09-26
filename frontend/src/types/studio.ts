@@ -202,6 +202,8 @@ export interface RunDetail {
   warnings: string[]
   analysis: Analysis
   narration: string | null
+  /** 결과 화면에 나오는 모든 종목코드 → 종목명(서버 종목 마스터). 이름을 모르는 코드는 빠진다 */
+  names?: Record<string, string>
   has_grid: boolean
   has_folds: boolean
 }

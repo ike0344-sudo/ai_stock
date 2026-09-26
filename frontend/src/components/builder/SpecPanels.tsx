@@ -3,7 +3,7 @@
 import { Alert, Button, Card, Checkbox, DatePicker, InputNumber, Radio, Select, Space, Switch, Table, Typography } from 'antd'
 import dayjs from 'dayjs'
 import { useState } from 'react'
-import { useStockSearch } from '@/api/studio'
+import { useCodeNames, useStockSearch } from '@/api/studio'
 import { CodesSelect } from '@/components/hub/collect/CodesSelect'
 import { fmtDate } from '@/lib/format'
 import type { DataRanges, ParamRange, SpecJson, TakeProfitLevel } from '@/types/studio'
@@ -23,15 +23,18 @@ export function UniversePanel({ value: u, onChange, mode }: Part<'universe'> & {
   const single = mode === 'daily_single'
   const [q, setQ] = useState('')
   const hits = useStockSearch(q)
+  const codeNames = useCodeNames(!single && u.type === 'codes' ? u.codes : [])
+  const cur = useStockSearch(single ? u.codes[0] ?? '' : '') // 선택된 종목의 이름(코드로 검색하면 그 종목이 나온다)
+  const curName = cur.data?.find((h) => h.code === u.codes[0])?.name ?? hits.data?.find((h) => h.code === u.codes[0])?.name
   return (
     <Card size="small" title={single ? '종목' : '종목 범위(유니버스)'} data-testid="panel-universe">
       {single ? (
-        <Row label="종목 1개" hint="이름이나 코드로 검색">
+        <Row label="종목 1개" hint="이름이나 코드로 검색(고르면 종목명으로 보입니다)">
           <Select showSearch style={{ width: 300 }} placeholder="종목명·코드 검색" filterOption={false} onSearch={setQ} data-testid="single-stock"
             value={u.codes[0]} loading={hits.isFetching}
             options={[
-              ...(u.codes[0] && !hits.data?.some((h) => h.code === u.codes[0]) ? [{ value: u.codes[0], label: u.codes[0] }] : []),
-              ...(hits.data ?? []).map((h) => ({ value: h.code, label: `${h.code} ${h.name ?? ''}` })),
+              ...(u.codes[0] && !hits.data?.some((h) => h.code === u.codes[0]) ? [{ value: u.codes[0], label: curName || u.codes[0] }] : []),
+              ...(hits.data ?? []).map((h) => ({ value: h.code, label: h.name || h.code })),
             ]}
             onChange={(code) => onChange({ ...u, type: 'codes', codes: [code] })} />
         </Row>
@@ -50,7 +53,7 @@ export function UniversePanel({ value: u, onChange, mode }: Part<'universe'> & {
               <InputNumber size="small" min={1} max={60} value={u.lookback_days} addonAfter="일" onChange={(v) => onChange({ ...u, lookback_days: Number(v ?? 1) })} />
             </Row>
           )}
-          {u.type === 'codes' && <Row label="종목 목록"><div style={{ minWidth: 320 }}><CodesSelect value={u.codes} onChange={(codes) => onChange({ ...u, codes })} /></div></Row>}
+          {u.type === 'codes' && <Row label="종목 목록"><div style={{ minWidth: 320 }}><CodesSelect value={u.codes} names={codeNames.data ?? {}} onChange={(codes) => onChange({ ...u, codes })} /></div></Row>}
           <Row label="시장">
             <Checkbox.Group value={u.markets} options={['거래소', '코스닥']} onChange={(m) => onChange({ ...u, markets: (m.length ? m : u.markets) as typeof u.markets })} />
           </Row>

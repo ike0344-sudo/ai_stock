@@ -28,6 +28,20 @@ class BarsNotSupported(Exception):
     pass
 
 
+def names_of(md: MarketData, codes: Any) -> dict[str, str]:
+    """종목코드 → 종목명 — **화면에 나오는 모든 종목 이름의 단일 출처**(종목 마스터 `stock_info`). 마스터에 이름이 없는 코드(상장폐지 등)는 결과에서 빠진다(화면이 코드로 보인다)."""
+    info = md.stock_info()
+    if "name" not in info.columns:
+        return {}
+    col = info["name"]
+    out: dict[str, str] = {}
+    for c in dict.fromkeys(str(x) for x in codes):
+        n = col.get(c) if c in info.index else None
+        if isinstance(n, str) and n.strip():
+            out[c] = n.strip()
+    return out
+
+
 def search(md: MarketData, q: str, limit: int = 20) -> list[dict[str, Any]]:
     """이름 부분 일치 또는 코드 앞 일치. 정확히 일치하는 것을 먼저."""
     q = (q or "").strip()

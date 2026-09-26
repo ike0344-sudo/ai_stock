@@ -138,9 +138,10 @@ describe('거래 표 → 캔들 서랍 (§8.4 #9)', () => {
     await userEvent.type(within(screen.getByTestId('trade-search')).getByRole('searchbox'), t0.code)
     await waitFor(() => expect(within(table).getAllByRole('row').length).toBeLessThan(realTrades.length + 1))
     // 행 클릭 → 서랍
-    await userEvent.click(within(table).getAllByText(t0.code)[0])
+    await userEvent.click(within(table).getAllByText(t0.name as string)[0])
     const drawer = await screen.findByTestId('candle-drawer')
-    expect(drawer).toHaveTextContent(`${t0.code}`)
+    expect(drawer).toHaveTextContent(t0.name as string)
+    expect(drawer).not.toHaveTextContent(t0.code) // 코드는 툴팁(title)으로만
     expect(drawer).toHaveTextContent(t0.entry_ts.slice(0, 10))
     const chart = await within(drawer).findByTestId('candle-chart')
     const opt = JSON.parse(within(chart).getByTestId('echart').textContent!)
@@ -157,7 +158,7 @@ describe('거래 표 → 캔들 서랍 (§8.4 #9)', () => {
     mockApi(resultRoutes(realDetail, { [`GET /api/stocks/${t0.code}/bars`]: { status: 404, error: { code: 'NOT_FOUND', message: '일봉 데이터가 없는 종목' } } }))
     result()
     const table = await screen.findByTestId('trades-table')
-    await userEvent.click((await within(table).findAllByText(t0.code))[0])
+    await userEvent.click((await within(table).findAllByText(t0.name as string))[0])
     expect(await screen.findByTestId('candle-error')).toHaveTextContent('차트 봉을 못 불러왔습니다')
   })
 })

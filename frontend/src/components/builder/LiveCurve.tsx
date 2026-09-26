@@ -5,6 +5,7 @@ import { useMemo } from 'react'
 import { EChart } from '@/components/charts/EChart'
 import { fmtDate } from '@/lib/format'
 import { liveCurveOption } from '@/lib/replay'
+import { StockName } from '@/lib/stockNames'
 import type { LivePoint } from '@/types'
 import type { SpecJson } from '@/types/studio'
 
@@ -24,7 +25,7 @@ export function LiveCurve({ points, spec }: { points: LivePoint[]; spec: SpecJso
         { label: '평가금', children: <span data-testid="live-equity">{won(last?.equity)}{ret !== null && <Typography.Text type={ret >= 0 ? 'danger' : 'secondary'} style={{ color: ret >= 0 ? '#f5222d' : '#1677ff' }}> ({ret >= 0 ? '+' : ''}{ret.toFixed(2)}%)</Typography.Text>}</span> },
         { label: '거래 수', children: <span data-testid="live-trades">{last?.n_trades ?? '—'}</span> },
         { label: '보유 종목', children: <span data-testid="live-positions">{last?.n_positions ?? '—'}</span> },
-        ...(ev ? [{ label: '방금', children: <span data-testid="live-event">{ev.side === 'buy' ? '매수' : '매도'} {ev.name ?? ev.code}</span> }] : []),
+        ...(ev ? [{ label: '방금', children: <span data-testid="live-event">{ev.side === 'buy' ? '매수' : '매도'} <StockName code={ev.code} name={ev.name} /></span> }] : []),
       ]} />
     </div>
   )

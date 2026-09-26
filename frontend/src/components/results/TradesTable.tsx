@@ -3,6 +3,7 @@ import { Input, Space, Table, Tag, Typography } from 'antd'
 import { useMemo, useState } from 'react'
 import { DASH, fmtNum } from '@/lib/format'
 import { exitReason } from '@/lib/labels'
+import { StockName } from '@/lib/stockNames'
 import type { SpecJson, Trade } from '@/types/studio'
 import { CandleDrawer } from './CandleDrawer'
 
@@ -35,7 +36,7 @@ export function TradesTable({ trades, spec, params }: { trades: Trade[]; spec: S
       <Table<Trade> size="small" data-testid="trades-table" rowKey={(t) => `${t.code}|${t.entry_ts}|${t.slice ?? 1}|${t.exit_ts ?? ''}`} dataSource={rows} pagination={{ pageSize: 20, showSizeChanger: false }}
         onRow={(t) => ({ onClick: () => setOpen(t), style: { cursor: 'pointer' } })}
         columns={[
-          { title: '종목', render: (_, t) => <span>{t.name ?? t.code} <Typography.Text type="secondary">{t.code}</Typography.Text></span>, sorter: (a, b) => (a.name ?? a.code).localeCompare(b.name ?? b.code) },
+          { title: '종목', render: (_, t) => <StockName code={t.code} name={t.name} />, sorter: (a, b) => (a.name ?? a.code).localeCompare(b.name ?? b.code) },
           { title: fine ? '진입 시각' : '진입일', dataIndex: 'entry_ts', render: fine ? showTs : d10, sorter: (a, b) => a.entry_ts.localeCompare(b.entry_ts), defaultSortOrder: 'ascend' },
           ...(sliced ? [{ title: '조각', dataIndex: 'slice', render: (v: number | null | undefined, t: Trade) => (t.entry_id == null ? DASH : <Tag data-testid="slice-tag">{`${v ?? 1}/${sliceCount.get(t.entry_id) ?? 1}`}</Tag>) }] : []),
           { title: '진입가', dataIndex: 'entry_price', render: (v: number) => fmtNum(v), sorter: num('entry_price') },

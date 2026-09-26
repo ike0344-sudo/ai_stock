@@ -8,6 +8,7 @@ import { DASH, fmtNum } from '@/lib/format'
 import { costSensitivityOption, drawdownOption, equityOption, groupBarOption, histogramOption, holdingScatterOption, mfeMaeOption, monthlyHeatmapOption, yearlyBarOption } from '@/lib/chartOptions'
 import { exitReason } from '@/lib/labels'
 import { withBands, type Band } from '@/lib/validation'
+import { stockLabel, useStockNames } from '@/lib/stockNames'
 import { VERDICT3_COLOR, VERDICT3_LABEL, verdictOf } from '@/lib/verdicts'
 import type { Analysis, EquityPoint, GroupPerf, Robustness, Trade } from '@/types/studio'
 
@@ -107,6 +108,7 @@ export function ExitReasonPanel({ analysis }: { analysis: Analysis }) {
 
 /** 견고성(비용 민감도·몬테카를로·집중도) — backtest-agent 가 summary.robustness 에 넣는다. 없으면 "없음". */
 export function RobustnessPanels({ r }: { r: Robustness | null }) {
+  const names = useStockNames()
   const cost = useMemo(() => (r?.cost_sensitivity ? costSensitivityOption(r.cost_sensitivity, r.breakeven_cost_mult) : null), [r])
   if (!r) return <Alert type="info" showIcon data-testid="panel-robustness-none" message="견고성 점검 없음" description="이 결과에는 비용 민감도·몬테카를로·집중도 값이 없습니다(거래가 없거나 옛 버전 결과)." />
   const be = r.breakeven_cost_mult
@@ -143,7 +145,7 @@ export function RobustnessPanels({ r }: { r: Robustness | null }) {
             <Table size="small" pagination={false} rowKey={(x) => `${x.axis}${x.k}`} dataSource={[
               ...r.concentration.by_code.map((x) => ({ ...x, axis: '종목' })), ...r.concentration.by_date.map((x) => ({ ...x, axis: '날짜' })),
             ]} columns={[
-              { title: '뺀 것', render: (_, x) => <span>{x.axis} 상위 {x.k}<br /><Typography.Text type="secondary" style={{ fontSize: 12 }}>{x.removed.join(', ')}</Typography.Text></span> },
+              { title: '뺀 것', render: (_, x) => <span>{x.axis} 상위 {x.k}<br /><Typography.Text type="secondary" style={{ fontSize: 12 }}>{x.axis === '종목' ? x.removed.map((c) => stockLabel(names, c)).join(', ') : x.removed.join(', ')}</Typography.Text></span> },
               { title: '나머지 순손익', dataIndex: 'net_pnl_excluding', render: (v: number) => `${fmtNum(Math.round(v))}원` },
               { title: '부호', dataIndex: 'sign_flipped', render: (f: boolean) => (f ? <Tag color="error">뒤집힘</Tag> : <Tag color="success">유지</Tag>) },
             ]} />
