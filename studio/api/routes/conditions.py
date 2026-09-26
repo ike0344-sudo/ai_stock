@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from pydantic import ValidationError
 
-from studio.application import condition_service, screener_service
+from studio.application import condition_service, formula_service, screener_service
 from studio.application.backtest_service import BacktestError
 from studio.application.services import Services
 from studio.domain.spec import Spec
@@ -33,6 +33,12 @@ async def _spec_body(request: Request) -> tuple[Any, dict[str, Any]]:
 
 @router.post("/validate")
 async def validate(request: Request, svc: Services = Depends(get_services)) -> dict[str, Any]:
+    try:  # 수식 검사: {"formula": "..."} — 문법 오류도 200 본문(error: line·col·expected)으로 준다(스펙 검증과 같은 규칙)
+        body = await request.json()
+    except ValueError:
+        body = None  # 아래 _spec_body 가 "JSON 본문이 아님" 을 낸다
+    if isinstance(body, dict) and "formula" in body and "spec" not in body:
+        return {"data": formula_service.check(body["formula"])}
     raw, _ = await _spec_body(request)
     return {"data": condition_service.validate_spec(raw, svc.market_data())}
 

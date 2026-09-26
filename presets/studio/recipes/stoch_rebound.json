@@ -1,0 +1,57 @@
+{
+  "id": "stoch_rebound",
+  "category": "보조지표",
+  "title": "스토캐스틱 과매도 반등",
+  "description": "스토캐스틱 %K 가 30 아래에서 %D 를 위로 뚫으면 산다. 80을 넘으면 판다.",
+  "modes": [
+    "daily_portfolio",
+    "daily_single",
+    "intraday"
+  ],
+  "needs": [
+    "indicator:stoch_k"
+  ],
+  "entry": {
+    "logic": "all",
+    "items": [
+      {
+        "left": {
+          "kind": "ind",
+          "name": "stoch_k"
+        },
+        "op": "cross_above",
+        "right": {
+          "kind": "ind",
+          "name": "stoch_d"
+        }
+      },
+      {
+        "left": {
+          "kind": "ind",
+          "name": "stoch_k"
+        },
+        "op": "lt",
+        "right": {
+          "kind": "const",
+          "value": 30
+        }
+      }
+    ]
+  },
+  "exit": {
+    "logic": "any",
+    "items": [
+      {
+        "left": {
+          "kind": "ind",
+          "name": "stoch_k"
+        },
+        "op": "gt",
+        "right": {
+          "kind": "const",
+          "value": 80
+        }
+      }
+    ]
+  }
+}

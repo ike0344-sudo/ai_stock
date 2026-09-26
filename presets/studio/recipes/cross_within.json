@@ -1,0 +1,77 @@
+{
+  "id": "cross_within",
+  "category": "이동평균",
+  "title": "최근 3봉 안 골든크로스 + 정배열 유지",
+  "description": "5일선이 20일선을 최근 3봉 안에 위로 뚫었고 종가가 60일선 위이면 산다. 5일선이 20일선 아래로 내려가면 판다.",
+  "modes": [
+    "daily_portfolio",
+    "daily_single"
+  ],
+  "needs": [
+    "op:cross_above_within"
+  ],
+  "entry": {
+    "logic": "all",
+    "items": [
+      {
+        "left": {
+          "kind": "ind",
+          "name": "sma",
+          "params": {
+            "src": "close",
+            "n": 5
+          }
+        },
+        "op": "cross_above_within",
+        "right": {
+          "kind": "ind",
+          "name": "sma",
+          "params": {
+            "src": "close",
+            "n": 20
+          }
+        },
+        "within": 3
+      },
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "gt",
+        "right": {
+          "kind": "ind",
+          "name": "sma",
+          "params": {
+            "src": "close",
+            "n": 60
+          }
+        }
+      }
+    ]
+  },
+  "exit": {
+    "logic": "any",
+    "items": [
+      {
+        "left": {
+          "kind": "ind",
+          "name": "sma",
+          "params": {
+            "src": "close",
+            "n": 5
+          }
+        },
+        "op": "lt",
+        "right": {
+          "kind": "ind",
+          "name": "sma",
+          "params": {
+            "src": "close",
+            "n": 20
+          }
+        }
+      }
+    ]
+  }
+}

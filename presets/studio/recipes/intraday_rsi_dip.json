@@ -1,0 +1,59 @@
+{
+  "id": "intraday_rsi_dip",
+  "category": "분봉",
+  "title": "분봉 눌림 뒤 RSI 반등",
+  "description": "당일 3% 이상 오른 종목이 눌렸다가 RSI(14)가 40을 다시 넘으면 산다. 70을 넘으면 판다.",
+  "modes": [
+    "intraday"
+  ],
+  "needs": [],
+  "entry": {
+    "logic": "all",
+    "items": [
+      {
+        "left": {
+          "kind": "ind",
+          "name": "day_change_pct"
+        },
+        "op": "gte",
+        "right": {
+          "kind": "const",
+          "value": 3
+        }
+      },
+      {
+        "left": {
+          "kind": "ind",
+          "name": "rsi",
+          "params": {
+            "n": 14
+          }
+        },
+        "op": "cross_above",
+        "right": {
+          "kind": "const",
+          "value": 40
+        }
+      }
+    ]
+  },
+  "exit": {
+    "logic": "any",
+    "items": [
+      {
+        "left": {
+          "kind": "ind",
+          "name": "rsi",
+          "params": {
+            "n": 14
+          }
+        },
+        "op": "gt",
+        "right": {
+          "kind": "const",
+          "value": 70
+        }
+      }
+    ]
+  }
+}

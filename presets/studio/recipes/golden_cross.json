@@ -1,0 +1,59 @@
+{
+  "id": "golden_cross",
+  "category": "이동평균",
+  "title": "이평 골든크로스",
+  "description": "5일선이 20일선을 아래에서 위로 뚫으면 산다. 다시 아래로 뚫으면 판다.",
+  "modes": [
+    "daily_portfolio",
+    "daily_single"
+  ],
+  "needs": [],
+  "entry": {
+    "logic": "all",
+    "items": [
+      {
+        "left": {
+          "kind": "ind",
+          "name": "sma",
+          "params": {
+            "src": "close",
+            "n": 5
+          }
+        },
+        "op": "cross_above",
+        "right": {
+          "kind": "ind",
+          "name": "sma",
+          "params": {
+            "src": "close",
+            "n": 20
+          }
+        }
+      }
+    ]
+  },
+  "exit": {
+    "logic": "any",
+    "items": [
+      {
+        "left": {
+          "kind": "ind",
+          "name": "sma",
+          "params": {
+            "src": "close",
+            "n": 5
+          }
+        },
+        "op": "cross_below",
+        "right": {
+          "kind": "ind",
+          "name": "sma",
+          "params": {
+            "src": "close",
+            "n": 20
+          }
+        }
+      }
+    ]
+  }
+}

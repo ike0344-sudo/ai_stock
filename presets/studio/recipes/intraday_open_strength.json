@@ -1,0 +1,56 @@
+{
+  "id": "intraday_open_strength",
+  "category": "분봉",
+  "title": "분봉 시가 대비 강세 + 당일 고가 돌파",
+  "description": "시가보다 2% 넘게 올라 있고 당일 앞 봉들의 고가를 넘으면 산다. VWAP 아래로 내려가면 판다.",
+  "modes": [
+    "intraday"
+  ],
+  "needs": [
+    "indicator:open_change_pct",
+    "indicator:day_high_break",
+    "op:is_true"
+  ],
+  "entry": {
+    "logic": "all",
+    "items": [
+      {
+        "left": {
+          "kind": "ind",
+          "name": "open_change_pct"
+        },
+        "op": "gte",
+        "right": {
+          "kind": "const",
+          "value": 2
+        }
+      },
+      {
+        "left": {
+          "kind": "ind",
+          "name": "day_high_break",
+          "params": {
+            "src": "high"
+          }
+        },
+        "op": "is_true"
+      }
+    ]
+  },
+  "exit": {
+    "logic": "any",
+    "items": [
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "lt",
+        "right": {
+          "kind": "ind",
+          "name": "vwap"
+        }
+      }
+    ]
+  }
+}

@@ -1,12 +1,12 @@
 // 명세 편집 패널들 (§5.4 BacktestPage): 유니버스 · 기간 · 청산 규칙 · 자금·배분 · 비용·체결 · 호환 모드 · 변수 표
 // 각 패널은 SpecJson 의 한 부분만 받아 새 부분을 돌려준다(부모가 합친다) — 화면 상태는 명세 하나.
-import { Alert, Card, Checkbox, DatePicker, InputNumber, Radio, Select, Space, Switch, Table, Typography } from 'antd'
+import { Alert, Button, Card, Checkbox, DatePicker, InputNumber, Radio, Select, Space, Switch, Table, Typography } from 'antd'
 import dayjs from 'dayjs'
 import { useState } from 'react'
 import { useStockSearch } from '@/api/studio'
 import { CodesSelect } from '@/components/hub/collect/CodesSelect'
 import { fmtDate } from '@/lib/format'
-import type { DataRanges, ParamRange, SpecJson } from '@/types/studio'
+import type { DataRanges, ParamRange, SpecJson, TakeProfitLevel } from '@/types/studio'
 import { NumField } from './NumField'
 
 type Part<K extends keyof SpecJson> = { value: SpecJson[K]; onChange: (v: SpecJson[K]) => void; disabled?: boolean }
@@ -90,14 +90,31 @@ export function PeriodPanel({ value: p, onChange, ranges, holdoutPct, rangeKey =
 }
 
 // ───────────── 청산 규칙 ─────────────
-const EXIT_FIELDS: { key: keyof SpecJson['exits']; label: string; hint: string; max: number; suffix?: string }[] = [
+type BasicExit = 'stop_loss_pct' | 'take_profit_pct' | 'trailing_stop_pct' | 'max_holding_bars'
+const EXIT_FIELDS: { key: BasicExit; label: string; hint: string; max: number; suffix?: string }[] = [
   { key: 'stop_loss_pct', label: '손절', hint: '진입가 대비 이만큼 떨어지면 판다', max: 100, suffix: '%' },
   { key: 'take_profit_pct', label: '익절', hint: '진입가 대비 이만큼 오르면 판다', max: 1000, suffix: '%' },
   { key: 'trailing_stop_pct', label: '트레일링', hint: '고점에서 이만큼 밀리면 판다', max: 100, suffix: '%' },
   { key: 'max_holding_bars', label: '최대 보유 봉', hint: '이 봉 수를 넘기면 판다', max: 5000 },
 ]
 
-export function ExitsPanel({ value: ex, onChange, disabled, mode }: Part<'exits'> & { mode?: SpecJson['mode'] }) {
+/** 서버가 알리는 고급 청산 칸(capabilities.exit_fields)만 그린다 — 서버가 모르는 칸을 보내면 검증 오류이기 때문 */
+export const ADVANCED_EXITS = ['take_profit_levels', 'take_profit_mode', 'trail_activate_pct', 'breakeven_after_pct', 'max_holding_minutes'] as const
+
+export function ExitsPanel({ value: ex, onChange, disabled, mode, extra: serverExtra = [] }: Part<'exits'> & { mode?: SpecJson['mode']; extra?: string[] }) {
+  // 틱 모드는 새 청산 칸을 전부 거부하고(서버), 시간 청산(분)은 분봉 모드에서만 된다 — 서버가 거절할 칸은 화면이 처음부터 안 보인다
+  const extra = mode === 'tick' ? [] : serverExtra.filter((k) => k !== 'max_holding_minutes' || mode === 'intraday')
+  const has = (k: string) => extra.includes(k)
+  const levels = ex.take_profit_levels ?? []
+  // 분할 익절과 단일 익절은 같이 쓸 수 없다(서버 규칙) — 한쪽을 켜면 다른 쪽을 끈다
+  const setLevels = (l: TakeProfitLevel[]) => onChange({ ...ex, take_profit_levels: l.length ? l : null, ...(l.length ? { take_profit_pct: null } : {}) })
+  const numRow = (key: 'trail_activate_pct' | 'breakeven_after_pct' | 'max_holding_minutes', label: string, hint: string, def: number, suffix: string) => (
+    <Row key={key} label={label} hint={hint}>
+      <Switch size="small" checked={ex[key] != null} disabled={disabled} data-testid={`exit-${key}-on`} onChange={(x) => onChange({ ...ex, [key]: x ? def : null })} />
+      {ex[key] != null && <NumField hint={key.replace('_pct', '')} value={ex[key]} min={0} max={key === 'max_holding_minutes' ? 600 : 1000} step={key === 'max_holding_minutes' ? 1 : 0.5}
+        disabled={disabled} suffix={suffix} onChange={(x) => onChange({ ...ex, [key]: x })} data-testid={`exit-${key}`} />}
+    </Row>
+  )
   return (
     <Card size="small" title="청산 규칙 (조건식 청산과 함께 적용)" data-testid="panel-exits">
       {disabled && <Alert type="info" showIcon style={{ marginBottom: 8 }} message="호환 모드에서는 손절·익절·트레일링·보유기간을 쓸 수 없습니다(기존 CLI 는 이 규칙이 없음)" />}
@@ -108,12 +125,39 @@ export function ExitsPanel({ value: ex, onChange, disabled, mode }: Part<'exits'
         return (
           <Row key={f.key} label={f.label} hint={mode === 'intraday' && f.key === 'max_holding_bars' ? '이 분봉 수를 넘기면 판다(당일 안에서만)' : f.hint}>
             <Switch size="small" checked={on} disabled={disabled} data-testid={`exit-${f.key}-on`}
-              onChange={(x) => onChange({ ...ex, [f.key]: x ? (f.key === 'max_holding_bars' ? 20 : f.key === 'take_profit_pct' ? 15 : 7) : null })} />
+              onChange={(x) => onChange({ ...ex, [f.key]: x ? (f.key === 'max_holding_bars' ? 20 : f.key === 'take_profit_pct' ? 15 : 7) : null, ...(x && f.key === 'take_profit_pct' ? { take_profit_levels: null } : {}) })} />
             {on && <NumField hint={f.key.replace('_pct', '')} value={v} min={0} max={f.max} step={f.key === 'max_holding_bars' ? 1 : 0.5} disabled={disabled}
               suffix={f.suffix} onChange={(x) => onChange({ ...ex, [f.key]: x })} data-testid={`exit-${f.key}`} />}
           </Row>
         )
       })}
+      {has('take_profit_levels') && (
+        <div data-testid="exit-levels">
+          <Row label="분할 익절" hint="각 선에 닿을 때 남은 수량의 비율만큼 판다 — 예: +5% 에 절반, +10% 에 나머지 전부(비중 100%). 단일 익절과는 같이 못 쓴다">
+            <Switch size="small" checked={levels.length > 0} disabled={disabled} data-testid="exit-levels-on" onChange={(x) => setLevels(x ? [{ pct: 5, fraction: 0.5 }, { pct: 10, fraction: 1 }] : [])} />
+          </Row>
+          {levels.length > 0 && (
+            <Table size="small" pagination={false} rowKey={(_, i) => String(i)} dataSource={levels} style={{ marginBottom: 8 }}
+              columns={[
+                { title: '수익률 도달(%)', render: (_, l, i) => <InputNumber size="small" min={0.1} value={l.pct} disabled={disabled} data-testid={`level-pct-${i}`} onChange={(v) => v && setLevels(levels.map((x, j) => (j === i ? { ...x, pct: Number(v) } : x)))} /> },
+                { title: '그때 파는 비중(남은 수량 기준 %)', render: (_, l, i) => <InputNumber size="small" min={1} max={100} value={Math.round(l.fraction * 100)} disabled={disabled} data-testid={`level-fraction-${i}`} onChange={(v) => v && setLevels(levels.map((x, j) => (j === i ? { ...x, fraction: Number(v) / 100 } : x)))} /> },
+                { title: '', render: (_, __, i) => <Button size="small" disabled={disabled} onClick={() => setLevels(levels.filter((_x, j) => j !== i))}>삭제</Button> },
+              ]} footer={() => <Button size="small" disabled={disabled} data-testid="level-add" onClick={() => setLevels([...levels, { pct: (levels[levels.length - 1]?.pct ?? 5) + 5, fraction: 1 }])}>단계 추가</Button>} />
+          )}
+          {levels.length > 0 && <Typography.Text type="secondary" style={{ fontSize: 12 }}>분할 청산은 거래 한 건을 조각 행으로 남긴다 — 승률·기대값은 진입 기준으로 합쳐서 센다(조각을 따로 세지 않는다).</Typography.Text>}
+        </div>
+      )}
+      {has('take_profit_mode') && (
+        <Row label="익절 방식" hint="익절(단일 또는 분할)이 켜져 있어야 한다 — 익절 가격에 닿은 것을 언제 확정하나">
+          <Radio.Group size="small" value={ex.take_profit_mode ?? 'intrabar'} disabled={disabled} data-testid="exit-tp-mode" onChange={(e) => onChange({ ...ex, take_profit_mode: e.target.value })}>
+            <Radio.Button value="intrabar">봉 안에서 즉시</Radio.Button><Radio.Button value="close">종가 확인 뒤 다음 봉 시가</Radio.Button>
+          </Radio.Group>
+        </Row>
+      )}
+      {has('trail_activate_pct') && numRow('trail_activate_pct', '트레일링 발동', '트레일링이 켜져 있어야 한다 — 최고 수익률이 이 % 를 넘은 뒤부터 작동한다', 5, '%')}
+      {has('breakeven_after_pct') && numRow('breakeven_after_pct', '본전 손절', '최고 수익률이 이 % 에 닿으면 손절선을 매수가로 올린다', 3, '%')}
+      {has('max_holding_minutes') && mode !== 'tick' && numRow('max_holding_minutes', '시간 청산(분)', '분봉에서 이 시간(분)을 넘기면 판다', 60, '분')}
+      {extra.length === 0 && <Typography.Text type="secondary" style={{ fontSize: 12 }} data-testid="exits-advanced-pending">분할 익절·익절 방식·트레일링 발동 수익·본전 손절·시간 청산(분)은 서버 준비 중이다(studio-conditions c2 대기) — 서버가 알리면 여기에 나타난다.</Typography.Text>}
     </Card>
   )
 }

@@ -1,0 +1,52 @@
+{
+  "id": "high52_near",
+  "category": "신고가",
+  "title": "52주 신고가 근접",
+  "description": "종가가 250거래일 최고가의 95% 이상이면 신고가 코앞으로 보고 산다. 20일선을 깨면 판다.",
+  "modes": [
+    "daily_portfolio",
+    "daily_single"
+  ],
+  "needs": [],
+  "entry": {
+    "logic": "all",
+    "items": [
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "gte",
+        "right": {
+          "kind": "ind",
+          "name": "highest",
+          "params": {
+            "src": "high",
+            "n": 250
+          },
+          "mul": 0.95
+        }
+      }
+    ]
+  },
+  "exit": {
+    "logic": "any",
+    "items": [
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "lt",
+        "right": {
+          "kind": "ind",
+          "name": "sma",
+          "params": {
+            "src": "close",
+            "n": 20
+          }
+        }
+      }
+    ]
+  }
+}

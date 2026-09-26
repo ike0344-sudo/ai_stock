@@ -64,8 +64,10 @@ def field_errors(exc: ValidationError, raw: Any = None) -> list[dict[str, Any]]:
             continue
         loc = _clean_loc(full)
         msg = _message(str(e.get("msg", "")))
-        if not loc:  # 모델 전체 검사(Spec._check)의 오류는 위치가 없다 — 메시지 머리의 칸 이름으로 짐작해 화면이 강조할 자리를 준다
-            loc = _infer_loc(msg)
+        if not loc:  # 모델 전체 검사(Spec._check)의 오류는 위치가 없다 — 메시지 머리의 [경로] 나 칸 이름으로 짐작해 화면이 강조할 자리를 준다
+            loc, msg = _split_bracket(msg)
+            if not loc:
+                loc = _infer_loc(msg)
         out.append({"path": ".".join(str(p) for p in loc), "loc": loc, "message": msg})
     return out
 
@@ -73,6 +75,17 @@ def field_errors(exc: ValidationError, raw: Any = None) -> list[dict[str, Any]]:
 _HEAD_PATH = re.compile(r"^((?:strategy|period|universe|exits|portfolio|costs|fills|intraday|tick|compat|market_filter|validation)"
                         r"(?:\.[A-Za-z_]+)*)")
 _PARAM_NAME = re.compile(r"^변수 '([A-Za-z_][A-Za-z0-9_]*)'")
+
+
+_BRACKET = re.compile(r"^\[([^\]]+)\]\s*")
+
+
+def _split_bracket(msg: str) -> tuple[list[Any], str]:
+    """조건식 검증은 오류 머리에 명세 경로를 붙여 준다(`[strategy.entry.items.0.right] …`, c1 확정) — 경로를 떼어 loc 으로, 메시지는 본문만."""
+    m = _BRACKET.match(msg)
+    if not m:
+        return [], msg
+    return [int(p) if p.isdigit() else p for p in m.group(1).split(".")], msg[m.end():]
 
 
 def _infer_loc(msg: str) -> list[Any]:
@@ -94,9 +107,12 @@ def validate_spec(raw: Any, market_data: MarketData | None = None) -> dict[str, 
     try:
         bound = bind_params(spec)  # 변수 기본값을 채워 다시 검증
     except (ValueError, ValidationError) as exc:
-        msg = "; ".join(e["message"] for e in field_errors(exc)) if isinstance(exc, ValidationError) else str(exc)
-        return {"ok": False, "errors": [{"path": "params", "loc": ["params"], "message": msg}], "warnings": [],
-                "narration": None}
+        if isinstance(exc, ValidationError):
+            errs = field_errors(exc)
+            return {"ok": False, "errors": errs or [{"path": "params", "loc": ["params"], "message": str(exc)}], "warnings": [], "narration": None}
+        loc, msg = _split_bracket(str(exc))
+        return {"ok": False, "errors": [{"path": ".".join(str(p) for p in (loc or ["params"])), "loc": loc or ["params"], "message": msg}],
+                "warnings": [], "narration": None}
     if market_data is not None:
         try:
             for p in validate_against(bound, market_data.data_ranges()):

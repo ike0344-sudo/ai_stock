@@ -1,0 +1,57 @@
+{
+  "id": "intraday_high_break",
+  "category": "분봉",
+  "title": "분봉 N봉 신고가 돌파 (VWAP 위)",
+  "description": "종가가 지난 20봉 최고가를 넘고 그날 VWAP 위에 있으면 산다. VWAP 아래로 내려가면 판다.",
+  "modes": [
+    "intraday"
+  ],
+  "needs": [],
+  "entry": {
+    "logic": "all",
+    "items": [
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "gt",
+        "right": {
+          "kind": "ind",
+          "name": "highest",
+          "params": {
+            "src": "high",
+            "n": 20
+          }
+        }
+      },
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "gt",
+        "right": {
+          "kind": "ind",
+          "name": "vwap"
+        }
+      }
+    ]
+  },
+  "exit": {
+    "logic": "any",
+    "items": [
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "lt",
+        "right": {
+          "kind": "ind",
+          "name": "vwap"
+        }
+      }
+    ]
+  }
+}

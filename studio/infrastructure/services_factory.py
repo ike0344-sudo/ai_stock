@@ -8,6 +8,7 @@ import pandas as pd
 from datahub import catalog
 from studio.application.services import Services
 
+from .formula_store import FileFormulaStore
 from .holdout_ledger import FileHoldoutLedger
 from .legacy_adapter import LegacyAdapter
 from .legacy_strategies import REGISTRY
@@ -37,8 +38,24 @@ def theme_groups() -> Mapping[str, str]:
     return dict(zip(df["code"], df["group"]))
 
 
+def recipes() -> list[dict[str, Any]]:
+    """조건검색 레시피 — presets/studio/recipes/*.json (커밋 대상). 깨진 파일은 건너뛴다(목록 전체가 죽지 않게)."""
+    import json
+    d = catalog.root() / "presets" / "studio" / "recipes"
+    out = []
+    for p in sorted(d.glob("*.json")) if d.is_dir() else []:
+        try:
+            r = json.loads(p.read_text(encoding="utf-8-sig"))
+            if isinstance(r, dict) and r.get("id") == p.stem and all(k in r for k in ("category", "title", "modes", "entry", "exit")):
+                out.append(r)
+        except (OSError, ValueError):
+            continue
+    return out
+
+
 def default_services() -> Services:
     root = catalog.root() / "results" / "studio"
     return Services(market_data=LocalMarketData, run_store=FileRunStore(root), run_files=FileRunFiles(root),
                     presets=FilePresetStore(), legacy=LegacyAdapter(), legacy_catalog=legacy_catalog,
-                    theme_groups=theme_groups, holdout_ledger=FileHoldoutLedger())
+                    theme_groups=theme_groups, holdout_ledger=FileHoldoutLedger(), recipes=recipes,
+                    formulas=FileFormulaStore())

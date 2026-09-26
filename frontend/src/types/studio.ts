@@ -7,17 +7,23 @@ export type Num = number | ParamRef
 export const isParam = (v: unknown): v is ParamRef => typeof v === 'object' && v !== null && 'param' in v
 
 export type FieldName = 'open' | 'high' | 'low' | 'close' | 'volume' | 'value'
-export type Op = 'gt' | 'gte' | 'lt' | 'lte' | 'cross_above' | 'cross_below'
+// 서버가 새 연산자를 넣으면(N봉 이내 크로스·참이면 등) 목록에 그대로 나온다 — 화면 라벨이 없으면 이름 그대로 보인다
+export type Op = 'gt' | 'gte' | 'lt' | 'lte' | 'cross_above' | 'cross_below' | (string & {})
 export type ParamValue = ParamRef | boolean | number | string
 
-export interface FieldOperand { kind: 'field'; name: FieldName; offset?: number; mul?: Num }
-export interface IndOperand { kind: 'ind'; name: string; params?: Record<string, ParamValue>; offset?: number; mul?: Num }
+// tf: 시간 단위(studio-conditions c1) — 없으면 실행 봉("bar"). 서버가 능력(capabilities.timeframes)을 알릴 때만 화면이 보낸다
+export interface FieldOperand { kind: 'field'; name: FieldName; offset?: number; mul?: Num; tf?: string }
+export interface IndOperand { kind: 'ind'; name: string; params?: Record<string, ParamValue>; offset?: number; mul?: Num; tf?: string }
 export interface MarketOperand { kind: 'market'; index: 'kospi' | 'kosdaq'; name: 'close' | 'sma' | 'change_pct'; params?: Record<string, ParamValue> }
 export interface ConstOperand { kind: 'const'; value: Num }
-export type Operand = FieldOperand | IndOperand | MarketOperand | ConstOperand
+/** 포지션 값(청산 조건 전용, c2): return_pct·bars_held·minutes_held·max_return_pct·drawdown_pct·entry_price */
+export interface PosOperand { kind: 'pos'; name: string }
+export type Operand = FieldOperand | IndOperand | MarketOperand | ConstOperand | PosOperand
 
-export interface Condition { left: Operand; op: Op; right: Operand }
-export interface Group { logic: 'all' | 'any'; items: (Condition | Group)[] }
+/** right 는 is_true·is_false 에선 없다. within 은 cross_*_within 의 "최근 k봉 안" (c1 확정) */
+export interface Condition { left: Operand; op: Op; right?: Operand | null; hold?: number; within?: number }
+/** formula: 수식으로 만든 그룹의 원문(평가엔 안 쓰임, 재현·표시용) */
+export interface Group { logic: 'all' | 'any'; items: (Condition | Group)[]; negate?: boolean; formula?: string | null }
 export const isGroup = (i: Condition | Group): i is Group => 'logic' in i
 
 export type Mode = 'daily_single' | 'daily_portfolio' | 'intraday' | 'tick'
@@ -44,7 +50,7 @@ export interface SpecJson {
   }
   strategy: StrategySpec | null
   market_filter: Group | null
-  exits: { stop_loss_pct?: Num | null; take_profit_pct?: Num | null; trailing_stop_pct?: Num | null; max_holding_bars?: Num | null }
+  exits: ExitsCfg
   portfolio: {
     initial_capital: number
     max_positions: Num
@@ -72,7 +78,10 @@ export interface SpecJson {
 
 // ───────────── 카탈로그 ─────────────
 export interface CatalogParam { name: string; kind: 'int' | 'float' | 'bool' | 'enum'; default: unknown; lo: number | null; hi: number | null; choices: string[] | null; label: string }
-export interface IndicatorDef { name: string; label: string; desc: string; params: CatalogParam[]; modes: Mode[]; timing: string; compute: boolean }
+/** category(키)·category_ko·definition·example·live·volume_based 는 서버 카탈로그(c1 확정 칸)가 줄 때만 있다 — 없으면 화면이 자체 분류·"알려 주지 않음"으로 메운다 */
+export interface IndicatorDef { name: string; label: string; desc: string; params: CatalogParam[]; modes: Mode[]; timing: string; compute: boolean; category?: string; category_ko?: string; definition?: string; example?: string; live?: boolean; live_reason?: string; volume_based?: boolean }
+/** 서버가 지금 이해하는 것 — 모델을 들여다본 결과(studio/application/capabilities.py). 화면은 여기 있는 칸만 보낸다 */
+export interface Capabilities { timeframes: string[] | null; condition_fields: string[]; group_fields: string[]; operand_kinds: string[]; pos_names: string[]; exit_fields: string[]; formulas: boolean }
 export interface IndicatorCatalog {
   indicators: IndicatorDef[]
   fields: FieldName[]
@@ -81,6 +90,8 @@ export interface IndicatorCatalog {
   market: { indexes: ('kospi' | 'kosdaq')[]; names: ('close' | 'sma' | 'change_pct')[] }
   tick_catalog: Record<string, string>
   n_range: [number, number]
+  capabilities?: Capabilities
+  categories?: { key: string; label: string }[]
 }
 export interface LegacyParamDef { name: string; kind: 'int' | 'float' | 'enum'; default: unknown; lo: number | null; hi: number | null; choices: string[] | null; label: string; optional: boolean }
 export interface LegacyStrategyDef { name: string; label: string; deprecated: boolean; note: string; params: LegacyParamDef[] }
@@ -223,6 +234,9 @@ export interface Trade {
   net_pnl_tick?: number | null
   net_pct_tick?: number | null
   tick_refined?: boolean | null
+  // 분할 익절(c2)이면 진입 한 건이 조각 행 여럿 — 같은 entry_id 가 진입 한 건, slice 는 1부터
+  entry_id?: number | null
+  slice?: number | null
 }
 export interface EquityPoint {
   ts: string
@@ -335,4 +349,34 @@ export interface TickRefineSummary {
   n_trades: number; n_refined: number; n_without_ticks: number; n_no_matching_tick: number
   entry_diff_pct: DiffStats; exit_diff_pct: DiffStats
   net_pnl_bar: number | null; net_pnl_tick: number | null; definition: string
+}
+
+
+// ───────────── 청산 규칙 확장 (c2) · 레시피 (c6) ─────────────
+export interface TakeProfitLevel { pct: number; fraction: number }
+export interface ExitsCfg {
+  stop_loss_pct?: Num | null
+  take_profit_pct?: Num | null
+  trailing_stop_pct?: Num | null
+  max_holding_bars?: Num | null
+  // 아래는 서버가 능력(capabilities.exit_fields)으로 알릴 때만 화면이 보낸다
+  take_profit_levels?: TakeProfitLevel[] | null
+  take_profit_mode?: 'intrabar' | 'close' | null
+  trail_activate_pct?: Num | null
+  breakeven_after_pct?: Num | null
+  max_holding_minutes?: Num | null
+}
+export interface Recipe {
+  id: string
+  category: string
+  title: string
+  description: string
+  modes: Mode[]
+  needs: string[]
+  entry: Group
+  exit: Group
+  params?: Record<string, ParamRange>
+  exits?: ExitsCfg
+  available: boolean
+  unavailable_reason: string | null
 }

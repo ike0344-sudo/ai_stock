@@ -7,9 +7,11 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
+from studio.application import recipes as recipe_service
 from studio.application import stock_service
+from studio.application.capabilities import capabilities, ops
 from studio.application.services import Services
 from studio.domain.conditions import catalog as cat
 
@@ -24,15 +26,51 @@ def _param(p: cat.ParamDef) -> dict[str, Any]:
             "choices": list(p.choices) if p.choices else None, "label": p.label_ko}
 
 
+def _route_paths(app: Any) -> list[str]:
+    """이 서버에 실제로 붙은 경로 — FastAPI 버전에 따라 include_router 가 경로 없는 껍데기(`original_router` 를 품은)로 들어와 둘 다 본다."""
+    out: list[str] = []
+    for r in app.routes:
+        if getattr(r, "path", None):
+            out.append(r.path)
+        for sub in getattr(getattr(r, "original_router", None), "routes", []) or []:
+            if getattr(sub, "path", None):
+                out.append(sub.path)
+    return out
+
+
+def _indicator(d: cat.IndicatorDef) -> dict[str, Any]:
+    """기본 칸 + 확장 칸(분류 키·한글 분류명·정의 식·예시·일봉 실시간 지원 live·거래량 계열 volume_based)."""
+    out = {"name": d.name, "label": d.label_ko, "desc": d.desc_ko, "params": [_param(p) for p in d.params],
+           "modes": list(d.modes), "timing": d.timing_ko, "compute": d.compute}
+    for key in ("category", "definition", "example", "live", "volume_based"):  # backtest-agent 확정 칸(c1 편지 2026-09-26)
+        v = getattr(d, key, None)
+        if v is not None:
+            out[key] = v
+    lr = getattr(d, "live_reason_ko", None)  # 일봉 실시간을 왜 못 쓰나(빈 문자열 = 조건 없이 지원)
+    if lr:
+        out["live_reason"] = lr
+    cats = getattr(cat, "CATEGORIES", {})
+    if getattr(d, "category", None) in cats:
+        out["category_ko"] = cats[d.category]
+    return out
+
+
 @router.get("/meta/indicators")
-def indicators() -> dict[str, Any]:
+def indicators(request: Request) -> dict[str, Any]:
     return {"data": {
-        "indicators": [{"name": d.name, "label": d.label_ko, "desc": d.desc_ko, "params": [_param(p) for p in d.params],
-                        "modes": list(d.modes), "timing": d.timing_ko, "compute": d.compute} for d in cat.INDICATORS.values()],
-        "fields": list(cat.FIELDS), "modes": list(cat.MODES), "ops": ["gt", "gte", "lt", "lte", "cross_above", "cross_below"],
+        "indicators": [_indicator(d) for d in cat.INDICATORS.values()],
+        "fields": list(cat.FIELDS), "modes": list(cat.MODES), "ops": ops(),
         "market": {"indexes": list(cat.MARKET_INDEXES), "names": list(cat.MARKET_NAMES)},
         "tick_catalog": cat.TICK_CATALOG, "n_range": [cat.N_MIN, cat.N_MAX],
+        "categories": [{"key": k, "label": v} for k, v in getattr(cat, "CATEGORIES", {}).items()],
+        "capabilities": capabilities(_route_paths(request.app)),
     }}
+
+
+@router.get("/meta/recipes")
+def recipes(svc: Services = Depends(get_services)) -> dict[str, Any]:
+    """조건검색 레시피 — 서버가 아직 못 쓰는 재료가 든 것은 available=false + 이유로 내보낸다."""
+    return {"data": recipe_service.list_recipes(svc.recipes(), dict(cat.INDICATORS), ops())}
 
 
 @router.get("/meta/strategies")

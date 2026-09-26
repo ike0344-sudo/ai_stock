@@ -1,5 +1,6 @@
 // 명세 편집 도우미 — 순수 함수. 화면 상태는 SpecJson 하나(JSON)이고 편집은 항상 새 객체를 만든다.
-import type { Condition, Group, IndicatorCatalog, IndOperand, IntradayCfg, Mode, Num, Operand, ParamRange, SpecJson, TickCfg } from '@/types/studio'
+import { DEFAULT_WITHIN, isUnaryOp, isWithinOp } from '@/lib/conditionMeta'
+import type { Condition, Group, IndicatorCatalog, IndOperand, IntradayCfg, Mode, Num, Op, Operand, ParamRange, Recipe, SpecJson, TickCfg } from '@/types/studio'
 import { isGroup, isParam } from '@/types/studio'
 
 export const clone = <T,>(v: T): T => structuredClone(v)
@@ -93,6 +94,25 @@ export function clampPeriodToRange(period: SpecJson['period'], range: [string, s
   return { start: start < range[0] ? range[0] : start, end: range[1] }
 }
 
+/** 이 명세의 모드에서 레시피를 그대로 쓸 수 있나 — 틱 정밀화는 분봉 신호를 쓰므로 분봉 레시피도 된다 */
+export function recipeFitsMode(r: Recipe, spec: SpecJson): boolean {
+  return r.modes.includes(spec.mode) || (spec.mode === 'tick' && spec.tick?.entry_source === 'minute_refine' && r.modes.includes('intraday'))
+}
+
+/**
+ * 레시피를 명세에 푼다: 진입·청산 조건을 그 레시피의 것으로 바꾸고, 레시피의 변수·청산 규칙을 합친다.
+ * 모드가 안 맞으면 레시피의 첫 모드로 바꾼다(dataRange: 바뀐 모드 데이터의 [처음, 끝]). 종목·기간·자금·비용·시장 필터는 그대로 둔다.
+ */
+export function applyRecipe(spec: SpecJson, r: Recipe, dataRange?: [string, string]): SpecJson {
+  let s = recipeFitsMode(r, spec) ? clone(spec) : switchMode(spec, r.modes[0], dataRange)
+  if (s.mode === 'tick' && s.tick?.entry_source === 'catalog') s = setTickEntrySource(s, 'minute_refine') // 조건식이 있는 레시피는 정밀화 방식에서만 쓴다
+  s.strategy = { source: 'builder', entry: clone(r.entry), exit: clone(r.exit) }
+  s.params = { ...s.params, ...clone(r.params ?? {}) }
+  s.exits = { ...s.exits, ...clone(r.exits ?? {}) }
+  if (s.name.startsWith('새 백테스트')) s.name = r.title
+  return s
+}
+
 /** 틱 진입 방식을 바꿀 때 — 틱 조건이면 전략 조건식이 없고, 분봉+틱 정밀화면 분봉 조건 전략이 필요하다 */
 export function setTickEntrySource(spec: SpecJson, src: TickCfg['entry_source']): SpecJson {
   if (!spec.tick) return spec
@@ -140,6 +160,15 @@ export function toParam(spec: SpecJson, current: number, hint: string): { spec: 
 }
 
 // ───────────── 조건 그룹 편집 ─────────────
+/** 연산자를 바꿀 때 그 연산자가 요구하는 칸에 맞춘다: 참이면·거짓이면은 오른쪽 값이 없고, N봉 이내 크로스는 within 이 있어야 한다 */
+export function changeOp(c: Condition, op: Op): Condition {
+  const { right, within, ...rest } = c
+  const next: Condition = { ...rest, op }
+  if (!isUnaryOp(op)) next.right = right ?? { kind: 'const', value: 0 }
+  if (isWithinOp(op)) next.within = within ?? DEFAULT_WITHIN
+  return next
+}
+
 export function newCondition(): Condition {
   return { left: { kind: 'field', name: 'close' }, op: 'gt', right: { kind: 'const', value: 0 } }
 }
@@ -185,6 +214,7 @@ export function operandKindDefault(kind: Operand['kind'], cat?: IndicatorCatalog
     case 'field': return { kind: 'field', name: 'close' }
     case 'ind': return cat ? indOperand(cat, 'sma') : { kind: 'ind', name: 'sma', params: { src: 'close', n: 20 } }
     case 'market': return { kind: 'market', index: 'kospi', name: 'close' }
+    case 'pos': return { kind: 'pos', name: 'return_pct' }
     default: return { kind: 'const', value: 0 }
   }
 }

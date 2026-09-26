@@ -2,7 +2,7 @@
 import { useQuery, type UseQueryResult } from '@tanstack/react-query'
 import type { JobRow } from '@/types'
 import type {
-  BarsData, CompareData, IntradaySources, DataRanges, EquityPoint, FoldsFile, GridInfo, GridRow, HoldoutHistory, IndicatorCatalog, LegacyStrategyDef, PresetRow, PreviewResult,
+  BarsData, CompareData, IntradaySources, DataRanges, EquityPoint, FoldsFile, GridInfo, GridRow, HoldoutHistory, IndicatorCatalog, LegacyStrategyDef, PresetRow, PreviewResult, Recipe,
   RunDetail, RunRow, SpecJson, StockHit, Trade, ValidateResult, ValidationConfig, WalkforwardConfig,
 } from '@/types/studio'
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost, apiPut } from './client'
@@ -14,6 +14,8 @@ const FOREVER = { staleTime: Infinity, retry: false } as const
 export const useIndicators = (): Q<IndicatorCatalog> => useQuery({ queryKey: ['meta', 'indicators'], queryFn: () => apiGet<IndicatorCatalog>('/api/meta/indicators'), ...FOREVER })
 export const useLegacyStrategies = (): Q<LegacyStrategyDef[]> => useQuery({ queryKey: ['meta', 'strategies'], queryFn: () => apiGet<LegacyStrategyDef[]>('/api/meta/strategies'), ...FOREVER })
 export const useDataRanges = (): Q<DataRanges> => useQuery({ queryKey: ['meta', 'data-ranges'], queryFn: () => apiGet<DataRanges>('/api/meta/data-ranges'), staleTime: 5 * 60_000, retry: false })
+
+export const useRecipes = (): Q<Recipe[]> => useQuery({ queryKey: ['meta', 'recipes'], queryFn: () => apiGet<Recipe[]>('/api/meta/recipes'), staleTime: 5 * 60_000, retry: false })
 
 // ── 종목
 export const useStockSearch = (q: string): Q<StockHit[]> =>

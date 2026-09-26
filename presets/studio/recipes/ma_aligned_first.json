@@ -1,0 +1,64 @@
+{
+  "id": "ma_aligned_first",
+  "category": "이동평균",
+  "title": "이평 정배열 첫 돌파",
+  "description": "5·20·60일 이동평균이 정배열이 되는 첫날(어제까지는 정배열이 아니었던 날) 산다. 20일선을 깨면 판다.",
+  "modes": [
+    "daily_portfolio",
+    "daily_single"
+  ],
+  "needs": [
+    "indicator:ma_aligned",
+    "op:is_true"
+  ],
+  "entry": {
+    "logic": "all",
+    "items": [
+      {
+        "left": {
+          "kind": "ind",
+          "name": "ma_aligned",
+          "params": {
+            "n1": 5,
+            "n2": 20,
+            "n3": 60
+          }
+        },
+        "op": "is_true"
+      },
+      {
+        "left": {
+          "kind": "ind",
+          "name": "ma_aligned",
+          "params": {
+            "n1": 5,
+            "n2": 20,
+            "n3": 60
+          },
+          "offset": 1
+        },
+        "op": "is_false"
+      }
+    ]
+  },
+  "exit": {
+    "logic": "any",
+    "items": [
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "lt",
+        "right": {
+          "kind": "ind",
+          "name": "sma",
+          "params": {
+            "src": "close",
+            "n": 20
+          }
+        }
+      }
+    ]
+  }
+}

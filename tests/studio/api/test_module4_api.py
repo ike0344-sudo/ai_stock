@@ -30,7 +30,7 @@ def test_indicator_catalog_has_everything_the_editor_needs(client):
     assert {"sma", "highest", "rsi", "vol_ratio", "value_rank"} <= names
     sma = next(i for i in d["indicators"] if i["name"] == "sma")
     assert {p["name"] for p in sma["params"]} == {"src", "n"} and "daily_portfolio" in sma["modes"]
-    assert d["ops"] == ["gt", "gte", "lt", "lte", "cross_above", "cross_below"]
+    assert d["ops"][:6] == ["gt", "gte", "lt", "lte", "cross_above", "cross_below"]  # c1 이 cross_*_within·is_true·is_false 를 뒤에 붙였다
     assert d["fields"] and d["market"]["indexes"] == ["kospi", "kosdaq"] and d["n_range"] == [1, 500]
 
 

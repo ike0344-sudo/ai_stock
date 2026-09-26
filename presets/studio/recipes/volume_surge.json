@@ -1,0 +1,64 @@
+{
+  "id": "volume_surge",
+  "category": "거래량·거래대금",
+  "title": "거래량 급증 양봉",
+  "description": "거래량이 20일 평균의 3배 이상이면서 3% 넘게 오른 날 산다. 5일선 아래로 내려가면 판다.",
+  "modes": [
+    "daily_portfolio",
+    "daily_single"
+  ],
+  "needs": [],
+  "entry": {
+    "logic": "all",
+    "items": [
+      {
+        "left": {
+          "kind": "ind",
+          "name": "vol_ratio",
+          "params": {
+            "n": 20
+          }
+        },
+        "op": "gte",
+        "right": {
+          "kind": "const",
+          "value": 3
+        }
+      },
+      {
+        "left": {
+          "kind": "ind",
+          "name": "change_pct",
+          "params": {
+            "n": 1
+          }
+        },
+        "op": "gt",
+        "right": {
+          "kind": "const",
+          "value": 3
+        }
+      }
+    ]
+  },
+  "exit": {
+    "logic": "any",
+    "items": [
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "lt",
+        "right": {
+          "kind": "ind",
+          "name": "sma",
+          "params": {
+            "src": "close",
+            "n": 5
+          }
+        }
+      }
+    ]
+  }
+}

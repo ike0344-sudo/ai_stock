@@ -1,0 +1,68 @@
+{
+  "id": "bb_squeeze_break",
+  "category": "보조지표",
+  "title": "볼린저 수축 뒤 상단 돌파",
+  "description": "밴드 폭이 좁아진 뒤(폭 10% 이하) 종가가 상단을 넘으면 산다. 중심선 아래로 내려가면 판다.",
+  "modes": [
+    "daily_portfolio",
+    "daily_single"
+  ],
+  "needs": [
+    "indicator:bb_width"
+  ],
+  "entry": {
+    "logic": "all",
+    "items": [
+      {
+        "left": {
+          "kind": "ind",
+          "name": "bb_width",
+          "params": {
+            "n": 20,
+            "k": 2.0
+          }
+        },
+        "op": "lte",
+        "right": {
+          "kind": "const",
+          "value": 10
+        }
+      },
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "gt",
+        "right": {
+          "kind": "ind",
+          "name": "bb_upper",
+          "params": {
+            "n": 20,
+            "k": 2.0
+          }
+        }
+      }
+    ]
+  },
+  "exit": {
+    "logic": "any",
+    "items": [
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "lt",
+        "right": {
+          "kind": "ind",
+          "name": "sma",
+          "params": {
+            "src": "close",
+            "n": 20
+          }
+        }
+      }
+    ]
+  }
+}

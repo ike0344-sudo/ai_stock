@@ -13,10 +13,13 @@ import { NarrationPanel, PreviewTable, ValidationPanel } from '@/components/buil
 import { ParamsContext, type ParamsApi } from '@/components/builder/ParamsContext'
 import { RunModal } from '@/components/builder/RunModal'
 import { CompatPanel, CostsPanel, ExitsPanel, ParamsTable, PeriodPanel, PortfolioPanel, UniversePanel, rangeKeyOf } from '@/components/builder/SpecPanels'
+import { ConditionContext } from '@/components/builder/ConditionContext'
+import { FormulaPanel } from '@/components/builder/FormulaPanel'
 import { IntradayPanel, TickPanel } from '@/components/builder/ModePanels'
+import { RecipePicker } from '@/components/builder/RecipePicker'
 import { LegacyForm, PresetBar, StrategySourceSwitch } from '@/components/builder/StrategyPanels'
-import { clampPeriodToRange, clone, newGroup, newSpec, normalizeSpec, pruneParams, setTickEntrySource, switchMode, toParam } from '@/lib/spec'
-import type { PreviewResult, RunDetail, SpecJson, StrategySpec } from '@/types/studio'
+import { addItem, applyRecipe, clampPeriodToRange, clone, newGroup, newSpec, normalizeSpec, pruneParams, setTickEntrySource, switchMode, toParam } from '@/lib/spec'
+import type { Condition, Group, PreviewResult, Recipe, RunDetail, SpecJson, StrategySpec } from '@/types/studio'
 
 const MODE_TABS: { key: SpecJson['mode']; label: string; disabled?: boolean }[] = [
   { key: 'daily_single', label: '일봉 · 단일 종목' },
@@ -152,13 +155,21 @@ export function BacktestPage() {
         portfolio: { ...s.portfolio, max_positions: 1, max_weight_pct: 100, sizing: 'equal_slot_fixed' }, fills: { ...s.fills, volume_cap_pct: null } }
     : { ...s, compat: { legacy: false } })
 
+  const doRecipe = (r: Recipe) => {
+    periodEdited.current = false // 모드가 바뀌면 기간을 그 모드 데이터 끝으로 다시 잡는다
+    edit((s) => applyRecipe(s, r, ranges.data?.[rangeKeyOf(r.modes.includes(s.mode) ? s.mode : r.modes[0], s.intraday?.source ?? 'al')]))
+    setLoadNote(`레시피 "${r.title}" 을 불러왔습니다 — 조건 행으로 풀렸으니 고쳐 쓰세요`)
+  }
+  const insertFormula = (target: 'entry' | 'exit', node: Group | Condition) => setStrategy((s) => (s.source === 'builder' ? { ...s, [target]: addItem(s[target], node) } : s))
   const presetBar = <PresetBar spec={pruned} onLoad={(s, name) => { periodEdited.current = true; edit(() => normalizeSpec(s)); setLoadNote(`프리셋 "${name}" 을 불러왔습니다`) }} />
+  const recipeBar = <RecipePicker spec={spec} onApply={doRecipe} />
   const universe = <UniversePanel value={spec.universe} onChange={patch('universe')} mode={spec.mode} />
   const period = <PeriodPanel value={spec.period} onChange={(p) => { periodEdited.current = true; patch('period')(p) }} ranges={ranges.data} holdoutPct={fine ? undefined : spec.validation?.holdout_pct} rangeKey={rangeKeyOf(spec.mode, spec.intraday?.source ?? 'al')} />
   const strategyBlock = (
     <div>
       <Space style={{ marginBottom: 8 }}>
         <Typography.Text strong>전략</Typography.Text>
+        {recipeBar}
         {!(spec.mode === 'tick' && spec.tick?.entry_source === 'catalog') && <StrategySourceSwitch strategy={strategy} legacy={legacy.data ?? []} noLegacy={fine} onChange={(s) => edit((x) => ({ ...x, strategy: s }))} />}
       </Space>
       {spec.mode === 'tick' && spec.tick?.entry_source === 'catalog' ? (
@@ -169,7 +180,7 @@ export function BacktestPage() {
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           <ConditionGroupEditor title="진입 조건 (이 조건이 참이면 다음 봉 시가에 산다)" path="strategy.entry" group={strategy.entry} required cat={catalog} mode={spec.mode} errors={errors}
             onChange={(g) => setStrategy((s) => (s.source === 'builder' ? { ...s, entry: g } : s))} />
-          <ConditionGroupEditor title="청산 조건 (이 조건이 참이면 다음 봉 시가에 판다)" path="strategy.exit" group={strategy.exit} cat={catalog} mode={spec.mode} errors={errors}
+          <ConditionGroupEditor title="청산 조건 (이 조건이 참이면 다음 봉 시가에 판다)" path="strategy.exit" group={strategy.exit} cat={catalog} mode={spec.mode} errors={errors} allowPos
             onChange={(g) => setStrategy((s) => (s.source === 'builder' ? { ...s, exit: g } : s))} />
         </Space>
       ) : null}
@@ -189,7 +200,7 @@ export function BacktestPage() {
     </div>
   )
   const settings = [
-    <ExitsPanel key="exits" value={spec.exits} onChange={patch('exits')} disabled={compat} mode={spec.mode} />,
+    <ExitsPanel key="exits" value={spec.exits} onChange={patch('exits')} disabled={compat} mode={spec.mode} extra={catalog.capabilities?.exit_fields ?? []} />,
     <PortfolioPanel key="pf" value={spec.portfolio} onChange={patch('portfolio')} disabled={compat} single={single} mode={spec.mode} />,
     <CostsPanel key="costs" costs={spec.costs} fills={spec.fills} onCosts={patch('costs')} onFills={patch('fills')} compat={compat} disabled={compat} mode={spec.mode} />,
     single ? <CompatPanel key="compat" on={compat} onChange={setCompat} /> : null,
@@ -202,6 +213,7 @@ export function BacktestPage() {
       {showIntraday && spec.intraday && <IntradayPanel value={spec.intraday} spec={spec} mode={spec.mode} cat={catalog} errors={errors} onChange={(i) => edit((s) => ({ ...s, intraday: i }))} />}
     </Space>
   ) : null
+  const formulaBlock = <FormulaPanel enabled={!!catalog.capabilities?.formulas} mode={spec.mode} barMinutes={spec.intraday?.bar_minutes ?? 5} canInsert={strategy?.source === 'builder'} onInsert={insertFormula} />
   const actions = (
     <Space wrap>
       <Button icon={<SearchOutlined />} onClick={doPreview} loading={preview.loading} disabled={!result?.ok || fine} title={fine ? '오늘 조건 맞는 종목은 일봉 모드에서만 볼 수 있다' : undefined} data-testid="preview-btn">오늘 조건 맞는 종목</Button>
@@ -220,7 +232,7 @@ export function BacktestPage() {
   const body = wide ? (
     // 넓은 화면: 왼쪽 = 조건 편집기(넓게) · 오른쪽 = 풀이·검증 + 유니버스·기간·청산·자금·비용·변수. 실행 버튼 줄은 오른쪽 위에 붙어 따라온다.
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.4fr) minmax(0, 1fr)', gap: 16, alignItems: 'start' }} data-testid="layout-wide">
-      {stack(<>{presetBar}{modeBlock}{strategyBlock}{marketBlock}{paramsTable}</>)}
+      {stack(<>{presetBar}{modeBlock}{strategyBlock}{marketBlock}{formulaBlock}{paramsTable}</>)}
       <div>
         <div style={{ position: 'sticky', top: 0, zIndex: 5, padding: '8px 0', background: token.colorBgLayout }} data-testid="action-bar">{actions}</div>
         {stack(<>{checks}{universe}{period}{settings}</>)}
@@ -228,7 +240,7 @@ export function BacktestPage() {
     </div>
   ) : (
     <Row gutter={16}>
-      <Col xs={24} xl={15}>{stack(<>{presetBar}{universe}{period}{modeBlock}{strategyBlock}{marketBlock}{settings}{paramsTable}</>)}</Col>
+      <Col xs={24} xl={15}>{stack(<>{presetBar}{universe}{period}{modeBlock}{strategyBlock}{marketBlock}{formulaBlock}{settings}{paramsTable}</>)}</Col>
       <Col xs={24} xl={9}>
         <div style={{ position: 'sticky', top: 8 }}>
           {stack(<><NarrationPanel result={result} loading={validation.isFetching || !settled} /><ValidationPanel result={result} error={validation.isError ? validation.error.message : undefined} />{actions}{(preview.data || preview.loading || preview.error) && <PreviewTable {...preview} />}</>)}
@@ -238,6 +250,7 @@ export function BacktestPage() {
   )
 
   return (
+    <ConditionContext.Provider value={{ barMinutes: spec.intraday?.bar_minutes ?? 5, source: spec.intraday?.source ?? 'al' }}>
     <ParamsContext.Provider value={paramsApi}>
       <Space direction="vertical" size="middle" style={{ width: '100%' }} data-testid="backtest-page">
         <Space wrap>
@@ -252,5 +265,6 @@ export function BacktestPage() {
         <RunModal spec={runSpec} onClose={() => setRunSpec(null)} />
       </Space>
     </ParamsContext.Provider>
+    </ConditionContext.Provider>
   )
 }

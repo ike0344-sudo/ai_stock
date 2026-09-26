@@ -1,0 +1,49 @@
+{
+  "id": "rsi_rebound",
+  "category": "보조지표",
+  "title": "RSI 과매도 반등",
+  "description": "RSI(14)가 30을 아래에서 위로 뚫으면 산다. 70을 넘으면 판다.",
+  "modes": [
+    "daily_portfolio",
+    "daily_single"
+  ],
+  "needs": [],
+  "entry": {
+    "logic": "all",
+    "items": [
+      {
+        "left": {
+          "kind": "ind",
+          "name": "rsi",
+          "params": {
+            "n": 14
+          }
+        },
+        "op": "cross_above",
+        "right": {
+          "kind": "const",
+          "value": 30
+        }
+      }
+    ]
+  },
+  "exit": {
+    "logic": "any",
+    "items": [
+      {
+        "left": {
+          "kind": "ind",
+          "name": "rsi",
+          "params": {
+            "n": 14
+          }
+        },
+        "op": "gt",
+        "right": {
+          "kind": "const",
+          "value": 70
+        }
+      }
+    ]
+  }
+}

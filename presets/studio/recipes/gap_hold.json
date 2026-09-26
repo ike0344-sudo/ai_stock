@@ -1,0 +1,59 @@
+{
+  "id": "gap_hold",
+  "category": "갭",
+  "title": "갭 상승 유지",
+  "description": "전일 종가보다 3% 이상 높게 시작해 그 봉을 양봉으로 끝내면 산다(갭이 메워지지 않은 것). 5일선 아래로 밀리면 판다.",
+  "modes": [
+    "daily_portfolio",
+    "daily_single",
+    "intraday"
+  ],
+  "needs": [],
+  "entry": {
+    "logic": "all",
+    "items": [
+      {
+        "left": {
+          "kind": "ind",
+          "name": "gap_pct"
+        },
+        "op": "gte",
+        "right": {
+          "kind": "const",
+          "value": 3
+        }
+      },
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "gt",
+        "right": {
+          "kind": "field",
+          "name": "open"
+        }
+      }
+    ]
+  },
+  "exit": {
+    "logic": "any",
+    "items": [
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "lt",
+        "right": {
+          "kind": "ind",
+          "name": "sma",
+          "params": {
+            "src": "close",
+            "n": 5
+          }
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "id": "new_high_20",
+  "category": "신고가",
+  "title": "20일 신고가 돌파",
+  "description": "종가가 지난 20일 최고가를 넘으면 산다. 10일 최저가 밑으로 내려가면 판다 — 신고가 추세매매의 가장 기본 꼴.",
+  "modes": [
+    "daily_portfolio",
+    "daily_single"
+  ],
+  "needs": [],
+  "entry": {
+    "logic": "all",
+    "items": [
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "gt",
+        "right": {
+          "kind": "ind",
+          "name": "highest",
+          "params": {
+            "src": "high",
+            "n": 20
+          }
+        }
+      }
+    ]
+  },
+  "exit": {
+    "logic": "any",
+    "items": [
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "lt",
+        "right": {
+          "kind": "ind",
+          "name": "lowest",
+          "params": {
+            "src": "low",
+            "n": 10
+          }
+        }
+      }
+    ]
+  }
+}

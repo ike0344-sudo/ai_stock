@@ -1,0 +1,66 @@
+{
+  "id": "theme_leader",
+  "category": "테마",
+  "title": "테마 대장 (테마 안 상승률 1위)",
+  "description": "소피증권 테마 그룹 안에서 그날 상승률 1위이고 3% 이상 오르면 산다. 5일선 아래로 내려가면 판다. ※ 테마 구성은 현재 기준(과거에 그대로 적용).",
+  "modes": [
+    "daily_portfolio",
+    "daily_single"
+  ],
+  "needs": [
+    "indicator:rank_in_theme"
+  ],
+  "entry": {
+    "logic": "all",
+    "items": [
+      {
+        "left": {
+          "kind": "ind",
+          "name": "rank_in_theme",
+          "params": {
+            "by": "change"
+          }
+        },
+        "op": "lte",
+        "right": {
+          "kind": "const",
+          "value": 1
+        }
+      },
+      {
+        "left": {
+          "kind": "ind",
+          "name": "change_pct",
+          "params": {
+            "n": 1
+          }
+        },
+        "op": "gt",
+        "right": {
+          "kind": "const",
+          "value": 3
+        }
+      }
+    ]
+  },
+  "exit": {
+    "logic": "any",
+    "items": [
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "lt",
+        "right": {
+          "kind": "ind",
+          "name": "sma",
+          "params": {
+            "src": "close",
+            "n": 5
+          }
+        }
+      }
+    ]
+  }
+}

@@ -11,6 +11,7 @@ from typing import Any, Callable, Mapping, Protocol
 
 import pandas as pd
 
+from .formula_service import FormulaStore
 from .ports import HoldoutLedger, LegacyStrategies, MarketData, RunStore
 
 
@@ -61,3 +62,5 @@ class Services:
     legacy_catalog: Callable[[], list[dict[str, Any]]] = field(default=lambda: [])
     theme_groups: Callable[[], Mapping[str, str]] = field(default=lambda: {})
     holdout_ledger: HoldoutLedger | None = None  # 홀드아웃 열기 확인 대화상자의 이력(읽기만)
+    recipes: Callable[[], list[dict[str, Any]]] = field(default=lambda: [])  # 조건검색 레시피(presets/studio/recipes/*.json)
+    formulas: FormulaStore | None = None  # 사용자 수식 저장소(presets/studio/formulas/*.json)

@@ -1,0 +1,63 @@
+{
+  "id": "new_high_volume",
+  "category": "신고가",
+  "title": "신고가 돌파 + 거래량 동반",
+  "description": "20일 신고가를 돌파하면서 거래량이 20일 평균의 2배 이상이면 산다. 10일 최저가 밑으로 내려가면 판다.",
+  "modes": [
+    "daily_portfolio",
+    "daily_single"
+  ],
+  "needs": [
+    "indicator:new_high",
+    "op:is_true"
+  ],
+  "entry": {
+    "logic": "all",
+    "items": [
+      {
+        "left": {
+          "kind": "ind",
+          "name": "new_high",
+          "params": {
+            "n": 20
+          }
+        },
+        "op": "is_true"
+      },
+      {
+        "left": {
+          "kind": "ind",
+          "name": "vol_ratio",
+          "params": {
+            "n": 20
+          }
+        },
+        "op": "gte",
+        "right": {
+          "kind": "const",
+          "value": 2
+        }
+      }
+    ]
+  },
+  "exit": {
+    "logic": "any",
+    "items": [
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "lt",
+        "right": {
+          "kind": "ind",
+          "name": "lowest",
+          "params": {
+            "src": "low",
+            "n": 10
+          }
+        }
+      }
+    ]
+  }
+}

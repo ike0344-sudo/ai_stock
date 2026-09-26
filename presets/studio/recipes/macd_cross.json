@@ -1,0 +1,66 @@
+{
+  "id": "macd_cross",
+  "category": "보조지표",
+  "title": "MACD 골든크로스",
+  "description": "MACD 선이 신호선을 아래에서 위로 뚫으면 산다. 다시 아래로 뚫으면 판다.",
+  "modes": [
+    "daily_portfolio",
+    "daily_single",
+    "intraday"
+  ],
+  "needs": [
+    "indicator:macd"
+  ],
+  "entry": {
+    "logic": "all",
+    "items": [
+      {
+        "left": {
+          "kind": "ind",
+          "name": "macd",
+          "params": {
+            "fast": 12,
+            "slow": 26,
+            "sig": 9
+          }
+        },
+        "op": "cross_above",
+        "right": {
+          "kind": "ind",
+          "name": "macd_signal",
+          "params": {
+            "fast": 12,
+            "slow": 26,
+            "sig": 9
+          }
+        }
+      }
+    ]
+  },
+  "exit": {
+    "logic": "any",
+    "items": [
+      {
+        "left": {
+          "kind": "ind",
+          "name": "macd",
+          "params": {
+            "fast": 12,
+            "slow": 26,
+            "sig": 9
+          }
+        },
+        "op": "cross_below",
+        "right": {
+          "kind": "ind",
+          "name": "macd_signal",
+          "params": {
+            "fast": 12,
+            "slow": 26,
+            "sig": 9
+          }
+        }
+      }
+    ]
+  }
+}

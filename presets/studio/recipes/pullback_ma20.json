@@ -1,0 +1,66 @@
+{
+  "id": "pullback_ma20",
+  "category": "이동평균",
+  "title": "상승 추세 눌림목 반등",
+  "description": "60일선 위(상승 추세)에서 눌렸던 종가가 20일선을 다시 넘으면 산다. 20일선 아래로 밀리면 판다.",
+  "modes": [
+    "daily_portfolio",
+    "daily_single"
+  ],
+  "needs": [],
+  "entry": {
+    "logic": "all",
+    "items": [
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "gt",
+        "right": {
+          "kind": "ind",
+          "name": "sma",
+          "params": {
+            "src": "close",
+            "n": 60
+          }
+        }
+      },
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "cross_above",
+        "right": {
+          "kind": "ind",
+          "name": "sma",
+          "params": {
+            "src": "close",
+            "n": 20
+          }
+        }
+      }
+    ]
+  },
+  "exit": {
+    "logic": "any",
+    "items": [
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "cross_below",
+        "right": {
+          "kind": "ind",
+          "name": "sma",
+          "params": {
+            "src": "close",
+            "n": 20
+          }
+        }
+      }
+    ]
+  }
+}

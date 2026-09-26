@@ -1,0 +1,50 @@
+{
+  "id": "intraday_daily_high_break",
+  "category": "분봉",
+  "title": "분봉 N일 신고가 돌파",
+  "description": "분봉 종가가 전일까지 20거래일 일봉 최고가를 넘으면 산다 — 분봉 실행에서 일봉 신고가를 쓴다. VWAP 아래로 내려가면 판다.",
+  "modes": [
+    "intraday"
+  ],
+  "needs": [
+    "timeframes"
+  ],
+  "entry": {
+    "logic": "all",
+    "items": [
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "gt",
+        "right": {
+          "kind": "ind",
+          "name": "highest",
+          "params": {
+            "src": "high",
+            "n": 20,
+            "include_current": true
+          },
+          "tf": "daily_prev"
+        }
+      }
+    ]
+  },
+  "exit": {
+    "logic": "any",
+    "items": [
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "lt",
+        "right": {
+          "kind": "ind",
+          "name": "vwap"
+        }
+      }
+    ]
+  }
+}
