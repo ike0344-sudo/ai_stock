@@ -24,6 +24,13 @@
 state/agent_reports/data-agent_20260830-xxxxxx.md 참고.
 
     python tick_collect_804_828_al.py
+    python tick_collect_804_828_al.py --start 2026-09-24 --end 2026-09-24 --codes @codes.txt --stop-at 08:10
+
+공유 데이터(`data/stocks/tick_al`)를 쓰므로 `datahub.write("tick_al")` 안에서 돈다 — 잠금과 장부.
+(같은 자원이라 `--shard` 조각을 동시에 띄우면 하나씩 차례로 돈다.)
+`--codes` 는 유니버스 계산을 건너뛰고 그 종목만 받는다(허브가 "빠진 종목"을 계산해 넘기는 용도).
+`--stop-at HH:MM` 은 지금 이후 처음 오는 그 시각이 지나면 **새 종목을 시작하지 않고** 정상 종료한다 —
+못 받은 종목은 "deferred" 로 done 에 안 넣으므로 다음 회차가 이어받는다.
 """
 import argparse
 import concurrent.futures
@@ -48,6 +55,8 @@ from dotenv import load_dotenv
 import pandas as pd
 
 from backtesting.universe import daily_top_n_from_local
+from datahub import write
+from datahub.locks import deadline_from
 from data_exclude import MEGA_CAP_EXCLUDE
 from kiwoom_client import KiwoomClient, batch_keys, raise_if_error
 
@@ -75,6 +84,7 @@ MARKET_OPEN, MARKET_CLOSE = dtime(9, 0), dtime(15, 30)
 MEASURED_SAFE_CONCURRENCY = 6
 MAX_CONCURRENCY = int(MEASURED_SAFE_CONCURRENCY * 0.8)  # = 4
 RATE_LIMIT_COOLDOWN_SEC = 60
+DEADLINE: datetime | None = None   # --stop-at
 
 APPKEY = None
 SECRET = None
@@ -328,6 +338,8 @@ def collect_one(client: KiwoomClient, shared_token: SharedToken, code: str, log_
 
 
 def process_one(code: str, shared_token: SharedToken, log_once: list[bool]) -> tuple[str, str]:
+    if DEADLINE is not None and datetime.now() >= DEADLINE:
+        return code, "deferred"           # 새 종목은 시작하지 않는다 — 다음 회차가 이어받는다
     client = make_worker_client(shared_token)
     status = collect_one(client, shared_token, code, log_once)
     return code, status
@@ -341,18 +353,41 @@ def parse_args() -> argparse.Namespace:
                    help=f"동시 워커 수 (기본 {MAX_CONCURRENCY}, 실측 안전한도 {MEASURED_SAFE_CONCURRENCY})")
     p.add_argument("--shard", default="1/1",
                    help="유니버스 분할 (예: 2/2 = 두 번째 조각만). 조각마다 진행/로그가 분리된다")
+    p.add_argument("--codes", help="종목코드 목록 A,B 또는 @파일(줄마다 하나) — 유니버스 대신 이것만 받는다")
+    p.add_argument("--stop-at", metavar="HH:MM",
+                   help="지금 이후 처음 오는 이 시각이 지나면 새 종목을 시작하지 않고 정상 종료(미룬 종목은 done 에 안 넣음)")
     p.add_argument("--batch-key", action="store_true",
                    help="KIWOOM_BATCH_* 앱키로 요청 — 레이트리밋이 앱키 단위라 다른 조각과 분리된다")
     return p.parse_args()
 
 
+def parse_codes(spec: str) -> list[str]:
+    """`A,B` 또는 `@파일`. **순서를 지킨다**(중복만 뺀다) — 허브가 조회창에서 먼저 사라질 날짜가 걸린 종목부터
+    넘기고, --stop-at 으로 미뤄지는 건 뒤쪽 종목이어야 한다."""
+    if spec.startswith("@"):
+        with open(spec[1:], encoding="utf-8-sig") as fh:
+            items = [ln.split("#")[0].strip() for ln in fh]
+    else:
+        items = spec.split(",")
+    return list(dict.fromkeys(c.strip() for c in items if c.strip()))
+
+
 def main() -> None:
-    global APPKEY, SECRET, IS_MOCK
-    global START_DATE, END_DATE, PROGRESS_PATH, LOG_PATH, PROGRESS_REPORT_PATH, MAX_CONCURRENCY
     args = parse_args()
+    detail = {"start": args.start or START_DATE, "end": args.end or END_DATE, "shard": args.shard,
+              "stop_at": args.stop_at, "codes": len(parse_codes(args.codes)) if args.codes else None}
+    with write("tick_al", writer="tick_collect_804_828_al", detail=detail) as w:
+        run(args, w)
+
+
+def run(args: argparse.Namespace, w) -> None:
+    global APPKEY, SECRET, IS_MOCK, DEADLINE
+    global START_DATE, END_DATE, PROGRESS_PATH, LOG_PATH, PROGRESS_REPORT_PATH, MAX_CONCURRENCY
     MAX_CONCURRENCY = args.concurrency
+    DEADLINE = deadline_from(args.stop_at) if args.stop_at else None
+    only_codes = parse_codes(args.codes) if args.codes else None
     shard_i, shard_n = (int(x) for x in args.shard.split("/"))
-    if args.start or args.end or shard_n > 1:
+    if args.start or args.end or shard_n > 1 or only_codes:
         # 기간을 바꿔 돌릴 때는 진행/로그도 기간별로 분리한다 — 지난 회차의 done
         # 목록을 물려받으면 새 기간을 통째로 건너뛴다.
         START_DATE = args.start or START_DATE
@@ -360,6 +395,9 @@ def main() -> None:
         tag = f"{START_DATE.replace('-', '')}_{END_DATE.replace('-', '')}"
         if shard_n > 1:
             tag += f"_s{shard_i}of{shard_n}"
+        if only_codes:
+            # 종목 집합이 다른 회차가 서로의 done 목록을 물려받으면 안 된다. 같은 집합의 재시도만 이어받는다.
+            tag += f"_c{zlib.crc32(','.join(sorted(only_codes)).encode()):08x}"
         PROGRESS_PATH = f"state/tick_collection/progress_al_{tag}.json"
         LOG_PATH = f"state/tick_collection/log_al_{tag}.txt"
         PROGRESS_REPORT_PATH = f"{REPORT_DIR}/data-agent_tick_al_progress_{tag}.md"
@@ -371,7 +409,7 @@ def main() -> None:
     shared_token = SharedToken(bootstrap)
     log_once = [False]
 
-    universe = build_universe()
+    universe = only_codes if only_codes is not None else build_universe()
     if shard_n > 1:
         # 종목코드 해시로 나눈다 — 유니버스 순서에 기대면 안 된다. 2026-09-20에
         # enumerate 순서로 잘랐다가 두 프로세스의 순서가 서로 달라(집합 순회 순서)
@@ -392,6 +430,7 @@ def main() -> None:
     last_report_at = progress.get("last_report_at", run_start)
     last_report_done = progress.get("last_report_done_count", len(done))
     done_this_run = 0
+    deferred = 0
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENCY) as pool:
         futures = {pool.submit(process_one, code, shared_token, log_once): code for code in remaining}
@@ -403,6 +442,9 @@ def main() -> None:
                 log(f"{code}: 예외로 실패 - {type(exc).__name__}: {exc}")
                 status = "error"
 
+            if status == "deferred":
+                deferred += 1
+                continue
             if status in ("empty", "error", "suspicious"):
                 log(f"{code}: 완료 처리 안 함(상태={status}) - 다음 실행에서 재시도")
                 continue
@@ -418,6 +460,7 @@ def main() -> None:
                 done_this_run += 1
                 progress["done"] = sorted(done)
                 save_progress(progress)
+            w.progress(len(done), len(universe))
 
             elapsed = time.time() - run_start
             remaining_count = len(universe) - len(done)
@@ -449,6 +492,9 @@ def main() -> None:
     missing = [c for c in universe if c not in done and c not in partial]
     log(f"완료 - 전 종목 처리 (done={len(done)}/{len(universe)}, partial={len(partial)}, "
         f"미완료={len(missing)}{'(' + ','.join(missing[:10]) + ('...' if len(missing) > 10 else '') + ')' if missing else ''})")
+    if deferred:
+        log(f"--stop-at {DEADLINE:%m-%d %H:%M} 도달 — {deferred}종목은 미룸(done 에 안 넣음, 다음 회차가 이어받음)")
+    w.result(done=len(done), total=len(universe), partial=len(partial), missing=len(missing), deferred=deferred)
     if missing or partial:
         log(f"재시작 필요 — 미완료/partial {len(missing) + len(partial)}종목이 다음 실행에서 자동으로 재시도됨")
     final_elapsed = time.time() - run_start
@@ -459,6 +505,8 @@ def main() -> None:
 
 def write_progress_report(done_n, total_n, elapsed, avg_per_stock, remaining_count, eta_h, concurrency,
                            partial: int = 0, finished: bool = False) -> None:
+    if os.environ.get("DATAHUB_TRIGGER") == "hub":
+        return                      # 허브가 띄운 수집은 진행률을 장부·작업 화면으로 본다 — agent_reports 에 실행마다 파일을 쌓지 않는다
     os.makedirs(REPORT_DIR, exist_ok=True)
     status_line = "**실행 종료됨**" if finished else "실행 중"
     body = (

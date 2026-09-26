@@ -11,6 +11,7 @@ from typing import Callable
 
 import pandas as pd
 
+from datahub import write
 from kiwoom_client import KiwoomClient
 from .data_loader import _atomic_to_csv, load_full_minute_history, load_history
 from .screener import top_by_trading_value
@@ -82,7 +83,7 @@ def _date_range_str(df: pd.DataFrame) -> str:
     return f"{df.index.min().strftime('%Y-%m-%d')} ~ {df.index.max().strftime('%Y-%m-%d')}"
 
 
-def update_top35(
+def _update_top35(
     client: KiwoomClient,
     data_dir: str = "data",
     market: str = "000",
@@ -138,3 +139,26 @@ def update_top35(
             on_progress(i + 1, total, stock_code)
 
     return pd.DataFrame(rows)
+
+
+def update_top35(
+    client: KiwoomClient,
+    data_dir: str = "data",
+    market: str = "000",
+    daily_years_if_new: float = 5,
+    minute_tic_scope: str = "1",
+    overlap_days: int = 5,
+    on_progress: Callable[[int, int, str], None] | None = None,
+) -> pd.DataFrame:
+    """_update_top35 를 쓰기 관문(daily_minute 잠금 + 장부) 안에서 실행한다 — 백필·야간 갱신과
+    같은 CSV 폴더를 동시에 쓰지 않게. 잠금을 기다리는 동안 대시보드 스레드는 블록된다."""
+    with write("daily_minute", writer="update_top35", detail={"market": market}) as w:
+        def progress(done: int, total: int, code: str) -> None:
+            w.progress(done, total)
+            if on_progress is not None:
+                on_progress(done, total, code)
+
+        df = _update_top35(client, data_dir, market, daily_years_if_new, minute_tic_scope,
+                           overlap_days, progress)
+        w.result(rows=len(df), failed=int((~df["status"].eq("ok")).sum()) if len(df) else 0)
+        return df

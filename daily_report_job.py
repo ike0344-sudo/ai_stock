@@ -25,6 +25,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from backtesting.data_loader import _pages_to_dataframe
 from backtesting.updater import _load_existing, _merge_dedupe_save
+from datahub import write
 from kiwoom_client import KiwoomClient, batch_keys
 
 STATE_DIR = "state/daily_report"
@@ -51,6 +52,11 @@ def log(msg: str) -> None:
 def update_indexes(client: KiwoomClient) -> None:
     """지수 일봉/분봉 증분 갱신. update-top35는 개별 종목만 받아서 여기가 비면
     코스피60 열과 일 단위 지표가 과거에 머문다."""
+    with write("daily_minute", writer="update_indexes", detail={"indexes": list(INDEXES)}):
+        _update_indexes(client)
+
+
+def _update_indexes(client: KiwoomClient) -> None:
     for code, name in INDEXES.items():
         for kind, path, pages in [
             ("daily", f"data/index/daily/{code}.csv",

@@ -42,7 +42,7 @@ def load_daily_all(daily_dir: str = DAILY_DIR, cache_path: str = CACHE_PATH) -> 
     df = pd.concat(parts, ignore_index=True)
 
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-    tmp = cache_path + ".tmp"          # 도중에 죽어도 반쪽 캐시가 안 남게 원자적 교체
+    tmp = f"{cache_path}.{os.getpid()}.tmp"   # 도중에 죽어도 반쪽 캐시가 안 남게 원자적 교체 — PID 를 붙여 동시 재생성끼리 tmp 를 안 밟게
     df.to_parquet(tmp, index=False)
     os.replace(tmp, cache_path)
     return df

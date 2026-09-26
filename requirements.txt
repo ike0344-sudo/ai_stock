@@ -4,8 +4,17 @@ pandas
 mplfinance
 pytest
 scikit-learn
+lightgbm  # 체결데이터 패턴탐색 연구 (backtesting/precursor_*)
+xgboost   # 위와 동일
+shap      # feature importance 해석
 websocket-client
 pyyaml
 pywebview
 duckdb
 psutil
+pydantic  # datahub 카탈로그 검증
+pyarrow   # parquet (분봉 보관소·체결)
+reportlab  # 연구 요약 PDF 생성 (backtesting/make_research_pdf.py)
+fastapi  # 백테스트 스튜디오 서버(studio/api)
+uvicorn  # 위 서버 실행
+httpx  # 테스트(fastapi TestClient)
