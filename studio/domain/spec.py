@@ -161,6 +161,11 @@ class DailyBreakout(_M):
     n: int = Field(ge=1, le=250)  # 전일(D−1)까지 n일 최고가를 넘을 때 — 기준선은 서비스가 일봉에서 계산해 준다
 
 
+class ValueWindow(_M):
+    w: int = Field(ge=1, le=60)  # 창(분) — `(s−w, s]`
+    min_eok: float = Field(gt=0)  # 그 창의 체결대금 합(가격×수량, 정확한 값) 하한(억 원)
+
+
 class TickCatalog(_M):
     breakout_min: int | None = Field(5, ge=1, le=60)
     value_speed: ValueSpeed | None = None
@@ -168,14 +173,15 @@ class TickCatalog(_M):
     trade_strength: TradeStrength | None = None  # 옛 명세는 칸이 없다 = None
     block_trades: BlockTrades | None = None
     daily_breakout: DailyBreakout | None = None
+    value_window: ValueWindow | None = None  # c9 — 최근 w분 체결대금 ≥ X억. 옛 명세는 칸이 없다 = None
     time_from: str = Field("09:05", pattern=_TIME)
     time_to: str = Field("15:00", pattern=_TIME)
 
     @model_validator(mode="after")
     def _check(self) -> "TickCatalog":
         if all(v is None for v in (self.breakout_min, self.value_speed, self.buy_ratio, self.trade_strength,
-                                   self.block_trades, self.daily_breakout)):
-            raise ValueError("틱 조건이 하나도 없음 (breakout_min·value_speed·buy_ratio·trade_strength·block_trades·daily_breakout 중 하나 필요)")
+                                   self.block_trades, self.daily_breakout, self.value_window)):
+            raise ValueError("틱 조건이 하나도 없음 (breakout_min·value_speed·buy_ratio·trade_strength·block_trades·daily_breakout·value_window 중 하나 필요)")
         if self.time_from >= self.time_to:
             raise ValueError("time_from 이 time_to 보다 같거나 늦음")
         return self

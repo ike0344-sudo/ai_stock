@@ -1,0 +1,70 @@
+{
+  "id": "intraday_value_burst",
+  "category": "거래량·거래대금",
+  "title": "분봉 거래대금 급증 진입",
+  "description": "실행 분봉 한 개의 거래대금이 20억 이상이면서 양봉이고 종가가 당일 VWAP 위면 산다(예 5분봉 ≥ 20억). VWAP 아래로 내려가면 판다. ※ 거래대금은 봉 종가×거래량 근사값이다. 몇 분봉으로 볼지는 실행 분봉 길이(또는 조건의 시간 단위 m5·m15 …)로 정한다.",
+  "modes": [
+    "intraday"
+  ],
+  "needs": [
+    "indicator:value_eok",
+    "indicator:vwap"
+  ],
+  "entry": {
+    "logic": "all",
+    "items": [
+      {
+        "left": {
+          "kind": "ind",
+          "name": "value_eok",
+          "params": {}
+        },
+        "op": "gte",
+        "right": {
+          "kind": "const",
+          "value": 20
+        }
+      },
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "gt",
+        "right": {
+          "kind": "field",
+          "name": "open"
+        }
+      },
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "gt",
+        "right": {
+          "kind": "ind",
+          "name": "vwap",
+          "params": {}
+        }
+      }
+    ]
+  },
+  "exit": {
+    "logic": "any",
+    "items": [
+      {
+        "left": {
+          "kind": "field",
+          "name": "close"
+        },
+        "op": "lt",
+        "right": {
+          "kind": "ind",
+          "name": "vwap",
+          "params": {}
+        }
+      }
+    ]
+  }
+}

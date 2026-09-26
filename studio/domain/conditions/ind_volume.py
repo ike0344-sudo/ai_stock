@@ -4,6 +4,8 @@
 - `volume_rank`·`top_value_count` — **종목 간 비교**라 열별 재계산이 불가능하다 → `CROSS_SECTIONAL` 에 올려
   `compute` 가 전체 Panel 로 한 번만 부르게 한다(`value_rank` 와 같은 처리: 평균은 자기 거래일로, 순위는 전체로).
 - 시점: 전부 **t 까지**의 값(순위는 그날 종가 기준 = t 포함, 평균 기준선은 t 제외). 분봉에서 일봉 순위를 쓰려면 `tf=daily_prev`(D−1).
+- `value_eok`·`value_sum_eok(n)`(c9) — 거래대금(억 원 = 원 ÷ 1e8). **패널의 value 는 종가×거래량 근사**(분봉·일봉 공통 — 결과 경고에 실림). mN 시간 단위에선
+  묶은 N분봉 하나의 대금(1분봉 대금의 합), `value_sum_eok(n)` 은 그 시간 단위 최근 n봉 합(t 포함). 빈칸 종목은 자기 거래일 기준(own_days).
 - `daily_live`: vol_change_pct·value_ratio 는 지원(`live=True`, 거래량 계열이라 KRX 분봉에서만 허용 — validation 이 막음).
   오늘 가상 봉의 누적 거래량·대금(`live.v`/`live.val`) ÷ D−1 확정 기준값. 빈칸(거래정지) 종목은 마지막 자기 거래일 값(ffill).
   volume_rank·top_value_count 는 종목 간 비교라 live 없음(`daily_prev` 만).
@@ -63,7 +65,30 @@ def _compute_top_value_count(panel: Any, p: dict[str, Any]) -> Frame:
     return top_value_count(panel.value, int(p["n"]), int(p["m"]))
 
 
+EOK = 1e8  # 1억 원
+
+
+def value_eok(value: Frame) -> Frame:
+    """봉 거래대금(억 원)."""
+    return value / EOK
+
+
+def value_sum_eok(value: Frame, n: int) -> Frame:
+    """최근 n봉(t 포함) 거래대금 합(억 원). 창이 다 안 찼거나 빈칸이 있으면 값 없음."""
+    return value.rolling(n).sum() / EOK
+
+
 DEFS = (
+    IndicatorDef(
+        "value_eok", "거래대금(억)", "봉 하나의 거래대금(억 원) = 종가×거래량 ÷ 1억 — 분봉은 근사값", (),
+        _DAILY_INTRA, "t 포함", category="volume", definition="종가_t × 거래량_t ÷ 1억 (원 → 억 원)",
+        example="5분봉 거래대금이 20억 이상", volume_based=True, live=True,
+    ),
+    IndicatorDef(
+        "value_sum_eok", "최근 N봉 거래대금 합(억)", "최근 N봉(오늘 포함) 거래대금 합(억 원) — 예 최근 3개 5분봉 합", (_n(3),),
+        _DAILY_INTRA, "t 포함", category="volume", definition="Σ_{i=0..n−1} 대금_{t−i} ÷ 1억",
+        example="최근 3개 5분봉 거래대금 합이 50억 이상", volume_based=True, live=True,
+    ),
     IndicatorDef(
         "vol_change_pct", "직전 봉 대비 거래량(%)", "거래량 ÷ 직전 봉 거래량 × 100(직전이 0 이면 값 없음)", (),
         _DAILY_INTRA, "t 포함", category="volume", definition="V_t ÷ V_{t−1} × 100",
@@ -102,6 +127,8 @@ def _elementwise(name: str):
 
 
 COMPUTE.update({d.name: _elementwise(d.name) for d in DEFS if d.name in ("vol_change_pct", "value_ratio")})
+COMPUTE["value_eok"] = lambda panel, p: value_eok(panel.value)
+COMPUTE["value_sum_eok"] = lambda panel, p: value_sum_eok(panel.value, int(p["n"]))
 
 
 def _live_vol_change_pct(live: Any, p: dict[str, Any]) -> Frame:
@@ -115,5 +142,18 @@ def _live_value_ratio(live: Any, p: dict[str, Any]) -> Frame:
     return live.val / avg.where(avg > 0)
 
 
-LIVE = {"vol_change_pct": _live_vol_change_pct, "value_ratio": _live_value_ratio}
+def _live_value_eok(live: Any, p: dict[str, Any]) -> Frame:
+    return live.val / EOK  # 오늘 가상 봉 = 그 날 t 까지 누적 대금
+
+
+def _live_value_sum_eok(live: Any, p: dict[str, Any]) -> Frame:
+    n = int(p["n"])
+    if n == 1:
+        return live.val / EOK
+    past = live.prev(live.own(lambda pn: pn.value.rolling(n - 1).sum()))  # D−(n−1)..D−1 합 — 오늘 제외
+    return (past + live.val) / EOK
+
+
+LIVE = {"vol_change_pct": _live_vol_change_pct, "value_ratio": _live_value_ratio,
+        "value_eok": _live_value_eok, "value_sum_eok": _live_value_sum_eok}
 register_indicators(DEFS, COMPUTE, LIVE)

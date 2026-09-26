@@ -177,6 +177,22 @@ def trade_strength_hits(grid: TickGrid, w_sec: int, min_strength: float) -> np.n
     return ~np.isnan(r) & (r >= min_strength)
 
 
+def value_window_series(grid: TickGrid, w_min: int) -> np.ndarray:
+    """s 초의 최근 w분 체결대금 합(원) = **`(s−w, s]`**(s 초의 체결 포함, 정확한 가격×수량). 창이 세션 시작 앞에 걸치면(s < w−1) 값 없음."""
+    w = int(w_min) * 60
+    out = np.full(N, np.nan)
+    if w > N:
+        return out
+    cs = np.concatenate(([0.0], np.cumsum(grid.val)))
+    out[w - 1:] = cs[w:N + 1] - cs[: N - w + 1]
+    return out
+
+
+def value_window_hits(grid: TickGrid, w_min: int, min_eok: float) -> np.ndarray:
+    v = value_window_series(grid, w_min)
+    return ~np.isnan(v) & (v >= float(min_eok) * 1e8)
+
+
 def block_count_series(day: TickDay, w_sec: int, min_value: float) -> np.ndarray:
     """s 초의 대량 체결 건수 = `[s−w, s)` 안에서 **한 번의 체결대금(가격×수량) ≥ min_value** 인 체결 수."""
     sec = np.asarray(day.sec, dtype=np.int64)
@@ -244,7 +260,7 @@ def _pair(v: Any, a: str, b: str) -> tuple[float, float]:
 
 def detect_signals(
     day: TickDay, *, breakout_min: int | None = None, value_speed: Any = None, buy_ratio: Any = None,
-    trade_strength: Any = None, block_trades: Any = None, daily_breakout: Any = None,
+    trade_strength: Any = None, block_trades: Any = None, daily_breakout: Any = None, value_window: Any = None,
     time_from: str = "09:00:00", time_to: str = "15:30:00", cooldown_sec: int = 300,
     extra_mask: np.ndarray | None = None,
 ) -> TickEvents:
@@ -252,11 +268,12 @@ def detect_signals(
 
     value_speed = (w분, ratio) 또는 `.w/.ratio` 를 가진 객체, buy_ratio = (w분, min) 또는 `.w/.min` 객체.
     trade_strength = (w초, min강도%) / `.w/.min`, block_trades = (w초, min_value[, min_count]) / `.w/.min_value/.min_count`,
+    value_window = (w분, min_eok) / `.w/.min_eok` — 최근 w분 `(s−w, s]` 체결대금 합 ≥ min_eok 억(c9).
     daily_breakout = (n, level) / `.n/.level` — level = D−1 까지 n일 최고가(`prior_n_high` 로 호출부가 계산).
     extra_mask = 길이 N bool — 분봉·일봉 조건 묶음(`align_filter` 결과)을 틱 조건과 **AND**(쿨다운 전, 최종 신호에 대해 쿨다운).
     """
-    if all(c is None for c in (breakout_min, value_speed, buy_ratio, trade_strength, block_trades, daily_breakout)):
-        raise ValueError("틱 조건이 하나도 없음 (breakout_min·value_speed·buy_ratio·trade_strength·block_trades·daily_breakout 중 하나 필요)")
+    if all(c is None for c in (breakout_min, value_speed, buy_ratio, trade_strength, block_trades, daily_breakout, value_window)):
+        raise ValueError("틱 조건이 하나도 없음 (breakout_min·value_speed·buy_ratio·trade_strength·block_trades·daily_breakout·value_window 중 하나 필요)")
     grid = build_grid(day)
     hit = time_mask(time_from, time_to)
     if breakout_min is not None:
@@ -279,6 +296,9 @@ def detect_signals(
     if daily_breakout is not None:
         _, level = _pair(daily_breakout, "n", "level")
         hit &= daily_breakout_hits(grid, float(level))
+    if value_window is not None:
+        w, mn = _pair(value_window, "w", "min_eok")
+        hit &= value_window_hits(grid, int(w), float(mn))
     if extra_mask is not None:
         hit &= np.asarray(extra_mask, dtype=bool)
     sig = apply_cooldown(np.flatnonzero(hit), int(cooldown_sec))
@@ -308,6 +328,7 @@ def detect_from_spec(day: TickDay, tick_cfg: Any, daily_high_level: float | None
     return detect_signals(
         day, breakout_min=c.breakout_min, value_speed=c.value_speed, buy_ratio=c.buy_ratio,
         trade_strength=getattr(c, "trade_strength", None), block_trades=getattr(c, "block_trades", None), daily_breakout=db,
+        value_window=getattr(c, "value_window", None),
         time_from=c.time_from, time_to=c.time_to, cooldown_sec=tick_cfg.cooldown_sec, extra_mask=extra_mask,
     )
 

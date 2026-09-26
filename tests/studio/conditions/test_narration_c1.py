@@ -112,6 +112,31 @@ def test_tick_filter_and_prefilter_are_narrated_and_absent_specs_are_unchanged()
     assert "그 날만 틱을 본다" in only_pre and "필터를 못 써서" not in only_pre    # 분봉 필터가 없으면 그 주의문은 없다
 
 
+def test_value_eok_indicators_read_as_eok_won_and_note_the_approximation():
+    assert say(cond(I("value_eok"), "gte", C(20))) == "거래대금이 20억 이상이면"
+    assert say(cond(I("value_eok", tf="m5"), "gte", C(20))) == "5분봉 거래대금이 20억 이상이면"
+    assert say(cond(I("value_sum_eok", {"n": 3}, tf="m5"), "gte", C(50))) == "5분봉 최근 3봉 거래대금 합이 50억 이상이면"
+    note = "종가×거래량 근사값"
+    assert note in narrate(_spec(cond(I("value_eok", tf="m15"), "gte", C(20))))
+    assert note not in narrate(_spec(cond(I("hammer"), "is_true")))
+
+
+def test_won_formatting():
+    from studio.domain.narration import _won
+    assert [_won(v) for v in (3e8, 1.5e8, 3e6, 500)] == ["3억", "1.5억", "300만", "500원"]
+
+
+def test_tick_catalog_new_conditions_are_narrated():
+    catalog = {"breakout_min": None, "trade_strength": {"w": 30, "min": 150}, "daily_breakout": {"n": 20},
+               "block_trades": {"w": 60, "min_value": 300_000_000, "min_count": 2},
+               "value_window": {"w": 3, "min_eok": 10}, "time_from": "09:05", "time_to": "15:00"}
+    line = narrate(_tick_spec(catalog=catalog)).splitlines()[0]
+    assert line == ("09:05~15:00 사이 최근 30초 체결강도(매수÷매도 체결량)가 150% 이상 "
+                    "그리고 최근 60초 안에 3억 이상 대량 체결이 2건 이상 "
+                    "그리고 현재가가 전일까지 20일 최고가를 돌파 "
+                    "그리고 최근 3분 체결대금 합이 10억 이상(정확한 체결대금, 그 초 체결 포함) 이면 다음 체결에 산다.")
+
+
 def _exit_line(preset: str, exits: dict) -> str:
     d = json.loads((ROOT / "presets" / "studio" / f"{preset}.json").read_text(encoding="utf-8"))
     d["exits"] = exits

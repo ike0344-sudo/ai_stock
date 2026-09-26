@@ -206,6 +206,7 @@ TICK_CATALOG: dict[str, str] = {
     "trade_strength": "체결강도(w초 틱룰 매수량÷매도량×100 이상)",
     "block_trades": "대량 체결(w초 안 한 번에 min_value 이상 체결 건수)",
     "daily_breakout": "현재가 > D−1까지 n일 최고가(틱 단위 N일 신고가 돌파)",
+    "value_window": "최근 w분 체결대금 합(억 원, 가격×수량 정확값) ≥ min_eok — 창 (s−w, s]",
     "time_window": "시간대(time_from ~ time_to)",
 }
 

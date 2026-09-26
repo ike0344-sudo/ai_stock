@@ -77,6 +77,8 @@ def _strip_new_defaults(o: Any) -> Any:
             o.pop("within", None)
         if o.get("right") is None:
             o.pop("right", None)
+    if "breakout_min" in o and "time_from" in o and o.get("value_window") is None:  # TickCatalog — c9 value_window 칸이 없으면 뺀다
+        o.pop("value_window", None)
     if "entry_source" in o and "catalog" in o:  # Tick — c8 이 추가한 칸(filter·prefilter)이 없으면 뺀다
         for k in ("filter", "prefilter"):
             if o.get(k) is None:
@@ -212,7 +214,10 @@ def condition_warnings(spec: Spec) -> list[str]:
     """쓰인 조건이 요구하는 경고 문구 — 테마·업종 지표는 **현재 구성 기준**(과거에도 오늘의 소속을 씀: 결과가 실제보다 좋게 나올 수 있음)."""
     from studio.domain.conditions.ind_group import warnings_for
     names = {op.name for _, g in spec._role_groups() for op in iter_operands(g) if isinstance(op, IndOperand)}
-    return warnings_for(names)
+    out = warnings_for(names)
+    if names & {"value_eok", "value_sum_eok"}:  # c9 — 일봉·분봉 거래대금(억)은 종가×거래량 근사(틱 value_window 는 가격×수량 정확값이라 해당 없음)
+        out.append("거래대금(억) 조건의 값은 봉 종가×거래량 근사다(봉 안 체결가로 가중한 실제 체결대금이 아님 — 분봉은 실제와 다를 수 있다)")
+    return out
 
 
 def _uses_value(spec: Spec) -> bool:
@@ -226,7 +231,7 @@ def _uses_value(spec: Spec) -> bool:
     for g in groups:
         for op in iter_operands(g):
             if (isinstance(op, FieldOperand) and op.name == "value") or (
-                    isinstance(op, IndOperand) and op.name == "value_rank"):
+                    isinstance(op, IndOperand) and op.name in ("value_rank", "value_eok", "value_sum_eok")):
                 return True
     return False
 

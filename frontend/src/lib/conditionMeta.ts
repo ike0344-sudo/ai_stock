@@ -106,6 +106,9 @@ export const isUnaryOp = (o: string): boolean => o === 'is_true' || o === 'is_fa
 export const isWithinOp = (o: string): boolean => o.endsWith('_within')
 export const DEFAULT_WITHIN = 3
 
+/** 단위가 억 원인 지표 — 이것과 비교하는 숫자 칸에 "억" 을 붙인다(예: ≥ 20 = 20억) */
+export const EOK_INDICATORS = new Set(['value_eok', 'value_sum_eok'])
+
 export const POS_LABEL: Record<string, string> = {
   return_pct: '매수가 대비 수익률(%)', bars_held: '보유 봉 수', minutes_held: '보유 시간(분)', max_return_pct: '보유 중 최고 수익률(%)',
   drawdown_pct: '보유 중 고점 대비 하락(%)', entry_price: '매수가',

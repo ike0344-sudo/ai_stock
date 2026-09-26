@@ -330,3 +330,49 @@ def test_formula_inside_a_full_spec(mode, entry, exit_, ok, why):
     else:
         with pytest.raises(ValidationError, match=why):
             Spec.model_validate(d)
+
+
+# ---- 숫자의 한글 단위(억·만·조) — c9 ----
+@pytest.mark.parametrize("text,value", [
+    ("20억", 2e9), ("5000만", 5e7), ("1.5억", 1.5e8), ("1억5000만", 1.5e8), ("1조2000억", 1.2e12), ("1억 5000만", 1.5e8),
+    ("20 억", 2e9), ("0.5만", 5e3), ("3조", 3e12), ("1조1억1만", 1_000_100_010_000.0), ("0.1억", 1e7), ("1.1억", 1.1e8),
+])
+def test_korean_unit_numbers(text, value):
+    r = compile_formula(f"M5.VALUE >= {text}")["items"][0]
+    assert r["right"] == const(value) and r["left"]["tf"] == "m5"                # 정확한 값(Decimal 곱셈 — 1.1억 이 110000000.00000001 이 안 된다)
+    assert compile_formula(f"{text} <= M5.VALUE")["items"][0]["left"] == const(value)
+
+
+def test_korean_unit_number_positions_and_ambiguity_errors():
+    for text, col in [("VALUE > 1억5000", 11), ("VALUE > 1만1억", 12), ("VALUE > 1억1억", 12), ("VALUE > 억", 9), ("VALUE > 20억원", 12)]:
+        with pytest.raises(FormulaError) as e:
+            compile_formula(text)
+        assert (e.value.line, e.value.col) == (1, col), (text, str(e.value))
+    with pytest.raises(FormulaError):
+        compile_formula("VALUE > 1억 5000")                                      # 띄어 쓴 단위 없는 숫자는 붙지 않는다
+    for bad in ["MA(C,1만) > 1", "C(1만) > 1", "HOLD(C > 1, 1만)", "RSI(1억) > 1"]:  # 다른 자리에서도 범위·정수 검사는 그대로
+        with pytest.raises(FormulaError):
+            compile_formula(bad)
+
+
+def test_plain_numbers_and_existing_formulas_unchanged_by_unit_support():
+    assert compile_formula("C > 20000")["items"][0]["right"] == const(20000.0)
+    assert compile_formula("C > 1.5")["items"][0]["right"] == const(1.5)
+    assert compile_formula("VALUE > 20억 * 2 AND C > 1000")["items"][0]["right"] == const(4e9)   # 산술과 어울린다
+    Group.model_validate(compile_formula("M5.VALUE >= 20억 AND C > MA(C,20)"))
+
+
+def test_amount_formula_evaluates_against_hand_computed_value(panel):
+    # 일봉 합성 패널: value = close × volume — `VALUE >= 50억` 신호를 직접 계산한 것과 대조
+    r = evaluate_group(Group.model_validate(compile_formula("VALUE >= 50억")), panel)
+    assert r.equals(panel.value >= 5_000_000_000) and r.to_numpy().any() and not r.to_numpy().all()
+
+
+def test_eok_indicators_are_reachable_by_their_catalog_names():
+    from studio.domain.conditions.catalog import INDICATORS
+    if "value_eok" not in INDICATORS:
+        pytest.skip("value_eok 미등록")
+    g = compile_formula("VALUE_EOK >= 20 AND M15.VALUE_SUM_EOK(3) >= 50")
+    assert g["items"][0]["left"]["name"] == "value_eok" and g["items"][0]["left"]["params"] == {}
+    assert g["items"][1]["left"]["name"] == "value_sum_eok" and g["items"][1]["left"]["params"] == {"n": 3} and g["items"][1]["left"]["tf"] == "m15"
+    Group.model_validate(g)

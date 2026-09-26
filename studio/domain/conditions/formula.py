@@ -6,6 +6,7 @@
 문법(대소문자 무시):  식 = 논리합 / 논리합 = 논리곱 (OR 논리곱)* / 논리곱 = 부정 (AND 부정)* / 부정 = NOT 부정 | 비교
   비교 = 합 (>|>=|<|<= 합)? | CROSSUP(합,합) | CROSSDOWN(합,합) | HOLD(비교,k)
   합 = 곱 ((+|-) 곱)* / 곱 = 단항 ((*|/) 단항)* / 단항 = -단항 | 뒤붙이 / 뒤붙이 = 기본 ('(' 정수 ')')?
+  숫자 = 12 · 1.5 · 한글 단위 20억 · 5000만 · 1.5억 · 1억5000만 · 1조2000억 (조=1e12 억=1e8 만=1e4, 단위는 조→억→만 순서로 한 번씩, 끝 단위 생략 불가)
   기본 = 숫자 | [단위.]필드 | [단위.]지표(인자,…) | POS.이름 | '(' 식 ')'     단위 = D DL M1 M3 M5 M10 M15 M30 M60
 
 설계와 다르게 한 곳(근거는 보고서): ① NOT 은 비교 연산자를 뒤집어 안으로 밀어 넣는다(`NOT a>b` → `a<=b`, `NOT X` → is_false) — negate 그룹은
@@ -20,6 +21,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 from .ast import MAX_EXPR_DEPTH, MAX_GROUP_DEPTH, MAX_HOLD, MAX_WITHIN, OFFSET_MAX  # 명세가 받는 한도와 같은 값을 쓴다
@@ -59,10 +61,41 @@ class _Tok:
     text: str
     line: int
     col: int
+    val: float | None = None  # 한글 단위가 붙은 숫자(20억 등)의 값 — 없으면 text 를 그대로 숫자로 읽는다
 
     @property
     def up(self) -> str:
         return self.text.upper()
+
+
+_UNIT_ORDER = "조억만"
+_UNIT_VALUE = {"조": Decimal(10) ** 12, "억": Decimal(10) ** 8, "만": Decimal(10) ** 4}
+_UNIT_AFTER = re.compile(r"\s*([조억만])")
+_NUM_BEFORE_UNIT = re.compile(r"\s*(\d+(?:\.\d+)?)\s*(?=[조억만])")
+
+
+def _korean_number(text: str, m: re.Match[str]) -> tuple[float | None, int]:
+    """`20억`·`1.5억`·`5000만`·`1억5000만`·`1조2000억` — 조=1e12·억=1e8·만=1e4. 단위 없는 숫자는 (None, 끝) 그대로.
+    Decimal 로 곱해서 `1.5억` 이 정확히 150000000 이 된다. 단위는 조→억→만 순서로 한 번씩만, 마지막 단위는 생략 못 한다
+    (`1억5000` 은 5000 인지 5000만인지 모호 → 오류)."""
+    pos = m.end()
+    u = _UNIT_AFTER.match(text, pos)
+    if u is None:
+        return None, pos
+    total, last, num = Decimal(0), -1, m.group("num")
+    while u is not None:
+        rank = _UNIT_ORDER.index(u.group(1))
+        if rank <= last:
+            raise FormulaError(f"단위 '{u.group(1)}' 가 순서에 맞지 않거나 겹칩니다", *_pos_of(text, u.start(1)), "조 → 억 → 만 순서로 한 번씩")
+        total += Decimal(num) * _UNIT_VALUE[u.group(1)]
+        last, pos = rank, u.end()
+        nxt = _NUM_BEFORE_UNIT.match(text, pos)
+        if nxt is None:
+            break
+        num, u = nxt.group(1), _UNIT_AFTER.match(text, nxt.end())
+    if pos < len(text) and text[pos].isdigit():
+        raise FormulaError("끝 단위를 생략할 수 없습니다(예: 1억5000 → 1억5000만)", *_pos_of(text, pos), "1억5000만 처럼 단위까지")
+    return float(total), pos
 
 
 def _tokenize(text: str) -> list[_Tok]:
@@ -75,6 +108,11 @@ def _tokenize(text: str) -> list[_Tok]:
         line, col = _pos_of(text, i)
         if m is None:
             raise FormulaError(f"알 수 없는 문자 {text[i]!r}", line, col, "숫자·이름·연산자·괄호")
+        if m.lastgroup == "num":
+            val, end = _korean_number(text, m)
+            out.append(_Tok("num", text[i:end], line, col, val))
+            i = end
+            continue
         if m.lastgroup != "ws":
             out.append(_Tok(m.lastgroup or "", m.group(), line, col))
         i = m.end()
@@ -387,7 +425,7 @@ class _Parser:
         tok = self.t
         if tok.kind == "num":
             self.take()
-            n = float(tok.text)
+            n = tok.val if tok.val is not None else float(tok.text)
             if not math.isfinite(n):
                 raise self.fail("숫자가 너무 큽니다", "", tok)
             return _Val(_const(n), tok.line, tok.col, num=n)

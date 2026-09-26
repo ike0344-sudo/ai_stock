@@ -1,9 +1,9 @@
 // 진입·청산 조건 그룹 편집기 (§5.4): AND/OR · 행 추가·삭제·복제 · 하위 그룹 1단계. 서버 오류 경로가 가리키는 행은 빨갛게 강조한다(§8.4 #8).
 import { CopyOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import { Button, Card, InputNumber, Radio, Select, Space, Switch, Tooltip, Typography } from 'antd'
-import { isUnaryOp, isWithinOp, opLabel } from '@/lib/conditionMeta'
+import { EOK_INDICATORS, isUnaryOp, isWithinOp, opLabel } from '@/lib/conditionMeta'
 import { addItem, changeOp, duplicateItem, errorsUnder, groupDepth, MAX_DEPTH, newCondition, newGroup, removeItem, replaceItem } from '@/lib/spec'
-import type { Condition, Group, IndicatorCatalog, Mode, Op, ValidationIssue } from '@/types/studio'
+import type { Condition, Group, IndicatorCatalog, Mode, Op, Operand, ValidationIssue } from '@/types/studio'
 import { isGroup } from '@/types/studio'
 import { OperandEditor } from './OperandEditor'
 
@@ -84,10 +84,12 @@ function ConditionRow({ cond, onChange, cat, mode, allowMarket, allowPos, action
   cond: Condition; onChange: (c: Condition) => void; cat: IndicatorCatalog; mode: Mode; allowMarket: boolean; allowPos: boolean; actions: React.ReactNode
 }) {
   const canHold = !!cat.capabilities?.condition_fields.includes('hold')
+  const isEok = (o?: Operand | null) => o?.kind === 'ind' && EOK_INDICATORS.has(o.name)
+  const eok = isEok(cond.left) || isEok(cond.right) ? '억' : undefined // 거래대금(억) 지표와 비교하는 숫자는 억 원 단위
   return (
     <Space align="start" style={{ width: '100%', justifyContent: 'space-between' }}>
       <Space wrap size={6}>
-        <OperandEditor op={cond.left} side="left" cat={cat} mode={mode} allowMarket={allowMarket} allowPos={allowPos} onChange={(left) => onChange({ ...cond, left })} />
+        <OperandEditor op={cond.left} side="left" cat={cat} mode={mode} allowMarket={allowMarket} allowPos={allowPos} constSuffix={eok} onChange={(left) => onChange({ ...cond, left })} />
         <Select<Op> size="small" style={{ width: 150 }} value={cond.op} data-testid="op-select"
           options={cat.ops.map((o) => ({ value: o, label: opLabel(o) }))} onChange={(op) => onChange(changeOp(cond, op))} />
         {isWithinOp(cond.op) && (
@@ -97,7 +99,7 @@ function ConditionRow({ cond, onChange, cat, mode, allowMarket, allowPos, action
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>봉 안</Typography.Text>
           </Space>
         )}
-        {!isUnaryOp(cond.op) && cond.right && <OperandEditor op={cond.right} side="right" cat={cat} mode={mode} allowMarket={allowMarket} allowPos={allowPos} onChange={(right) => onChange({ ...cond, right })} />}
+        {!isUnaryOp(cond.op) && cond.right && <OperandEditor op={cond.right} side="right" cat={cat} mode={mode} allowMarket={allowMarket} allowPos={allowPos} constSuffix={eok} onChange={(right) => onChange({ ...cond, right })} />}
         {canHold && (
           <Space size={2}>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>연속</Typography.Text>

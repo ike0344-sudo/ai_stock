@@ -19,7 +19,8 @@ def cclient(client, services):
 def test_indicators_carry_capabilities_and_ops_from_the_model(cclient):
     d = cclient.get("/api/meta/indicators").json()["data"]
     caps = d["capabilities"]
-    assert set(caps) == {"timeframes", "condition_fields", "group_fields", "operand_kinds", "pos_names", "exit_fields", "tick_fields", "formulas"}
+    assert set(caps) == {"timeframes", "condition_fields", "group_fields", "operand_kinds", "pos_names", "exit_fields", "tick_fields", "tick_catalog_fields", "formulas"}
+    assert {"breakout_min", "value_window"} <= set(caps["tick_catalog_fields"])
     # 서버가 실제로 아는 것만 켜진다 — 이 값들은 모델·카탈로그에서 읽은 것(c1 이 들어와 시간 단위·hold·negate·pos 가 켜져 있다)
     assert caps["timeframes"] == list(cat.TIMEFRAMES) and caps["condition_fields"] == ["hold"] and caps["group_fields"] == ["negate"]
     assert "pos" in caps["operand_kinds"] and caps["pos_names"] == list(cat.POS_NAMES)
@@ -74,6 +75,10 @@ def _spec(recipe: dict, mode: str) -> dict:
         d["portfolio"] = {"max_positions": 1, "max_weight_pct": 100}
     if mode == "intraday":
         d["intraday"] = {"bar_minutes": 5}
+    if mode == "tick":  # c9 — 틱 레시피는 tick 칸을 싣는다(조건식 entry/exit 는 비어 있다)
+        d.pop("strategy")
+        d["universe"] = {"type": "top_value", "n": 30}
+        d["tick"] = recipe["tick"]
     return d
 
 
@@ -154,3 +159,18 @@ def test_preview_survives_new_operators_and_operands(client):
     assert any("이(가) 참" in t for t in texts) and any("최근 3봉 안 상향 돌파" in t for t in texts)
     unary = next(o for o in rows[0]["operands"] if "이(가) 참" in o["text"])
     assert unary["right"] is None  # 오른쪽 값이 없는 연산자
+
+
+def test_data_ranges_and_sources_are_cached_for_a_short_time(client, services):
+    """데이터 범위·보관 기간 스캔은 요청마다 3~5초라 짧게 재사용한다(Services 객체별 — 서버·테스트가 안 섞임)."""
+    calls = {"n": 0}
+    real = services.market_data
+
+    def counting():
+        calls["n"] += 1
+        return real()
+
+    services.market_data = counting
+    a = client.get("/api/meta/data-ranges").json()
+    b = client.get("/api/meta/data-ranges").json()
+    assert a == b and calls["n"] == 1  # 두 번째는 캐시

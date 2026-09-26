@@ -23,10 +23,12 @@ interface Props {
   allowMarket: boolean
   /** 청산 조건 편집기에서만 true — 포지션 값은 보유 중에만 있다 */
   allowPos?: boolean
+  /** 숫자 칸 단위 표시 — 억 원 지표와 비교하는 상수에 "억" */
+  constSuffix?: string
   side: 'left' | 'right'
 }
 
-export function OperandEditor({ op, onChange, cat, mode, allowMarket, allowPos = false, side }: Props) {
+export function OperandEditor({ op, onChange, cat, mode, allowMarket, allowPos = false, constSuffix, side }: Props) {
   const posOk = allowPos && mode !== 'tick' && !!cat.capabilities?.operand_kinds.includes('pos') // 틱 모드는 포지션 조건 청산을 아직 지원하지 않는다(서버가 거부)
   const kinds = (['field', 'ind', 'const', ...(allowMarket ? ['market'] : []), ...(posOk ? ['pos'] : [])] as Operand['kind'][])
   const tid = `operand-${side}`
@@ -71,7 +73,7 @@ export function OperandEditor({ op, onChange, cat, mode, allowMarket, allowPos =
       )}
 
       {op.kind === 'const' && (
-        <NumField hint={side === 'right' ? 'threshold' : 'value'} value={op.value} onChange={(v) => onChange({ ...op, value: v ?? 0 })} width={110} data-testid={`${tid}-const`} />
+        <NumField hint={side === 'right' ? 'threshold' : 'value'} value={op.value} onChange={(v) => onChange({ ...op, value: v ?? 0 })} width={110} suffix={constSuffix} data-testid={`${tid}-const`} />
       )}
 
       {(op.kind === 'field' || op.kind === 'ind') && (

@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, Iterable, get_args
 
 from studio.domain.conditions import ast, catalog
-from studio.domain.spec import Exits, Tick
+from studio.domain.spec import Exits, Tick, TickCatalog
 
 # 설계서 studio-conditions §3.1 — 카탈로그가 자기 목록(TIMEFRAMES)을 주면 그것을, 없으면 이 목록을 쓴다
 DEFAULT_TIMEFRAMES = ("bar", "m1", "m3", "m5", "m10", "m15", "m30", "m60", "daily_prev", "daily_live")
@@ -30,6 +30,7 @@ def capabilities(route_paths: Iterable[str] = ()) -> dict[str, Any]:
         "operand_kinds": kinds,
         "pos_names": list(getattr(catalog, "POS_NAMES", ())) if "pos" in kinds else [],
         "tick_fields": [f for f in ("filter", "prefilter") if f in Tick.model_fields],  # c8 — 틱 조건에 얹는 분봉·일봉 조건 묶음
+        "tick_catalog_fields": list(TickCatalog.model_fields),  # 틱 조건 칸(breakout_min·value_speed·…·value_window) — 화면은 알려진 칸만 그린다
         "formulas": any(p.startswith("/api/formulas") for p in route_paths),
         "exit_fields": sorted(set(Exits.model_fields) - {"stop_loss_pct", "take_profit_pct", "trailing_stop_pct", "max_holding_bars"}),
     }

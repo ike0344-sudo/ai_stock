@@ -89,6 +89,9 @@ export function TickPanel({ value: v, onChange, spec, cat, errors }: { value: Ti
   const set = (p: Partial<TickCfg>) => onChange({ ...v, ...p })
   const cset = (p: Partial<TickCfg['catalog']>) => onChange({ ...v, catalog: { ...v.catalog, ...p } })
   const c = v.catalog
+  const catFields = cat.capabilities?.tick_catalog_fields ?? []
+  const hasField = (k: string) => catFields.includes(k)
+  const anyCond = c.breakout_min !== null || !!c.value_speed || !!c.buy_ratio || !!c.trade_strength || !!c.block_trades || !!c.daily_breakout || !!c.value_window
   const t = info.data?.tick
   return (
     <Card size="small" title="틱(체결) 설정" data-testid="panel-tick">
@@ -126,7 +129,41 @@ export function TickPanel({ value: v, onChange, spec, cat, errors }: { value: Ti
               <InputNumber size="small" min={0} max={1} step={0.05} addonAfter="이상" value={c.buy_ratio.min} onChange={(x) => x !== null && cset({ buy_ratio: { ...c.buy_ratio!, min: x } })} data-testid="tick-buy-min" />
             </Space>}
           </Row>
-          {c.breakout_min === null && !c.value_speed && !c.buy_ratio && <Alert type="error" showIcon data-testid="tick-no-cond" style={{ marginBottom: 6 }} message="틱 조건이 하나도 없다 — 하나 이상 켜세요" />}
+          {hasField('trade_strength') && (
+            <Row label="체결강도" hint="최근 w초 매수 체결량 ÷ 매도 체결량 × 100 (틱룰) 이 이 % 이상">
+              <Switch checked={!!c.trade_strength} onChange={(on) => cset({ trade_strength: on ? { w: 60, min: 150 } : null })} data-testid="tick-strength-on" />
+              {c.trade_strength && <Space>
+                <InputNumber size="small" min={1} max={3600} addonAfter="초 창" value={c.trade_strength.w} onChange={(x) => x && cset({ trade_strength: { ...c.trade_strength!, w: Math.round(x) } })} data-testid="tick-strength-w" />
+                <InputNumber size="small" min={0} step={10} addonAfter="% 이상" value={c.trade_strength.min} onChange={(x) => x !== null && cset({ trade_strength: { ...c.trade_strength!, min: x } })} data-testid="tick-strength-min" />
+              </Space>}
+            </Row>
+          )}
+          {hasField('block_trades') && (
+            <Row label="대량 체결" hint="최근 w초 안에 한 번에 이만큼 이상 체결된 건이 몇 건 이상(체결대금은 억 원 단위로 입력)">
+              <Switch checked={!!c.block_trades} onChange={(on) => cset({ block_trades: on ? { w: 60, min_value: 100_000_000, min_count: 1 } : null })} data-testid="tick-block-on" />
+              {c.block_trades && <Space wrap>
+                <InputNumber size="small" min={1} max={3600} addonAfter="초 창" value={c.block_trades.w} onChange={(x) => x && cset({ block_trades: { ...c.block_trades!, w: Math.round(x) } })} data-testid="tick-block-w" />
+                <InputNumber size="small" min={0.01} step={0.1} addonAfter="억 이상 1건" value={c.block_trades.min_value / 100_000_000} onChange={(x) => x && cset({ block_trades: { ...c.block_trades!, min_value: Math.round(x * 100_000_000) } })} data-testid="tick-block-value" />
+                <InputNumber size="small" min={1} addonAfter="건 이상" value={c.block_trades.min_count} onChange={(x) => x && cset({ block_trades: { ...c.block_trades!, min_count: Math.round(x) } })} data-testid="tick-block-count" />
+              </Space>}
+            </Row>
+          )}
+          {hasField('daily_breakout') && (
+            <Row label="일봉 신고가 돌파" hint="현재가가 전일(D−1)까지 n일 최고가를 넘으면(기준선은 서버가 일봉에서 계산)">
+              <Switch checked={!!c.daily_breakout} onChange={(on) => cset({ daily_breakout: on ? { n: 20 } : null })} data-testid="tick-dbreak-on" />
+              {c.daily_breakout && <InputNumber size="small" min={1} max={250} addonAfter="일" value={c.daily_breakout.n} onChange={(x) => x && cset({ daily_breakout: { n: Math.round(x) } })} data-testid="tick-dbreak-n" />}
+            </Row>
+          )}
+          {hasField('value_window') && (
+            <Row label="최근 체결대금(억)" hint="최근 w분 체결대금 합(가격×수량, 정확한 값)이 이 억 원 이상 — 예: 1분에 10억">
+              <Switch checked={!!c.value_window} onChange={(on) => cset({ value_window: on ? { w: 1, min_eok: 10 } : null })} data-testid="tick-vwin-on" />
+              {c.value_window && <Space>
+                <InputNumber size="small" min={1} max={60} addonAfter="분 창" value={c.value_window.w} onChange={(x) => x && cset({ value_window: { ...c.value_window!, w: Math.round(x) } })} data-testid="tick-vwin-w" />
+                <InputNumber size="small" min={0.1} step={1} addonAfter="억 이상" value={c.value_window.min_eok} onChange={(x) => x && cset({ value_window: { ...c.value_window!, min_eok: x } })} data-testid="tick-vwin-eok" />
+              </Space>}
+            </Row>
+          )}
+          {!anyCond && <Alert type="error" showIcon data-testid="tick-no-cond" style={{ marginBottom: 6 }} message="틱 조건이 하나도 없다 — 하나 이상 켜세요" />}
           <Row label="진입 허용 시간대" hint="이 시간 사이에만 진입한다">
             <Input type="time" style={{ width: 120 }} value={c.time_from} onChange={(e) => e.target.value && cset({ time_from: e.target.value })} data-testid="tick-time-from" />
             <span>~</span>

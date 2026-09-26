@@ -96,6 +96,7 @@ export function clampPeriodToRange(period: SpecJson['period'], range: [string, s
 
 /** 이 명세의 모드에서 레시피를 그대로 쓸 수 있나 — 틱 정밀화는 분봉 신호를 쓰므로 분봉 레시피도 된다 */
 export function recipeFitsMode(r: Recipe, spec: SpecJson): boolean {
+  if (r.tick) return spec.mode === 'tick' && spec.tick?.entry_source === 'catalog' // 틱 레시피는 틱 조건 진입에서만
   return r.modes.includes(spec.mode) || (spec.mode === 'tick' && spec.tick?.entry_source === 'minute_refine' && r.modes.includes('intraday'))
 }
 
@@ -104,10 +105,25 @@ export function recipeFitsMode(r: Recipe, spec: SpecJson): boolean {
  * 모드가 안 맞으면 레시피의 첫 모드로 바꾼다(dataRange: 바뀐 모드 데이터의 [처음, 끝]). 종목·기간·자금·비용·시장 필터는 그대로 둔다.
  */
 export function applyRecipe(spec: SpecJson, r: Recipe, dataRange?: [string, string]): SpecJson {
+  if (r.tick) return applyTickRecipe(spec, r, dataRange)
   let s = recipeFitsMode(r, spec) ? clone(spec) : switchMode(spec, r.modes[0], dataRange)
   if (s.mode === 'tick' && s.tick?.entry_source === 'catalog') s = setTickEntrySource(s, 'minute_refine') // 조건식이 있는 레시피는 정밀화 방식에서만 쓴다
   s.strategy = { source: 'builder', entry: clone(r.entry), exit: clone(r.exit) }
   s.params = { ...s.params, ...clone(r.params ?? {}) }
+  s.exits = { ...s.exits, ...clone(r.exits ?? {}) }
+  if (s.name.startsWith('새 백테스트')) s.name = r.title
+  return s
+}
+
+/** 틱 레시피: 조건 행이 아니라 틱 탭 칸을 채운다 — 틱 조건은 레시피의 것만 남기고(나머지는 끔), 시간대·쿨다운 등은 레시피 값. 전략 조건식은 없다. */
+function applyTickRecipe(spec: SpecJson, r: Recipe, dataRange?: [string, string]): SpecJson {
+  let s = spec.mode === 'tick' ? clone(spec) : switchMode(spec, 'tick', dataRange)
+  if (s.tick?.entry_source !== 'catalog') s = setTickEntrySource(s, 'catalog')
+  const base = s.tick ?? defaultTick()
+  const { catalog: rc, ...rest } = r.tick ?? {}
+  const off = { breakout_min: null, value_speed: null, buy_ratio: null, trade_strength: null, block_trades: null, daily_breakout: null, value_window: null }
+  s.tick = { ...base, ...rest, catalog: { ...base.catalog, ...off, ...rc } } as TickCfg
+  s.strategy = null
   s.exits = { ...s.exits, ...clone(r.exits ?? {}) }
   if (s.name.startsWith('새 백테스트')) s.name = r.title
   return s

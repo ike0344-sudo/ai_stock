@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -24,6 +25,21 @@ router = APIRouter(prefix="/api")
 def _param(p: cat.ParamDef) -> dict[str, Any]:
     return {"name": p.name, "kind": p.kind, "default": p.default, "lo": p.lo, "hi": p.hi,
             "choices": list(p.choices) if p.choices else None, "label": p.label_ko}
+
+
+TTL_SECONDS = 60.0  # 데이터 범위·보관 기간 스캔 결과를 잠깐 들고 있는다 — 매 요청 3~5초(파일 목록 스캔)라 화면이 느리다. 야간 갱신은 1분 늦어도 무방하다
+
+
+def _ttl(svc: Services, key: Any, fn: Any) -> Any:
+    """Services 객체마다(서버·테스트가 서로 안 섞이게) 결과를 TTL 동안 재사용."""
+    cache = svc.__dict__.setdefault("_ttl_cache", {})
+    hit = cache.get(key)
+    now = time.monotonic()
+    if hit and now - hit[0] < TTL_SECONDS:
+        return hit[1]
+    val = fn()
+    cache[key] = (now, val)
+    return val
 
 
 def _route_paths(app: Any) -> list[str]:
@@ -81,7 +97,7 @@ def strategies(svc: Services = Depends(get_services)) -> dict[str, Any]:
 @router.get("/meta/data-ranges")
 def data_ranges(svc: Services = Depends(get_services)) -> dict[str, Any]:
     """기간 선택기용 — 데이터셋별 (가장 이른 날, 가장 늦은 날). 일봉·코스피·코스닥 지수."""
-    return {"data": {k: [str(a), str(b)] for k, (a, b) in svc.market_data().data_ranges().items()}}
+    return {"data": _ttl(svc, "ranges", lambda: {k: [str(a), str(b)] for k, (a, b) in svc.market_data().data_ranges().items()})}
 
 
 @router.get("/meta/intraday-sources")
@@ -89,7 +105,7 @@ def intraday_sources(start: dt.date, end: dt.date, svc: Services = Depends(get_s
     """분봉·체결 사용 가능 기간과 종목 수 — 분봉 출처(통합/KRX)를 고를 때 보여 준다."""
     if end < start:
         raise ApiError(400, "VALIDATION_ERROR", "end 가 start 보다 이르다", {"fieldErrors": {"end": "start 이후여야 함"}})
-    return {"data": stock_service.intraday_sources(svc.market_data(), start, end)}
+    return {"data": _ttl(svc, ("sources", start, end), lambda: stock_service.intraday_sources(svc.market_data(), start, end))}
 
 
 @router.get("/stocks")

@@ -81,7 +81,7 @@ export interface CatalogParam { name: string; kind: 'int' | 'float' | 'bool' | '
 /** category(키)·category_ko·definition·example·live·volume_based 는 서버 카탈로그(c1 확정 칸)가 줄 때만 있다 — 없으면 화면이 자체 분류·"알려 주지 않음"으로 메운다 */
 export interface IndicatorDef { name: string; label: string; desc: string; params: CatalogParam[]; modes: Mode[]; timing: string; compute: boolean; category?: string; category_ko?: string; definition?: string; example?: string; live?: boolean; live_reason?: string; volume_based?: boolean }
 /** 서버가 지금 이해하는 것 — 모델을 들여다본 결과(studio/application/capabilities.py). 화면은 여기 있는 칸만 보낸다 */
-export interface Capabilities { timeframes: string[] | null; condition_fields: string[]; group_fields: string[]; operand_kinds: string[]; pos_names: string[]; exit_fields: string[]; tick_fields?: string[]; formulas: boolean }
+export interface Capabilities { timeframes: string[] | null; condition_fields: string[]; group_fields: string[]; operand_kinds: string[]; pos_names: string[]; exit_fields: string[]; tick_fields?: string[]; tick_catalog_fields?: string[]; formulas: boolean }
 export interface IndicatorCatalog {
   indicators: IndicatorDef[]
   fields: FieldName[]
@@ -324,6 +324,11 @@ export interface TickCatalogCfg {
   breakout_min: number | null
   value_speed: { w: number; ratio: number } | null
   buy_ratio: { w: number; min: number } | null
+  // 아래 넷은 서버가 capabilities.tick_catalog_fields 로 알릴 때만 화면이 보낸다(없으면 undefined = 칸 없음)
+  trade_strength?: { w: number; min: number } | null // w 초, min 체결강도(%)
+  block_trades?: { w: number; min_value: number; min_count: number } | null // w 초, 1건 최소 체결대금(원)
+  daily_breakout?: { n: number } | null // 전일까지 n일 최고가 돌파
+  value_window?: { w: number; min_eok: number } | null // 최근 w분 체결대금 합 ≥ min_eok 억
   time_from: string
   time_to: string
 }
@@ -383,6 +388,8 @@ export interface Recipe {
   exit: Group
   params?: Record<string, ParamRange>
   exits?: ExitsCfg
+  /** 틱 레시피(modes 가 ["tick"])는 조건 행이 아니라 틱 탭 칸을 채운다 — 틱 설정 조각 */
+  tick?: Omit<Partial<TickCfg>, 'catalog'> & { catalog?: Partial<TickCatalogCfg> }
   available: boolean
   unavailable_reason: string | null
 }

@@ -531,3 +531,93 @@ describe('수식 → 틱 분봉·일봉 조건 (c8)', () => {
     await waitFor(() => expect((lastSpec(calls).tick?.filter as { items: unknown[] }).items).toHaveLength(2))
   })
 })
+
+describe('거래대금(억)·새 틱 조건·틱 레시피 (c9)', () => {
+  const tickRecipe: Recipe = {
+    id: 'tick_value_burst', category: '거래량·거래대금', title: '틱 최근 1분 체결대금 급증', description: 'd', modes: ['tick'], needs: [], available: true, unavailable_reason: null,
+    entry: { logic: 'all', items: [] }, exit: { logic: 'any', items: [] },
+    tick: { entry_source: 'catalog', catalog: { breakout_min: null, value_window: { w: 1, min_eok: 10 }, time_from: '09:05', time_to: '15:00' }, cooldown_sec: 300, exclude_gap_open_pct: 5, time_stop_sec: 600, eod_time: '15:19:59' },
+  }
+
+  it('틱 레시피는 조건 행이 아니라 틱 탭 칸을 채운다(다른 틱 조건은 끄고 전략 조건식은 없앤다)', () => {
+    const s = applyRecipe(newSpec('daily_portfolio', { end: '2026-09-23' }), tickRecipe, ['2026-08-04', '2026-09-23'])
+    expect(s.mode).toBe('tick')
+    expect(s.strategy).toBeNull()
+    expect(s.tick?.entry_source).toBe('catalog')
+    expect(s.tick?.catalog).toMatchObject({ breakout_min: null, value_speed: null, buy_ratio: null, value_window: { w: 1, min_eok: 10 }, time_from: '09:05' })
+    expect(s.period.end).toBe('2026-09-23')
+    // 이미 틱 조건 진입이면 그 자리에서 조건만 바뀐다(모드 안 바뀜)
+    const t = newSpec('tick', { end: '2026-09-23' })
+    const s2 = applyRecipe({ ...t, tick: { ...t.tick!, catalog: { ...t.tick!.catalog, buy_ratio: { w: 1, min: 0.6 } } } }, tickRecipe)
+    expect(s2.tick?.catalog.buy_ratio).toBeNull()
+    expect(s2.tick?.catalog.value_window).toEqual({ w: 1, min_eok: 10 })
+    // 틱 정밀화 상태에서 불러오면 틱 조건 진입으로 돌아온다(서버는 정밀화에 틱 조건 칸이 없다)
+    const s3 = applyRecipe(setTickEntrySource(t, 'minute_refine'), tickRecipe)
+    expect(s3.tick?.entry_source).toBe('catalog')
+    expect(s3.tick?.catalog.value_window).toBeTruthy()
+  })
+
+  it('틱 레시피는 틱 조건 진입 상태에서만 "그대로" 맞고, 아니면 모드가 바뀐다는 안내가 나온다', async () => {
+    mockApi(routes({ 'GET /api/meta/recipes': { data: [...realRecipes, tickRecipe] } }))
+    page()
+    await userEvent.click(await screen.findByTestId('recipe-open'))
+    const card = await screen.findByTestId('recipe-tick_value_burst')
+    expect(within(card).getByText(/체결\(틱\) 모드로 바뀝니다/)).toBeInTheDocument()
+  })
+
+  const withEok = (): IndicatorCatalog => ({ ...realCatalog, indicators: [...realCatalog.indicators, { name: 'value_eok', label: '거래대금(억)', desc: '봉 거래대금(억 원)', params: [], modes: ['daily_single', 'daily_portfolio', 'intraday'], timing: 't 포함', compute: true, category: 'volume', category_ko: '거래량·순위', live: true, volume_based: true }] })
+
+  it('거래대금(억) 지표와 비교하는 숫자 칸에는 "억" 이 붙는다', async () => {
+    const { ConditionGroupEditor } = await import('@/components/builder/ConditionGroupEditor')
+    const g = { logic: 'all' as const, items: [{ left: { kind: 'ind' as const, name: 'value_eok', params: {} }, op: 'gte' as const, right: { kind: 'const' as const, value: 20 } }] }
+    renderApp(<ConditionGroupEditor title="t" path="strategy.entry" group={g} cat={withEok()} mode="intraday" errors={[]} onChange={() => {}} />)
+    const right = await screen.findByTestId('operand-right')
+    expect(within(right).getByText('억')).toBeInTheDocument()
+    // 다른 지표와 비교하는 숫자에는 붙지 않는다
+    const g2 = { logic: 'all' as const, items: [{ left: { kind: 'ind' as const, name: 'sma', params: { src: 'close', n: 20 } }, op: 'gte' as const, right: { kind: 'const' as const, value: 20 } }] }
+    const { unmount } = renderApp(<ConditionGroupEditor title="t2" path="strategy.exit" group={g2} cat={withEok()} mode="intraday" errors={[]} onChange={() => {}} />)
+    await waitFor(() => expect(screen.getAllByTestId('operand-right').length).toBeGreaterThan(1))
+    expect(within(screen.getAllByTestId('operand-right')[1]).queryByText('억')).not.toBeInTheDocument()
+    unmount()
+  })
+
+  const fullCaps = { ...realCatalog.capabilities!, tick_catalog_fields: ['breakout_min', 'value_speed', 'buy_ratio', 'trade_strength', 'block_trades', 'daily_breakout', 'value_window', 'time_from', 'time_to'] }
+  const openTick2 = async (caps = fullCaps) => {
+    const r = mockApi(routes({}, { ...realCatalog, capabilities: caps }))
+    page()
+    await userEvent.click(await screen.findByRole('tab', { name: '체결(틱)' }))
+    await screen.findByTestId('panel-tick')
+    return r
+  }
+
+  it('서버가 알리면 체결강도·대량 체결·일봉 신고가 돌파·최근 체결대금(억) 조건이 나오고 값이 명세에 실린다', async () => {
+    const { calls } = await openTick2()
+    await userEvent.click(screen.getByTestId('tick-vwin-on'))
+    await waitFor(() => expect(lastSpec(calls).tick?.catalog.value_window).toEqual({ w: 1, min_eok: 10 }))
+    fireEvent.change(screen.getByTestId('tick-vwin-eok'), { target: { value: '25' } })
+    await waitFor(() => expect(lastSpec(calls).tick?.catalog.value_window?.min_eok).toBe(25))
+    await userEvent.click(screen.getByTestId('tick-block-on'))
+    await waitFor(() => expect(lastSpec(calls).tick?.catalog.block_trades).toEqual({ w: 60, min_value: 100_000_000, min_count: 1 }))
+    fireEvent.change(screen.getByTestId('tick-block-value'), { target: { value: '2' } }) // 억 → 원 으로 저장
+    await waitFor(() => expect(lastSpec(calls).tick?.catalog.block_trades?.min_value).toBe(200_000_000))
+    await userEvent.click(screen.getByTestId('tick-strength-on'))
+    await userEvent.click(screen.getByTestId('tick-dbreak-on'))
+    await waitFor(() => expect(lastSpec(calls).tick?.catalog).toMatchObject({ trade_strength: { w: 60, min: 150 }, daily_breakout: { n: 20 } }))
+  })
+
+  it('새 조건 하나만 켜도 "틱 조건이 하나도 없다" 오류가 뜨지 않는다(전에는 앞 세 조건만 세서 잘못 떴다)', async () => {
+    await openTick2()
+    await userEvent.click(screen.getByTestId('tick-breakout-on')) // 기본 고점 돌파 끄기
+    expect(await screen.findByTestId('tick-no-cond')).toBeInTheDocument()
+    await userEvent.click(screen.getByTestId('tick-vwin-on'))
+    expect(screen.queryByTestId('tick-no-cond')).not.toBeInTheDocument()
+  })
+
+  it('서버가 알리지 않으면 새 조건 칸이 안 보인다(옛 서버)', async () => {
+    const { tick_catalog_fields: _t, ...old } = fullCaps
+    void _t
+    await openTick2(old as typeof fullCaps)
+    expect(screen.queryByTestId('tick-vwin-on')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('tick-block-on')).not.toBeInTheDocument()
+  })
+})

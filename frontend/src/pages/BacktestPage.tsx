@@ -112,10 +112,11 @@ export function BacktestPage() {
   const validation = useQuery({ queryKey: ['validate', key], queryFn: () => validateSpec(JSON.parse(key) as SpecJson), staleTime: 30_000, retry: false })
   const result = validation.data
   const settled = key === JSON.stringify(pruned)
-  const canRun = !!result?.ok && settled && !validation.isFetching
   const fine = spec.mode === 'intraday' || spec.mode === 'tick' // 분봉·틱
   // 분봉·틱 탭을 데이터 범위가 오기 전에 켰거나 기간을 손대지 않았는데 끝이 데이터 밖이면 데이터 끝으로 당긴다
   const fineRange = ranges.data?.[rangeKeyOf(spec.mode, spec.intraday?.source ?? 'al')]
+  // 분봉·틱은 데이터 범위가 와야 기간을 맞출 수 있다(범위 조회는 처음엔 몇 초 걸린다) — 그 전에 실행하면 데이터 밖 기간으로 돈다
+  const canRun = !!result?.ok && settled && !validation.isFetching && !(fine && !fineRange)
   useEffect(() => {
     if (!fine || !fineRange || periodEdited.current) return
     setSpec((s) => { const p = clampPeriodToRange(s.period, fineRange); return p === s.period ? s : { ...s, period: p } })

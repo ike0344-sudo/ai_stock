@@ -20,11 +20,17 @@ POS_KO = {
     "return_pct": "보유 수익률", "bars_held": "보유 봉 수", "minutes_held": "보유 분", "max_return_pct": "보유 중 최고 수익률",
     "drawdown_pct": "보유 중 최고가 대비 하락률", "entry_price": "매수가",  # drawdown_pct 는 양수 % = 최고가보다 N% 아래
 }
+_EOK_IND = {"value_eok", "value_sum_eok"}  # 값이 억 원 단위인 지표(c9)
 _PCT_POS = {"return_pct", "max_return_pct", "drawdown_pct"}  # 상수와 비교하면 오른쪽에 % 를 붙인다("보유 수익률이 5% 이상")
 TF_PREFIX = {"daily_prev": "일봉(전일 확정) ", "daily_live": "일봉(장중 실시간) "}
 # 봉 개수 창으로 굴러가는 지표 — 분봉 모드에선 날 경계를 넘어 이어진다(lead 판정 2026-09-25, 리셋 옵션 없음)
 _ROLLING = {"sma", "ema", "rsi", "rsi_wilder", "highest", "lowest", "change_pct", "atr", "bb_upper", "bb_lower", "vol_ratio"}
 _WINDOW_PARAMS = {"n", "n1", "fast", "slow", "conv_n", "span_n"}  # 창 길이를 받는 파라미터 이름 — 카탈로그의 다른 롤링 지표도 잡는다
+
+
+def _won(v: float) -> str:
+    """원 단위 금액 → '5억'·'3000만'·'500원'."""
+    return f"{v / 1e8:g}억" if v >= 1e8 else f"{v / 1e4:g}만" if v >= 1e4 else f"{v:g}원"
 
 
 def _is_rolling(name: str) -> bool:
@@ -91,6 +97,10 @@ def _ind(op: IndOperand, unit: str) -> str:
         return f"거래량의 {n}{unit} 평균 대비 배수"
     if op.name == "value_rank":
         return "그날 거래대금 순위" if p["lookback"] == 1 else f"{f['lookback']}일 평균 거래대금 순위"
+    if op.name == "value_eok":  # 값은 억 원 — 비교하는 상수 쪽에 '억' 을 붙인다(`_cond`)
+        return "거래대금"
+    if op.name == "value_sum_eok":
+        return f"최근 {n}{unit} 거래대금 합"
     d = INDICATORS[op.name]  # 그 밖의 지표: 이름 + 기본값과 다른 파라미터(예: MACD 선(fast=8, slow=21))
     extra = [f"{k}={f[k]}" for k in p if p[k] != d.param(k).default]
     return d.label_ko + (f"({', '.join(extra)})" if extra else "")
@@ -141,6 +151,8 @@ def _cond(c: Condition, unit: str) -> tuple[str, str, str]:
         right = _operand(c.right, unit)
         if isinstance(c.left, PosOperand) and c.left.name in _PCT_POS and isinstance(c.right, ConstOperand):
             right += "%"
+        elif isinstance(c.left, IndOperand) and c.left.name in _EOK_IND and isinstance(c.right, ConstOperand):
+            right += "억"  # 거래대금(억 원) 지표는 상수도 억 단위
         obj = f"{right}{josa(right, '을/를')}"
         if c.op == "gt":
             stem, kind, plain = f"{subj} {obj} 넘", "past", f"{subj} {obj} 넘는다"  # 받침 있는 어간 → 끝에서 '넘으면'
@@ -240,6 +252,8 @@ def narrate(spec: Spec) -> str:
         leaves += list(iter_operands(tick_filter))  # 틱 모드의 분봉 필터도 롤링 주의문 대상(bar = 1분봉)
     if intra and any(isinstance(o, IndOperand) and o.tf in ("bar", *MINUTE_TIMEFRAMES) and _is_rolling(o.name) for o in leaves):
         lines.append("※ 분봉 N봉 지표(이동평균·최고가 등)는 전날 봉을 포함해 계산하므로 장 시작 직후 신호는 전날 흐름의 영향을 받는다.")
+    if any(isinstance(o, IndOperand) and o.name in _EOK_IND for o in leaves):
+        lines.append("※ 분봉·일봉 거래대금은 종가×거래량 근사값이다(실제 체결대금과 다를 수 있다).")
     # (daily_prev 는 "오늘 장 시작 전에 알 수 있는 값" — 설계 §3.2 v0.3: highest/lowest(오늘 제외)도 D−N..D−1 이라 별도 주의문 없음)
     if spec.mode == "intraday" and spec.intraday is not None and spec.intraday.source == "krx":
         lines.append("※ KRX 분봉 기준 — NXT 체결이 빠져 거래량·거래대금이 통합보다 20~40% 작다(같은 임계값이 더 엄격해진다).")
@@ -252,6 +266,14 @@ def narrate(spec: Spec) -> str:
             conds.append(f"체결대금 속도가 평균의 {_fmt(c.value_speed.ratio)}배 이상({c.value_speed.w}분 창)")
         if c.buy_ratio is not None:
             conds.append(f"매수 비중 {_fmt(c.buy_ratio.min)} 이상({c.buy_ratio.w}분 창)")
+        if c.trade_strength is not None:
+            conds.append(f"최근 {c.trade_strength.w}초 체결강도(매수÷매도 체결량)가 {_fmt(c.trade_strength.min)}% 이상")
+        if c.block_trades is not None:
+            conds.append(f"최근 {c.block_trades.w}초 안에 {_won(c.block_trades.min_value)} 이상 대량 체결이 {c.block_trades.min_count}건 이상")
+        if c.daily_breakout is not None:
+            conds.append(f"현재가가 전일까지 {c.daily_breakout.n}일 최고가를 돌파")
+        if c.value_window is not None:  # c9 — 가격×수량의 정확한 체결대금(분봉 근사값 아님), 그 초 체결 포함
+            conds.append(f"최근 {c.value_window.w}분 체결대금 합이 {_fmt(c.value_window.min_eok)}억 이상(정확한 체결대금, 그 초 체결 포함)")
         lines.append(f"{c.time_from}~{c.time_to} 사이 " + " 그리고 ".join(conds) + " 이면 다음 체결에 산다.")
         if spec.tick.prefilter is not None and spec.tick.prefilter.items:  # 일봉 사전 필터 — 전일(D−1) 확정값 기준
             lines.append(f"전일 일봉 기준으로 {narrate_group(spec.tick.prefilter, '일')} 그 날만 틱을 본다.")
