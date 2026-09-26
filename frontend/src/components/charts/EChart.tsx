@@ -28,9 +28,11 @@ export type EChartOption = echarts.EChartsCoreOption
 interface Props {
   option: EChartOption
   height?: number | string
+  /** true 면 옵션을 합쳐 갱신한다(series id 가 같으면 값이 바뀔 때 부드럽게 이어져 곡선이 자라는 모습이 나온다). 기본은 통째 교체 */
+  merge?: boolean
 }
 
-export function EChart({ option, height = 320 }: Props) {
+export function EChart({ option, height = 320, merge = false }: Props) {
   const el = useRef<HTMLDivElement>(null)
   const chart = useRef<echarts.ECharts | null>(null)
   const { dark } = useDark()
@@ -51,8 +53,8 @@ export function EChart({ option, height = 320 }: Props) {
 
   useEffect(() => {
     // 다크에서는 echarts 기본 배경이 흰색이라 투명으로 — 카드 배경이 비쳐 보이게
-    chart.current?.setOption({ backgroundColor: 'transparent', ...option }, true)
-  }, [option, dark])
+    chart.current?.setOption({ backgroundColor: 'transparent', ...option }, !merge)
+  }, [option, dark, merge])
 
   return <div ref={el} style={{ width: '100%', height }} />
 }

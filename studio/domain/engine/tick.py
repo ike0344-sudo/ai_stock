@@ -29,6 +29,7 @@ import pandas as pd
 from ..costs import CostModel
 from ..market_rules import is_price_limit_locked
 from ..models import BacktestResult, ExitReason, Fill, Trade
+from .curve import CurveEmitter
 from .fills import ExitRules
 from .portfolio import PortfolioRules, _size
 
@@ -100,7 +101,7 @@ def _trigger(prc: np.ndarray, sec: np.ndarray, j0: int, entry_fill: float, rules
 
 def simulate_tick_days(
     days: dict[dt.date, list[Candidate]], all_days: list[dt.date], cost: CostModel, exit_rules: ExitRules,
-    portfolio: PortfolioRules, tr: TickRules,
+    portfolio: PortfolioRules, tr: TickRules, curve=None,
 ) -> BacktestResult:
     """날짜별 후보 → 시간순으로 슬롯·현금을 따라가며 진입·청산. all_days = 평가금 곡선에 넣을 모든 날(거래 없는 날 포함)."""
     cash_cap = float(portfolio.initial_capital)
@@ -112,7 +113,8 @@ def simulate_tick_days(
     eq_rows = []
     eod_sec = hms_to_sec(tr.eod_time)
     comm = cost.commission_rate
-    for day in all_days:
+    emitter = CurveEmitter(curve, len(all_days)) if curve is not None else None  # 진행 중 중간 곡선(읽기만 — 결과 불변)
+    for k_day, day in enumerate(all_days):
         equity_start = equity
         cash = equity
         cands = sorted(days.get(day, []), key=lambda c: (int(c.sec[c.entry_idx]), c.code))
@@ -169,6 +171,8 @@ def simulate_tick_days(
             cash += back
             equity += pnl
         eq_rows.append((pd.Timestamp(day), equity, 0.0, equity, 0))
+        if emitter is not None:
+            emitter.emit(k_day, pd.Timestamp(day), equity, equity, 0, len(trades), fills)
     eq = pd.DataFrame(eq_rows, columns=["ts", "cash", "positions_value", "equity", "n_positions"])
     trades.sort(key=lambda t: (t.entry_ts, t.code))
     fills.sort(key=lambda f: (f.ts, f.side != "sell", f.code))

@@ -8,6 +8,7 @@ import { DistributionPanels, DrawdownPanel, EquityPanel, ExitReasonPanel, GroupP
 import { ResultHeader } from '@/components/results/ResultHeader'
 import { TradesTable } from '@/components/results/TradesTable'
 import { IntradayCoverage, MinuteSourceBanner, TickRefineCard, TickSample } from '@/components/results/IntradayResult'
+import { ReplayPanel } from '@/components/results/ReplayPanel'
 import { HoldoutSection, OptimizeSection, WalkforwardSection } from '@/components/results/ValidationPanels'
 import { segmentBands } from '@/lib/validation'
 import type { IntradaySummary, OptimizeSummary, TickRefineSummary, TickSummary } from '@/types/studio'
@@ -50,6 +51,7 @@ export function ResultPage() {
         <>
           <EquityPanel equity={equity.data} bands={kind === 'optimize' && d.summary.optimize ? segmentBands((d.summary.optimize as OptimizeSummary).segments) : undefined} />
           <DrawdownPanel equity={equity.data} />
+          {(kind === 'backtest' || kind === 'holdout_check') && trades.data ? <ReplayPanel d={d} equity={equity.data} trades={trades.data} /> : null}
         </>
       ) : <Spin />}
 

@@ -33,7 +33,7 @@ from studio.domain.models import ExitReason
 from studio.domain.spec import BuilderStrategy, Intraday, Spec, bind_params, validate_against
 
 from .backtest_service import (
-    WARMUP_BARS, BacktestError, Progress, _slice, assemble_record, eligible_codes, to_engine_rules,
+    WARMUP_BARS, BacktestError, Progress, _slice, assemble_record, eligible_codes, engine_curve, to_engine_rules,
 )
 from .ports import MarketData, RunRecord
 
@@ -69,7 +69,7 @@ def _period_rows(index: pd.DatetimeIndex, start: pd.Timestamp, end: pd.Timestamp
 
 
 def run_intraday(spec: Spec, md: MarketData, progress: Progress | None = None, *, legacy=None,
-                 overrides: Mapping[str, float] | None = None) -> RunRecord:
+                 overrides: Mapping[str, float] | None = None, curve=None) -> RunRecord:
     t_start = time.perf_counter()
     tick = progress or (lambda stage, frac: None)
     bound = bind_params(spec, overrides)
@@ -130,7 +130,8 @@ def run_intraday(spec: Spec, md: MarketData, progress: Progress | None = None, *
     cost, exit_rules, fill_rules, port = to_engine_rules(bound)
     session = bar_sessions(sub.close.index, cfg.eod_time)
     result = run_portfolio(sub, ent, ext, cost, exit_rules, fill_rules, port, session=session,
-                           pos_exit=ev.pos_exit.sliced(in_period) if ev.pos_exit is not None else None)
+                           pos_exit=ev.pos_exit.sliced(in_period) if ev.pos_exit is not None else None,
+                           curve=engine_curve(tick, curve, 0.55, 0.85))
 
     # ---- 커버리지: 쓴 (날짜,종목) 쌍 / 기대 쌍 — 조용히 줄이지 않는다(기간의 모든 일봉 거래일 기준: 분봉이 통째로 없는 날도 센다)
     days_in = pd.DatetimeIndex(sorted(set(sub.close.index.normalize())))
@@ -298,7 +299,7 @@ class _MinuteFilter:
 
 
 def run_tick(spec: Spec, md: MarketData, progress: Progress | None = None, *, legacy=None,
-             overrides: Mapping[str, float] | None = None) -> RunRecord:
+             overrides: Mapping[str, float] | None = None, curve=None) -> RunRecord:
     t_start = time.perf_counter()
     tick = progress or (lambda stage, frac: None)
     bound = bind_params(spec, overrides)
@@ -391,7 +392,7 @@ def run_tick(spec: Spec, md: MarketData, progress: Progress | None = None, *, le
     if exit_rules.max_holding_bars is not None:
         warnings.append("틱 모드는 max_holding_bars 를 쓰지 않는다 — time_stop_sec 로 대신한다")
     trules = TickRules(tcfg.time_stop_sec, tcfg.eod_time, tcfg.exclude_gap_open_pct)
-    result = simulate_tick_days(cands, sorted(all_days), cost, exit_rules, port, trules)
+    result = simulate_tick_days(cands, sorted(all_days), cost, exit_rules, port, trules, curve=engine_curve(tick, curve, 0.85, 0.95))
 
     coverage = {"expected_pairs": pairs_expected, "used_pairs": pairs_used, "days": len(all_days), "codes": len(elig),
                 "signals": n_signals, "gap_open_days_skipped": gap_skipped, "signals_without_entry_tick": n_no_entry,

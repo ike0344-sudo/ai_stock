@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import importlib
+import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -44,21 +45,48 @@ def _deps() -> Deps:
     return importlib.import_module("studio.infrastructure.wiring").default_deps()
 
 
+LIVE_CURVE_MAX = 300  # progress.json 에 누적하는 중간 곡선 점 상한(파일 크기 상한 ≈ 40KB)
+LIVE_WRITE_INTERVAL = 0.1  # 엔진 단계에서 progress.json 을 쓰는 최소 간격(초) — 점마다 쓰면 파일 쓰기가 실행 시간의 ~6%(실측)라 초당 10번으로 제한
+
+
+class LiveCurve:
+    """엔진 중간 곡선 점을 모아 progress.json 의 `live_curve` 로 싣는다 — {date, equity, cash, n_positions, n_trades, last_event}.
+    상한(300)을 넘으면 절반으로 솎는다(마지막 점은 유지). 진행률을 쓸 때마다 같이 써야 다음 단계 쓰기에 안 지워진다(`extra()`)."""
+
+    def __init__(self, cap: int = LIVE_CURVE_MAX) -> None:
+        self.points: list[dict[str, Any]] = []
+        self.cap = cap
+
+    def add(self, pt: dict[str, Any]) -> None:
+        self.points.append({k: v for k, v in pt.items() if k != "frac"})
+        if len(self.points) > self.cap:
+            self.points = self.points[:-1:2] + [self.points[-1]]
+
+    def extra(self) -> dict[str, Any]:
+        return {"live_curve": self.points} if self.points else {}
+
+
 def run_backtest_job(ctx: Any) -> dict[str, Any]:
     payload = ctx.payload
     spec = Spec.model_validate(payload["spec"])
     run_id = payload["run_id"]
     deps = _deps()
+    live = LiveCurve()
+    last_write = [0.0]
 
     def progress(stage: str, frac: float) -> None:
         if ctx.is_cancelled():
             raise RuntimeError("취소 요청으로 중단")
-        ctx.progress(frac * 100, stage)
+        now = time.monotonic()
+        if stage == "engine" and live.points and now - last_write[0] < LIVE_WRITE_INTERVAL:
+            return  # 곡선 점은 이미 모였다(다음 쓰기·단계 전환 쓰기에 실린다) — 파일 쓰기만 건너뛴다
+        last_write[0] = now
+        ctx.progress(frac * 100, stage, **live.extra())
 
-    record = run_backtest(spec, deps.market_data, progress, legacy=deps.legacy, overrides=payload.get("overrides"))
+    record = run_backtest(spec, deps.market_data, progress, legacy=deps.legacy, overrides=payload.get("overrides"), curve=live.add)
     deps.run_store.save(record, run_id=run_id)
     ctx.set_run_id(run_id)
-    ctx.progress(100, "done", f"저장 완료: {run_id}")
+    ctx.progress(100, "done", f"저장 완료: {run_id}", **live.extra())
     return {"run_id": run_id}
 
 

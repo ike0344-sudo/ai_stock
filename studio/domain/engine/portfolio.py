@@ -30,6 +30,7 @@ import pandas as pd
 from ..costs import CostModel
 from ..market_rules import is_price_limit_locked
 from ..models import BacktestResult, ExitReason, Fill, Panel, Position, Trade
+from .curve import CurveEmitter
 from .fills import ExitRules, FillRules, downside_line, entry_levels, entry_lines, judge_gap, judge_intrabar, level_qty
 from .intraday import SessionRules
 
@@ -77,6 +78,7 @@ def run_portfolio(
     portfolio: PortfolioRules,
     session: SessionRules | None = None,
     pos_exit: Any = None,
+    curve: Any = None,
 ) -> BacktestResult:
     if portfolio.sizing == "risk_pct" and exit_rules.stop_loss_pct is None:
         raise ValueError("risk_pct 사이징은 stop_loss_pct 가 있어야 한다")
@@ -112,6 +114,7 @@ def run_portfolio(
     if pos_exit is not None and tuple(pos_exit.shape) != (n, m):
         raise ValueError(f"pos_exit 표 모양 {tuple(pos_exit.shape)} 이 패널 {(n, m)} 과 다르다")
     bar_min = getattr(pos_exit, "bar_minutes", None)
+    emitter = CurveEmitter(curve, n) if curve is not None else None  # 진행 중 중간 곡선(읽기만 — 결과 불변)
     trades: list[Trade] = []
     fills: list[Fill] = []
     skipped = {"slots_full": 0, "cash": 0, "upper_limit": 0, "volume_cap": 0, "no_data": 0}
@@ -351,6 +354,8 @@ def run_portfolio(
         last_close[ok] = C[i][ok]
         pv = mtm()
         eq_rows.append((idx[i], cash, pv, cash + pv, len(pos)))
+        if emitter is not None:
+            emitter.emit(i, idx[i], cash + pv, cash, len(pos), next_entry_id, fills)  # n_trades = 지금까지 진입 건수(분할 청산 조각이 아니라 진입 기준)
 
     equity = pd.DataFrame(eq_rows, columns=["ts", "cash", "positions_value", "equity", "n_positions"])
     return BacktestResult(trades=trades, equity=equity, fills=fills, skipped=skipped, diagnostics=diag)

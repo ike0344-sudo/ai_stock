@@ -236,6 +236,18 @@ def _uses_value(spec: Spec) -> bool:
     return False
 
 
+def engine_curve(tick: Progress, curve: Callable[[dict], None] | None, lo: float, hi: float) -> Callable[[dict], None] | None:
+    """엔진 중간 곡선 콜백 — 곡선을 받는 쪽이 없으면 None(엔진은 아무것도 안 한다). 점마다 진행 콜백도 불러 엔진 단계 진행률이 움직이고
+    (lo~hi), 취소 요청이 오면 그 콜백이 던진 예외가 엔진을 멈춘다."""
+    if curve is None:
+        return None
+
+    def cb(pt: dict) -> None:
+        curve(pt)
+        tick("engine", lo + (hi - lo) * pt["frac"])
+    return cb
+
+
 def _slice(panel: Panel, mask: np.ndarray, cols: list[str] | None = None) -> Panel:
     def f(df: pd.DataFrame) -> pd.DataFrame:
         df = df.loc[mask]
@@ -371,17 +383,20 @@ def run_backtest(
     legacy: LegacyStrategies | None = None,
     overrides: Mapping[str, float] | None = None,
     context: RunContext | None = None,
+    curve: Callable[[dict], None] | None = None,
 ) -> RunRecord:
-    """context: 그리드 등 같은 기간·유니버스를 반복 실행할 때 `prepare_context` 결과를 재사용(키가 다르면 무시하고 새로 만든다)."""
+    """context: 그리드 등 같은 기간·유니버스를 반복 실행할 때 `prepare_context` 결과를 재사용(키가 다르면 무시하고 새로 만든다).
+    curve: 엔진 진행 중 중간 곡선 콜백(≤200점 — `domain/engine/curve.py`). 켜도 결과는 같고, 없으면 진행 콜백 호출도 그대로다.
+    호환 모드(옛 단일 시뮬레이터)·그리드·워크포워드는 곡선이 없다."""
     t_start = time.perf_counter()
     tick = progress or (lambda stage, frac: None)
 
     if spec.mode == "intraday" or (spec.mode == "tick" and spec.tick is not None and spec.tick.entry_source == "minute_refine"):
         from .intraday_service import run_intraday  # 분봉(+모드 A 틱 정밀화) — 순환 import 피하려 지연 import
-        return run_intraday(spec, market_data, progress, legacy=legacy, overrides=overrides)
+        return run_intraday(spec, market_data, progress, legacy=legacy, overrides=overrides, curve=curve)
     if spec.mode == "tick":
         from .intraday_service import run_tick  # 모드 B 틱 조건 진입
-        return run_tick(spec, market_data, progress, legacy=legacy, overrides=overrides)
+        return run_tick(spec, market_data, progress, legacy=legacy, overrides=overrides, curve=curve)
     bound = bind_params(spec, overrides)
     if context is None or context.key != context_key(bound):
         context = prepare_context(bound, market_data, tick)
@@ -439,7 +454,8 @@ def run_backtest(
         legacy_m = legacy_metrics(trades, candles.index.normalize().nunique(), port.initial_capital)
     else:
         result = run_portfolio(sub, ent, ext, cost, exit_rules, fill_rules, port,
-                               pos_exit=ev.pos_exit.sliced(in_period) if ev.pos_exit is not None else None)
+                               pos_exit=ev.pos_exit.sliced(in_period) if ev.pos_exit is not None else None,
+                               curve=engine_curve(tick, curve, 0.55, 0.85))
 
     # ---- 지표·경고·기록 (분봉·틱 모드와 공통)
     valid = sub.close.notna().to_numpy()  # 종목별 마지막 유효 봉이 기간 마지막 봉보다 앞인 종목 수
