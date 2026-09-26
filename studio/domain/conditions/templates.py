@@ -124,6 +124,7 @@ class Template:
     warn: str = ""
     check: Callable[[dict[str, Any]], tuple[str, str] | None] | None = None   # 값끼리의 관계(예: 짧은 선 < 긴 선) — 틀리면 (강조할 빈칸, 쉬운 말)
     variants: bool = False
+    auto: bool = False              # 카탈로그 메타로 자동 생성한 기본 문장(손으로 쓴 문장이 없는 지표) — 화면은 "기본 문장" 표시를 붙일 수 있다
 
     def skel(self, mode: str | None) -> Mapping[str, Any]:
         if not self.variants:
@@ -142,7 +143,7 @@ def _t(id: str, category: str, sentence: str, slots: tuple[Slot, ...], skeleton:
     return Template(id, category, sentence, slots, skeleton, **kw)
 
 
-TEMPLATES: tuple[Template, ...] = (
+_HAND: tuple[Template, ...] = (
     # ---- 신고가·돌파
     _t("high_break", "breakout", "가격이 {n}일 최고가를 넘었다", (days(),),
        {"daily": cond(fld(), "gt", ind("highest", src="high", n=_N)),
@@ -319,10 +320,99 @@ TEMPLATES: tuple[Template, ...] = (
        hint="오래 들고 있어도 안 오르면 시간이 지난 뒤 정리해요.", tags=("보유", "시간", "기간")),
     _t("pos_minutes", "exit", "산 지 {n}분이 지났다", (num("n", "몇 분", 30, 1, 1000, "분", True),), cond(pos("minutes_held"), "gte", const(_N)), role="exit", only=("intraday",),
        hint="분봉 매매에서 일정 시간이 지나면 정리해요.", tags=("보유", "시간", "분")),
-)
 
-BY_ID: dict[str, Template] = {t.id: t for t in TEMPLATES}
-assert len(BY_ID) == len(TEMPLATES), "템플릿 id 중복"
+    # ---- 손으로 쓴 문장 2차(c11) — 자주 쓰는 보조지표·캔들. 나머지 지표는 아래 _auto_all 이 카탈로그에서 기본 문장을 만든다.
+    _t("envelope_up_break", "indicator", "{tf}가격이 엔벨로프(평균 {n}{봉}, 폭 {x}%) 위쪽 선을 아래에서 위로 뚫고 올라갔다",
+       (tfslot("any"), bars(default=20), pct(default=5, hi=50)),
+       cond(fld("close", _TF), "cross_above", ind("envelope_upper", _TF, n=_N, pct=_X)),
+       hint="엔벨로프는 이동평균선을 위아래로 일정 %만큼 띄워 그은 두 줄이에요. 위쪽 선을 뚫으면 평소보다 강하게 오른 거예요.",
+       tags=("엔벨로프", "envelope", "밴드", "돌파", "상단", "위쪽")),
+    _t("envelope_low_break", "indicator", "{tf}가격이 엔벨로프(평균 {n}{봉}, 폭 {x}%) 아래쪽 선을 위에서 아래로 뚫고 내려갔다",
+       (tfslot("any"), bars(default=20), pct(default=5, hi=50)),
+       cond(fld("close", _TF), "cross_below", ind("envelope_lower", _TF, n=_N, pct=_X)),
+       hint="아래쪽 선을 깨고 내려가면 평소보다 강하게 떨어진 거예요. 팔 때(손절)에도, 많이 빠졌다는 신호로도 써요.",
+       tags=("엔벨로프", "envelope", "밴드", "이탈", "하단", "아래쪽")),
+    _t("envelope_low_touch", "indicator", "{tf}저가가 엔벨로프(평균 {n}{봉}, 폭 {x}%) 아래쪽 선에 닿았다(또는 그 아래로 내려갔다)",
+       (tfslot("any"), bars(default=20), pct(default=5, hi=50)),
+       cond(fld("low", _TF), "lte", ind("envelope_lower", _TF, n=_N, pct=_X)),
+       hint="봉 중간에라도 아래쪽 선에 닿았으면 참이에요. 눌림목에서 반등을 노릴 때 써요.", tags=("엔벨로프", "envelope", "밴드", "하단", "닿았다", "눌림")),
+    _t("keltner_up_break", "indicator", "{tf}가격이 켈트너 채널(평균 {n}{봉}, 폭 {m}배) 위쪽 선을 아래에서 위로 뚫고 올라갔다",
+       (tfslot("any"), bars(default=20), num("m", "폭 몇 배", 2, 0.1, 10, "배")),
+       cond(fld("close", _TF), "cross_above", ind("keltner_upper", _TF, n=_N, mult=M("m"))),
+       hint="켈트너 채널은 평균선 위아래로 '요즘 하루 움직이는 폭'의 몇 배만큼 띄운 두 줄이에요. 위쪽 선을 뚫으면 강한 상승이에요.",
+       tags=("켈트너", "keltner", "채널", "돌파", "상단")),
+    _t("keltner_low_break", "indicator", "{tf}가격이 켈트너 채널(평균 {n}{봉}, 폭 {m}배) 아래쪽 선을 위에서 아래로 뚫고 내려갔다",
+       (tfslot("any"), bars(default=20), num("m", "폭 몇 배", 2, 0.1, 10, "배")),
+       cond(fld("close", _TF), "cross_below", ind("keltner_lower", _TF, n=_N, mult=M("m"))),
+       hint="아래쪽 선을 깨면 강한 하락이에요.", tags=("켈트너", "keltner", "채널", "이탈", "하단")),
+    _t("ichimoku_above_cloud", "indicator", "{tf}가격이 일목균형표 구름 위에 있다", (tfslot("any"),),
+       cond(fld("close", _TF), "gt", ind("ichimoku_cloud_top", _TF)),
+       hint="구름은 과거 가격으로 미리 그려 둔 지지·저항 띠예요. 가격이 구름 위에 있으면 강한 흐름으로 봐요.", tags=("일목", "일목균형표", "구름", "구름대", "위", "ichimoku")),
+    _t("ichimoku_below_cloud", "indicator", "{tf}가격이 일목균형표 구름 아래에 있다", (tfslot("any"),),
+       cond(fld("close", _TF), "lt", ind("ichimoku_cloud_bottom", _TF)),
+       hint="가격이 구름 아래에 있으면 약한 흐름이에요. 팔 때 써요.", tags=("일목", "일목균형표", "구름", "구름대", "아래", "ichimoku")),
+    _t("ichimoku_conv_cross_up", "indicator", "{tf}일목 전환선이 기준선을 아래에서 위로 뚫고 올라갔다", (tfslot("any"),),
+       cond(ind("ichimoku_conv", _TF), "cross_above", ind("ichimoku_base", _TF)),
+       hint="짧은 선(전환선)이 긴 선(기준선)을 뚫고 올라가는 순간이에요. 일목균형표의 매수 신호예요.", tags=("일목", "전환선", "기준선", "교차", "ichimoku")),
+    _t("ichimoku_conv_cross_down", "indicator", "{tf}일목 전환선이 기준선을 위에서 아래로 뚫고 내려갔다", (tfslot("any"),),
+       cond(ind("ichimoku_conv", _TF), "cross_below", ind("ichimoku_base", _TF)),
+       hint="전환선이 기준선 아래로 내려가는 순간이에요. 일목균형표의 매도 신호예요.", tags=("일목", "전환선", "기준선", "교차", "ichimoku")),
+    _t("ma_reversed", "ma", "{tf}{n1}·{n2}·{n3}{봉}선이 짧은 선일수록 아래에 나란히 있다(역배열)",
+       (tfslot("bars"), bars("n1", "가장 짧은 선", 5, 1), bars("n2", "중간 선", 20, 2), bars("n3", "가장 긴 선", 60, 3)),
+       cond(ind("ma_reversed", _TF, n1=M("n1"), n2=M("n2"), n3=M("n3")), "is_true"),
+       check=lambda v: None if v["n1"] < v["n2"] < v["n3"] else ("n1", "선 길이는 짧은 것부터 차례로 커져야 해요(예: 5 < 20 < 60)"),
+       hint="평균선이 위에서부터 긴 것 → 짧은 것 순서로 쌓여 있으면 꾸준히 내리는 모양이에요. 팔 때·피할 종목을 거를 때 써요.", tags=("역배열", "이평", "하락", "추세")),
+    _t("above_ema", "ma", "{tf}가격이 {n}{봉} 지수이동평균선 {cmp}", (tfslot("bars"), bars(default=20), CMP_ABOVE),
+       cond(fld("close", _TF), M("cmp"), ind("ema", _TF, src="close", n=_N)),
+       hint="지수이동평균선은 최근 가격에 더 무게를 둔 평균선이라 일반 이동평균선보다 빨리 움직여요.", tags=("지수이평", "지수이동평균", "ema", "이평", "위", "아래")),
+    _t("ema_cross_up", "ma", "{tf}{a}{봉} 지수이동평균선이 {b}{봉}선을 아래에서 위로 뚫고 올라갔다(골든크로스)",
+       (tfslot("bars"), bars("a", "짧은 선", 12, 1), bars("b", "긴 선", 26, 2)),
+       cond(ind("ema", _TF, src="close", n=M("a")), "cross_above", ind("ema", _TF, src="close", n=M("b"))), check=_short_long("a", "b"),
+       hint="짧은 지수이평선이 긴 선을 뚫고 올라가는 순간이에요.", tags=("지수이평", "ema", "골든크로스", "교차", "상향")),
+    _t("ema_cross_down", "ma", "{tf}{a}{봉} 지수이동평균선이 {b}{봉}선을 위에서 아래로 뚫고 내려갔다(데드크로스)",
+       (tfslot("bars"), bars("a", "짧은 선", 12, 1), bars("b", "긴 선", 26, 2)),
+       cond(ind("ema", _TF, src="close", n=M("a")), "cross_below", ind("ema", _TF, src="close", n=M("b"))), check=_short_long("a", "b"),
+       hint="짧은 지수이평선이 긴 선 아래로 내려가는 순간이에요.", tags=("지수이평", "ema", "데드크로스", "교차", "하향")),
+    _t("cci_level", "indicator", "{tf}CCI({n})가 {x} {cmp}", (tfslot("any"), bars(default=20, lo=2, hi=200), num("x", "몇", 100, -1000, 1000), CMP_HL),
+       cond(ind("cci", _TF, n=_N), M("cmp"), const(_X)),
+       hint="CCI는 가격이 평소 평균에서 얼마나 벗어났는지 보여줘요. +100 이상이면 강하게 올라 있고, −100 이하면 강하게 내려 있어요.", tags=("cci", "과열", "침체")),
+    _t("adx_level", "indicator", "{tf}추세 강도(ADX {n})가 {x} {cmp}", (tfslot("any"), bars(default=14, lo=2, hi=100), num("x", "몇", 25, 0, 100), CMP_HL),
+       cond(ind("adx", _TF, n=_N), M("cmp"), const(_X)),
+       hint="ADX는 오르든 내리든 '방향이 얼마나 뚜렷한지'를 0~100으로 보여줘요. 25 이상이면 추세가 강한 편이에요(오르는지 내리는지는 알려주지 않아요).", tags=("adx", "추세", "강도")),
+    _t("di_cross_up", "indicator", "{tf}상승 힘(+DI {n})이 하락 힘(−DI)을 아래에서 위로 뚫고 올라갔다", (tfslot("any"), bars(default=14, lo=2, hi=100)),
+       cond(ind("plus_di", _TF, n=_N), "cross_above", ind("minus_di", _TF, n=_N)),
+       hint="오르는 힘이 내리는 힘을 넘어서는 순간이에요. 오르는 추세가 시작될 때 써요.", tags=("di", "dmi", "adx", "교차", "상향")),
+    _t("di_cross_down", "indicator", "{tf}상승 힘(+DI {n})이 하락 힘(−DI) 아래로 내려갔다", (tfslot("any"), bars(default=14, lo=2, hi=100)),
+       cond(ind("plus_di", _TF, n=_N), "cross_below", ind("minus_di", _TF, n=_N)),
+       hint="내리는 힘이 오르는 힘을 넘어서는 순간이에요. 팔 때 써요.", tags=("di", "dmi", "adx", "교차", "하향")),
+    _t("doji", "candle", "{tf}시가와 종가가 거의 같은 도지(십자) 봉이다", (tfslot("any"),), cond(ind("doji", _TF), "is_true"),
+       hint="몸통이 거의 없고 위아래 꼬리만 있는 봉이에요. 사려는 힘과 팔려는 힘이 팽팽해서 방향이 바뀔 수 있어요.", tags=("도지", "십자", "캔들", "doji")),
+    _t("hammer", "candle", "{tf}아래꼬리가 긴 망치형 봉이다", (tfslot("any"),), cond(ind("hammer", _TF), "is_true"),
+       hint="아래로 밀렸다가 다시 올라와 긴 아래꼬리가 달린 봉이에요. 떨어지다가 사려는 힘이 받쳐줬다는 뜻으로 봐요(바닥 신호).", tags=("망치형", "망치", "캔들", "hammer", "바닥")),
+    _t("inverted_hammer", "candle", "{tf}위꼬리가 긴 역망치형 봉이다", (tfslot("any"),), cond(ind("inverted_hammer", _TF), "is_true"),
+       hint="위로 올랐다가 밀려 긴 위꼬리가 달린 봉이에요. 바닥에서 나오면 반등 신호, 꼭대기에서 나오면 꺾이는 신호로 봐요.", tags=("역망치형", "역망치", "캔들")),
+    _t("bull_engulfing", "candle", "{tf}직전 음봉을 통째로 감싸는 양봉이 나왔다(상승 장악형)", (tfslot("any"),), cond(ind("bull_engulfing", _TF), "is_true"),
+       hint="내리던 봉 다음에 그보다 크게 오른 봉이 나오면 분위기가 바뀌었다는 신호로 봐요.", tags=("장악형", "상승장악", "양봉", "캔들", "engulfing")),
+    _t("bear_engulfing", "candle", "{tf}직전 양봉을 통째로 감싸는 음봉이 나왔다(하락 장악형)", (tfslot("any"),), cond(ind("bear_engulfing", _TF), "is_true"),
+       hint="오르던 봉 다음에 그보다 크게 내린 봉이 나오면 꺾였다는 신호로 봐요. 팔 때 써요.", tags=("장악형", "하락장악", "음봉", "캔들", "engulfing")),
+    _t("inside_bar", "candle", "{tf}직전 봉의 고가·저가 안에 갇힌 봉이다(인사이드바)", (tfslot("any"),), cond(ind("inside_bar", _TF), "is_true"),
+       hint="움직임이 줄어 눌려 있는 모양이에요. 곧 크게 움직이기 전 단계로 봐요.", tags=("인사이드바", "갇힘", "캔들", "횡보")),
+    _t("outside_bar", "candle", "{tf}직전 봉을 위아래로 모두 감싸는 더 큰 봉이다(아웃사이드바)", (tfslot("any"),), cond(ind("outside_bar", _TF), "is_true"),
+       hint="앞 봉보다 위로도 아래로도 더 크게 움직인 봉이에요. 변동이 갑자기 커졌다는 뜻이에요.", tags=("아웃사이드바", "캔들", "변동")),
+    _t("gap_filled", "candle", "{tf}{x}% 이상 갭 상승한 뒤 그 갭을 메웠다", (tfslot("any"), pct(default=2, hi=30)), cond(ind("gap_filled", _TF, min_gap_pct=_X), "is_true"),
+       hint="높게 시작한 뒤 어제 마지막 가격까지 다시 내려온 종목이에요. 갭 상승이 힘을 잃었다는 뜻으로 봐요.", tags=("갭", "메움", "갭하락", "캔들")),
+    _t("new_high_flag", "breakout", "{tf}고가가 직전 {n}{봉} 최고가를 새로 넘었다(신고가)", (tfslot("any"), bars(default=20, lo=1)),
+       cond(ind("new_high", _TF, n=_N, src="high"), "is_true"),
+       hint="봉 중간에라도 최근 최고가를 넘었으면 참이에요(종가 기준은 '종가가 N일 최고가를 넘었다').", tags=("신고가", "돌파", "고점", "고가")),
+    _t("new_low_flag", "breakout", "{tf}저가가 직전 {n}{봉} 최저가를 새로 깼다(신저가)", (tfslot("any"), bars(default=20, lo=1)),
+       cond(ind("new_low", _TF, n=_N), "is_true"), hint="봉 중간에라도 최근 최저가를 깼으면 참이에요. 팔 때(손절)에도 써요.", tags=("신저가", "이탈", "저점", "저가", "손절")),
+    _t("limit_up_hit", "breakout", "상한가에 닿았다", (), cond(ind("limit_up_hit"), "is_true"),
+       hint="하루 최대로 오를 수 있는 가격(상한가)에 닿은 적이 있으면 참이에요.", tags=("상한가", "도달", "급등")),
+    _t("day_low_break", "breakout", "오늘 장이 열린 뒤 가장 낮은 가격 아래로 내려갔다", (), cond(ind("day_low_break"), "is_true"),
+       hint="오늘 지금까지의 최저가를 이번 봉이 깨면 참이에요.", tags=("당일", "저점", "이탈", "신저가")),
+    _t("box_narrow", "breakout", "{tf}최근 {n}{봉} 동안 가격이 {x}% 폭 안에서만 움직였다(박스권)", (tfslot("any"), bars(default=20), pct(default=10, hi=100)),
+       cond(ind("box_pct", _TF, n=_N), "lte", const(_X)), hint="최근 최고가와 최저가 차이가 작으면 옆으로 기는 박스권이에요. 이런 뒤 위로 뚫는 순간을 노려요.", tags=("박스권", "횡보", "수축", "폭")),
+)
 
 
 # ---------------------------------------------------------------- 뼈대 읽기
@@ -341,6 +431,104 @@ def _walk(node: Any) -> Iterator[dict[str, Any]]:
 
 def _marker_name(x: Any) -> str | None:
     return x["$"] if isinstance(x, dict) and "$" in x else None
+
+
+def indicators_of(t: Template) -> set[str]:
+    """이 템플릿의 뼈대가 쓰는 카탈로그 지표 이름들(일봉·분봉 뼈대 모두)."""
+    skels = [t.skeleton["daily"], t.skeleton["intraday"]] if t.variants else [t.skeleton]
+    return {op["name"] for sk in skels for op in _walk(sk) if op["kind"] == "ind"}
+
+
+# ---------------------------------------------------------------- 카탈로그에서 자동 문장 (c11)
+# 손으로 쓴 문장이 없는 계산 가능 지표는 카탈로그 메타(이름·표시명·파라미터·모드·예시)로 기본 문장을 만든다 — 앞으로 지표가 늘어도 목록에서 빠지지 않는다.
+# 지표 성격은 네 가지: 가격 수준(가격과 견줌) · 참/거짓(표시명에 (1/0)) · 순위(표시명 …순위) · 수치(나머지, 이상/이하). 카탈로그에는 "가격 수준" 표시가 없어서 아래 이름표로 둔다
+# (새 가격형 지표가 등록되면 수치 문장으로 나오지만 빠지지는 않는다 — 시험 test_every_computable_indicator_has_a_card).
+FIELD_KO = {"open": "시가", "high": "고가", "low": "저가", "close": "종가", "volume": "거래량", "value": "거래대금",
+            "change": "상승률", "sma": "단순 이동평균", "ema": "지수 이동평균"}   # 선택형 파라미터 값의 한글 이름(영문 값이 그대로 보이지 않게)
+_PRICE_LEVEL = frozenset({"ema", "wma", "vwma", "ichimoku_conv", "ichimoku_base", "ichimoku_span_a", "ichimoku_span_b", "ichimoku_cloud_top",
+                          "ichimoku_cloud_bottom", "envelope_upper", "envelope_lower", "psar", "keltner_upper", "keltner_lower"})
+# 수치 지표의 기준값 기본 — (기본값, 최소, 최대, 기본 비교, 곱(억→원 등)). 없으면 0·±10억·이상.
+_NUM_META: dict[str, tuple[float, float, float, str, float | None]] = {
+    "rsi_wilder": (30, 0, 100, "lte", None), "rsi_signal": (50, 0, 100, "gte", None), "stoch_d": (20, 0, 100, "lte", None),
+    "mfi": (20, 0, 100, "lte", None), "williams_r": (-20, -100, 0, "gte", None), "psy": (75, 0, 100, "gte", None), "vr": (450, 0, 100000, "gte", None),
+    "atr_pct": (3, 0, 100, "gte", None), "volatility": (3, 0, 100, "gte", None), "body_pct": (5, -30, 30, "gte", None),
+    "upper_wick_ratio": (0.5, 0, 1, "gte", None), "lower_wick_ratio": (0.5, 0, 1, "gte", None), "range_pct": (10, 0, 100, "gte", None),
+    "bb_pctb": (1, -5, 5, "gte", None), "low52_pct": (30, 0, 10000, "gte", None), "bars_since_high": (3, 0, 500, "lte", None),
+    "vol_change_pct": (300, 0, 1000000, "gte", None), "theme_change": (3, -30, 30, "gte", None), "sector_change": (2, -30, 30, "gte", None),
+    "theme_value": (1000, 0, 10000000, "gte", 1e8), "theme_top_count": (3, 0, 1000, "gte", None), "top_value_count": (5, 0, 250, "gte", None),
+    "vwap_disparity": (1, -30, 30, "gte", None), "time": (930, 900, 1530, "gte", None),
+}
+_UNIT_OVERRIDE = {"theme_value": "억"}
+_LABEL_OVERRIDE = {"time": "시각(예: 930 은 9시 30분)"}
+_CATEGORY_OF = {"trend": "ma", "oscillator": "indicator", "candle": "candle", "volume": "volume", "group": "theme", "intraday": "candle"}
+_CATEGORY_OVERRIDE = {"bars_since_high": "breakout", "box_pct": "breakout", "low52_pct": "breakout", "time": "time"}
+_RESERVED_SLOTS = ("tf", "dtf", "x", "cmp")
+
+
+def _auto(d: Any) -> Template:
+    label = d.label_ko.replace("(%)", "").replace("(1/0)", "").strip()
+    label = _LABEL_OVERRIDE.get(d.name, label)
+    unit = _UNIT_OVERRIDE.get(d.name, "%" if "(%)" in d.label_ko else "")
+    slots: list[Slot] = []
+    marks: dict[str, Any] = {}
+    for p in d.params:
+        assert p.name not in _RESERVED_SLOTS, (d.name, p.name)
+        marks[p.name] = M(p.name)
+        if p.kind in ("int", "float"):
+            lo, hi = (-1e9 if p.lo is None else p.lo), (1e9 if p.hi is None else p.hi)
+            slots.append(num(p.name, (p.label_ko or "값").replace("(봉)", "").strip(), p.default, lo, hi, "봉" if (p.label_ko or "").endswith("(봉)") else "", p.kind == "int"))
+        elif p.kind == "bool":
+            slots.append(Slot(p.name, "choice", p.label_ko or p.name, default=p.default, choices=((True, "예"), (False, "아니오"))))
+        else:
+            slots.append(Slot(p.name, "choice", p.label_ko or p.name, default=p.default, choices=tuple((c, FIELD_KO.get(c, c)) for c in p.choices or ())))
+    shown = []
+    for p in d.params:
+        if p.kind in ("int", "float"):   # 문장에도 빈칸 값을 보여준다 — 기본 기간이면 "14봉", 그 밖엔 "한글이름 값". 영문 설정 이름은 절대 안 보인다(카나리아)
+            base = (p.label_ko or "").replace("(봉)", "").strip()
+            bong = "{봉}" if (p.label_ko or "").endswith("(봉)") else ""
+            shown.append("{" + p.name + "}" + bong if p.label_ko == "기간(봉)" else f"{base or '값'} {{{p.name}}}{bong}")
+    args = ("" if not shown else (" · " if "(" in label else "(") + ", ".join(shown) + ("" if "(" in label else ")"))
+    intraday_only = "intraday" in d.modes and not (set(d.modes) & set(DAILY_MODES))
+    daily_only = "intraday" not in d.modes
+    tf_slot = () if intraday_only else (tfslot("daily", "dtf"),) if daily_only else (tfslot("any"),)
+    pre = "" if intraday_only else "{dtf}" if daily_only else "{tf}"
+
+    def make(tfm: Any) -> dict[str, Any]:
+        i = ind(d.name, tfm, **marks)
+        if d.name in _PRICE_LEVEL:
+            return cond(fld("close"), M("cmp"), i)
+        if "(1/0)" in d.label_ko:
+            return cond(i, "is_true")
+        if d.name.endswith("_rank") or label.endswith("순위"):
+            return cond(i, "lte", const(_X))
+        mul = _NUM_META.get(d.name, (0, 0, 0, "", None))[4]
+        return cond(i, M("cmp"), const(M("x", mul=mul) if mul else _X))
+
+    if d.name in _PRICE_LEVEL:
+        text, extra = f"가격이 {pre}{label}{args} {{cmp}}", (CMP_ABOVE,)
+    elif "(1/0)" in d.label_ko:
+        text, extra = f"{pre}‘{label}{args}’ 조건이 맞았다", ()
+    elif d.name.endswith("_rank") or label.endswith("순위"):
+        text, extra = f"{pre}{label}{args}가 {{x}}위 안이다", (num("x", "몇 위", 20, 1, 1000, "위", True),)
+    else:
+        default, lo, hi, cmp_, _ = _NUM_META.get(d.name, (0, -1e9, 1e9, "gte", None))
+        text = f"{pre}{label}{args}의 값이 {{x}}{unit} {{cmp}}"
+        extra = (num("x", "기준값", default, lo, hi, unit),
+                 choice("cmp", "이상 / 이하", *(("gte", "이상이다"), ("lte", "이하다")) if cmp_ != "lte" else (("lte", "이하다"), ("gte", "이상이다"))))
+    sk: Any = {"daily": make(None), "intraday": make(_DTF)} if daily_only else make(None if intraday_only else _TF)
+    hint = f"예: {d.example}" if d.example else d.desc_ko
+    return Template(f"auto_{d.name}", _CATEGORY_OVERRIDE.get(d.name, _CATEGORY_OF.get(d.category, "indicator")), text,
+                    (*tf_slot, *slots, *extra), sk, hint=hint, tags=(d.label_ko, d.name, "기본 문장"), variants=daily_only, auto=True)
+
+
+def _auto_all(hand: tuple[Template, ...]) -> tuple[Template, ...]:
+    used = set().union(*(indicators_of(t) for t in hand))
+    return tuple(_auto(d) for d in INDICATORS.values() if d.compute and d.name not in used)
+
+
+TEMPLATES: tuple[Template, ...] = _HAND + _auto_all(_HAND)
+BY_ID: dict[str, Template] = {t.id: t for t in TEMPLATES}
+assert len(BY_ID) == len(TEMPLATES), "템플릿 id 중복"
 
 
 def _tf_reason(op: dict[str, Any], tf: str, source: str) -> str | None:
@@ -591,13 +779,27 @@ def match(condition: Mapping[str, Any], mode: str | None = None) -> tuple[str, d
 
 
 # ---------------------------------------------------------------- 화면용 목록
-def describe(mode: str, *, bar_minutes: int = 5, source: str = "al") -> list[dict[str, Any]]:
-    """`GET /api/meta/condition-templates` 본문 — 템플릿마다 문장·빈칸(선택지는 켜짐/꺼짐+이유)·쓸 수 있는지·기본 문장."""
+def _search_tags(t: Template) -> list[str]:
+    """검색어 — 손으로 단 태그 + 이 문장이 쓰는 지표의 표시명·이름(엔벨로프·일목·CCI 처럼 지표 이름으로 찾아도 나온다)."""
+    extra = [w for n in sorted(indicators_of(t)) for w in (INDICATORS[n].label_ko, n)]
+    return list(dict.fromkeys([*t.tags, *extra]))
+
+
+def matches_query(t: Template, q: str) -> bool:
+    """검색어의 모든 낱말이 문장·설명·태그 어딘가에 들어 있으면 참(대소문자 무시)."""
+    hay = " ".join([t.sentence, t.hint, t.id, *_search_tags(t)]).lower()
+    return all(w in hay for w in q.lower().split())
+
+
+def describe(mode: str, *, bar_minutes: int = 5, source: str = "al", q: str = "") -> list[dict[str, Any]]:
+    """`GET /api/meta/condition-templates` 본문 — 템플릿마다 문장·빈칸(선택지는 켜짐/꺼짐+이유)·쓸 수 있는지·기본 문장. q 가 있으면 검색에 걸리는 것만."""
     out = []
     for t in TEMPLATES:
+        if q.strip() and not matches_query(t, q):
+            continue
         ok, why = availability(t, mode, source, bar_minutes)
         d: dict[str, Any] = {"id": t.id, "category": t.category, "category_label": CATEGORIES[t.category], "sentence": t.sentence, "role": t.role,
-                             "hint": t.hint, "warn": t.warn, "tags": list(t.tags), "available": ok, "reason": why}
+                             "hint": t.hint, "warn": t.warn, "tags": _search_tags(t), "auto": t.auto, "available": ok, "reason": why}
         if ok:
             dv = defaults(t, mode, source, bar_minutes)
             d["example"] = sentence(t, dv, mode, bar_minutes)

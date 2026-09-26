@@ -1,6 +1,6 @@
 """조건 템플릿(문장 빈칸 채우기) API — 설계서 §5.5(c10). 문장 카드 목록·만들기·되돌리기는 도메인(`conditions/templates.py`)이 하고 여기는 얇다.
 
-GET  /api/meta/condition-templates?mode=&bar_minutes=&source=   분류별 문장 목록(빈칸·선택지 켜짐/꺼짐+이유·기본 문장). mode: daily_single|daily_portfolio|intraday|tick
+GET  /api/meta/condition-templates?mode=&bar_minutes=&source=&q=   분류별(q = 검색어: 지표 이름·문장·설명·태그, 낱말 모두 포함) 문장 목록(빈칸·선택지 켜짐/꺼짐+이유·기본 문장). mode: daily_single|daily_portfolio|intraday|tick
 POST /api/meta/condition-templates/build   {id, values?, mode, bar_minutes?, source?} → {condition, sentence, values}  (빈칸 오류는 400 fieldErrors{빈칸이름: 쉬운 말})
 POST /api/meta/condition-templates/match   {conditions:[…], mode, bar_minutes?} → 조건마다 {id, category, values, sentence} 또는 null(문장에 안 맞음 → 화면은 풀이 문장 + [고급에서 편집])
 명세에는 조건 AST 만 들어간다(템플릿 id 는 메타) — 결과 재현은 AST 기준이다.
@@ -49,11 +49,13 @@ async def _body(request: Request) -> dict[str, Any]:
 
 
 @router.get("")
-def list_templates(mode: str = "daily_portfolio", bar_minutes: str = "5", source: str = "al") -> dict[str, Any]:
+def list_templates(mode: str = "daily_portfolio", bar_minutes: str = "5", source: str = "al", q: str = "") -> dict[str, Any]:
     mode, bm, source = _opts(mode, bar_minutes, source)
+    if len(q) > 100:
+        raise ApiError(400, "VALIDATION_ERROR", "검색어는 100자 이하", {"fieldErrors": {"q": "100자 이하"}})
     return {"data": {"mode": mode, "bar_minutes": bm, "source": source,
                      "categories": [{"key": k, "label": v} for k, v in T.CATEGORIES.items()],
-                     "templates": T.describe(mode, bar_minutes=bm, source=source)}}
+                     "templates": T.describe(mode, bar_minutes=bm, source=source, q=q)}}
 
 
 @router.post("/build")

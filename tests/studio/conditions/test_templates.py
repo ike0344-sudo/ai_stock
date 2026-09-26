@@ -39,8 +39,8 @@ def _spec(t, mode, cond, source="al"):
     return d
 
 
-def test_there_are_about_fifty_templates_in_all_eight_categories():
-    assert 40 <= len(T.TEMPLATES) <= 70
+def test_there_are_many_templates_in_all_eight_categories():
+    assert len(T.TEMPLATES) >= 100 and sum(t.auto for t in T.TEMPLATES) >= 20     # 손으로 쓴 문장 + 카탈로그 자동 문장
     assert {t.category for t in T.TEMPLATES} == set(T.CATEGORIES)
     assert len({t.id for t in T.TEMPLATES}) == len(T.TEMPLATES)
 
@@ -247,3 +247,127 @@ def test_low_break_bars_matches_the_default_intraday_exit_and_round_trips():
     assert "10봉 최저가 아래로 내려갔다" in card["sentence"]
     m5 = T.build_card("low_break_bars", {"tf": "m5", "n": 10}, mode="intraday", bar_minutes=1)  # 5분봉 기준 손절도 카드로 되읽힌다
     assert T.match(m5["condition"], "intraday") == ("low_break_bars", {"tf": "m5", "n": 10})
+
+
+# ---------------------------------------------------------------- c11: 모든 지표가 문장 목록에 나온다 (카나리아)
+from studio.domain.conditions.catalog import INDICATORS  # noqa: E402
+
+COMPUTABLE = [n for n, d in INDICATORS.items() if d.compute]
+
+
+def test_every_computable_indicator_has_a_card_in_every_mode_it_supports():
+    """계산 가능한 지표가 하나라도 문장 목록에서 빠지면 실패 — 지표가 새로 등록돼도 자동 문장이 생겨야 통과한다."""
+    used = set().union(*(T.indicators_of(t) for t in T.TEMPLATES))
+    assert [n for n in COMPUTABLE if n not in used] == []
+    assert len(COMPUTABLE) >= 100
+    for name in COMPUTABLE:
+        for mode in (m for m in MODES if m in INDICATORS[name].modes):
+            cards = [t for t in T.TEMPLATES if name in T.indicators_of(t) and T.availability(t, mode)[0]]
+            assert cards, f"{name} 은 {mode} 에서 쓸 수 있는데 그 모드에서 쓸 수 있는 문장 카드가 없다"
+
+
+@pytest.mark.parametrize("name", COMPUTABLE)
+def test_every_indicator_is_found_by_searching_its_name_or_label(name):
+    d = INDICATORS[name]
+    for q in (d.label_ko, name):
+        hits = {t["id"] for t in T.describe("intraday", q=q)} | {t["id"] for t in T.describe("daily_portfolio", q=q)}
+        assert any(name in T.indicators_of(T.BY_ID[i]) for i in hits), (name, q, sorted(hits)[:8])
+
+
+def test_search_examples_the_user_asked_for():
+    ids = lambda q, mode="intraday": [t["id"] for t in T.describe(mode, q=q)]
+    assert {"envelope_up_break", "envelope_low_break", "envelope_low_touch"} <= set(ids("엔벨로프"))
+    assert {"envelope_up_break"} <= set(ids("엔벨로프", "daily_portfolio")) and "ichimoku_above_cloud" in ids("일목")
+    assert "cci_level" in ids("CCI") and "cci_level" in ids("cci") and "keltner_up_break" in ids("켈트너") and "doji" in ids("도지")
+    assert ids("엔벨로프 닿았다") == ["envelope_low_touch"]                                           # 낱말이 늘면 좁아진다
+    assert ids("존재하지않는말") == [] and len(T.describe("intraday", q="  ")) == len(T.TEMPLATES)
+
+
+def test_hand_written_and_auto_cards_do_not_share_an_indicator():
+    hand = [t for t in T.TEMPLATES if not t.auto]
+    auto = [t for t in T.TEMPLATES if t.auto]
+    covered = set().union(*(T.indicators_of(t) for t in hand))
+    assert all(T.indicators_of(t).isdisjoint(covered) for t in auto)                              # 손으로 쓴 문장이 있으면 자동 문장은 안 만든다
+    assert all(t.id.startswith("auto_") for t in auto) and not any(t.id.startswith("auto_") for t in hand)
+
+
+AUTO_ALL = T._auto_all(())        # 손으로 쓴 문장이 하나도 없다고 치고 102개 전부를 자동으로 만든 것 — 생성기 자체를 전 지표에 시험한다
+
+
+@pytest.mark.parametrize("t", AUTO_ALL, ids=lambda t: t.id)
+def test_auto_generator_works_for_every_indicator_in_every_supported_mode(t, monkeypatch):
+    monkeypatch.setattr(T, "TEMPLATES", (t,))                                                       # 이 자동 문장 하나만 있는 목록에서 build/match 를 시험
+    monkeypatch.setattr(T, "BY_ID", {t.id: t})
+    for mode in MODES:
+        if not T.availability(t, mode)[0]:
+            continue
+        c = T.build(t.id, mode=mode)
+        validate_group(_group(c), "entry", mode=mode, bar_minutes=5, source="al")
+        got = T.match(c, mode)
+        assert got is not None and got[0] == t.id
+        assert T.build(got[0], got[1], mode=mode) == c
+        assert "{" not in T.sentence(t, T.defaults(t, mode), mode)
+        Spec.model_validate(_spec(t, mode, c)) if mode != "daily_single" else None
+
+
+def test_auto_sentences_are_plain_and_carry_the_indicator_name():
+    for t in AUTO_ALL:
+        d = INDICATORS[next(iter(T.indicators_of(t)))]
+        m = "intraday" if T.availability(t, "intraday")[0] else "daily_portfolio"
+        s = T.sentence(t, T.defaults(t, m), m)
+        assert d.label_ko.replace("(%)", "").replace("(1/0)", "").strip().split("(")[0] in s or t.id == "auto_time", (t.id, s)
+        assert "{" not in s and t.hint and t.tags and t.auto
+
+
+def test_auto_kinds_price_level_boolean_rank_and_number():
+    sent = lambda i, m="intraday": T.sentence(T.BY_ID[i] if i in T.BY_ID else next(x for x in AUTO_ALL if x.id == i), T.defaults(T.BY_ID.get(i) or next(x for x in AUTO_ALL if x.id == i), m), m)
+    assert sent("auto_wma").startswith("가격이 ") and sent("auto_wma").endswith("위에 있다")                # 가격 수준
+    assert "조건이 맞았다" in sent("auto_ma_reversed") and "‘" in sent("auto_ma_reversed")                    # 참/거짓
+    assert sent("auto_volume_rank").endswith("위 안이다")                                                     # 순위
+    assert sent("auto_mfi").endswith("이하다") and sent("auto_obv").endswith("이상이다")                      # 수치(기본 비교)
+    assert T.build("auto_theme_value", {"x": 1000}, mode="daily_portfolio")["right"]["value"] == 1e11        # 억 → 원
+
+
+# ---------------------------------------------------------------- c12: 사용자에게 보이는 글에 영문 설정 이름(conv_n·fast·k …)이 없다
+import re  # noqa: E402
+
+_LOWER_IDENT = re.compile(r"[a-z_]+")
+
+
+def _visible_texts(t, mode):
+    dv = T.defaults(t, mode)
+    out = [T.CATEGORIES[t.category], t.hint, T.sentence(t, dv, mode), re.sub(r"\{[^{}]*\}", "", t.sentence)]
+    for s in T.visible_slots(t, mode):
+        out += [s.label, s.unit]
+        out += [lbl for _, lbl in s.choices]
+        if s.kind == "tf":
+            out += [c["label"] for c in T._tf_choices(t, s, mode, 5, "al")] + [c["reason"] or "" for c in T._tf_choices(t, s, mode, 5, "al")]
+    return out
+
+
+def test_no_english_setting_names_anywhere_a_user_can_see_them():
+    """모든 카드 × 모든 모드의 문장·예시·설명·빈칸 이름·단위·선택지·꺼진 이유에 소문자 영문 식별자(`[a-z_]+`)가 없어야 한다. 표시명 속 `%b`(볼린저 %b)만 예외."""
+    bad = []
+    for t in T.TEMPLATES:
+        for mode in MODES:
+            if not T.availability(t, mode)[0]:
+                continue
+            for text in _visible_texts(t, mode):
+                hit = _LOWER_IDENT.findall((text or "").replace("%b", ""))
+                if hit:
+                    bad.append((t.id, mode, hit, text))
+    assert not bad, bad[:10]
+
+
+def test_period_like_parameters_have_plain_korean_names_in_the_catalog():
+    """카탈로그 쪽 이름 — 고급 조립기도 같은 라벨을 쓴다. 기간(봉) 이라는 뭉뚱그린 이름이 서로 다른 뜻의 파라미터에 겹쳐 붙으면 안 된다."""
+    for name, d in INDICATORS.items():
+        labels = [p.label_ko for p in d.params if p.kind in ("int", "float")]
+        assert all(labels), (name, "라벨 없는 숫자 파라미터")
+        assert len(labels) == len(set(labels)), (name, labels)                     # 한 지표 안에서 같은 이름이 두 번 나오면 카드에서 구분이 안 된다
+        assert all(not re.search(r"[a-z_]{2,}", lbl or "") for lbl in labels), (name, labels)
+    p = {(n, q.name): q.label_ko for n, d in INDICATORS.items() for q in d.params}
+    assert p[("stoch_d", "k")] == "%K 평활 기간(봉)" and p[("stoch_d", "d")] == "%D 평활 기간(봉)"
+    assert p[("ichimoku_span_a", "conv_n")] == "전환선 기간(봉)" and p[("ichimoku_span_a", "base_n")] == "기준선 기간(봉)"
+    assert p[("ichimoku_span_a", "shift")] == "앞으로 미는 칸 수(봉)" and p[("ichimoku_span_b", "span_n")] == "선행스팬2 기간(봉)"
+    assert p[("macd_hist", "fast")] == "빠른 평균 기간(봉)" and p[("rsi_signal", "m")] == "신호선 기간(봉)"

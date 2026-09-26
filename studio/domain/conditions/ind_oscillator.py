@@ -419,13 +419,13 @@ _ICHI_P = (_n(9, "conv_n"), _n(26, "base_n"), _n(52, "span_n"), _n(26, "shift"))
 _BB_P = (_n(20), _f("k", 2.0, 0.1, 10.0, "표준편차 배수"))
 
 DEFS: tuple[IndicatorDef, ...] = (
-    _d("rsi_signal", "RSI 신호선", "SMA_m(RSI_n) — RSI 는 기존 rsi(단순평균)", (_n(14), _n(9, "m")), "RSI 가 신호선 상향 돌파"),
+    _d("rsi_signal", "RSI 신호선", "SMA_m(RSI_n) — RSI 는 기존 rsi(단순평균)", (_n(14), _n(9, "m", "신호선 기간(봉)")), "RSI 가 신호선 상향 돌파"),
     _d("macd", "MACD 선", "EMA_fast(C) − EMA_slow(C)", _MACD_P, "MACD > 0"),
     _d("macd_signal", "MACD 신호선", "EMA_sig(MACD)", _MACD_P, "MACD 가 신호선 상향 돌파"),
     _d("macd_hist", "MACD 히스토그램", "MACD − 신호선", _MACD_P, "MACD 히스토그램 양수 전환"),
-    _d("stoch_k", "스토캐스틱 %K(느린)", "빠른 %K=(C−LL_n)÷(HH_n−LL_n)×100 → 느린 %K=SMA_k(빠른 %K)", (_n(14), _n(3, "k"), _n(3, "d")),
+    _d("stoch_k", "스토캐스틱 %K(느린)", "빠른 %K=(C−LL_n)÷(HH_n−LL_n)×100 → 느린 %K=SMA_k(빠른 %K)", (_n(14), _n(3, "k", "%K 평활 기간(봉)"), _n(3, "d", "%D 평활 기간(봉)")),
        "%K ≤ 20 에서 %D 상향 돌파"),
-    _d("stoch_d", "스토캐스틱 %D", "SMA_d(느린 %K)", (_n(14), _n(3, "k"), _n(3, "d")), "%K 가 %D 상향 돌파"),
+    _d("stoch_d", "스토캐스틱 %D", "SMA_d(느린 %K)", (_n(14), _n(3, "k", "%K 평활 기간(봉)"), _n(3, "d", "%D 평활 기간(봉)")), "%K 가 %D 상향 돌파"),
     _d("cci", "CCI", "(TP − SMA_n(TP)) ÷ (0.015 × 평균편차), TP=(H+L+C)÷3", (_n(20),), "CCI ≥ 100"),
     _d("adx", "ADX", "DX=100×|+DI−−DI|÷(+DI+−DI), ADX=DX 의 와일더 평활(n)", (_n(14),), "ADX ≥ 25 (추세 강함)"),
     _d("plus_di", "+DI", "100 × 와일더평활(+DM) ÷ 와일더평활(TR)", (_n(14),), "+DI 가 −DI 상향 돌파"),
@@ -433,7 +433,7 @@ DEFS: tuple[IndicatorDef, ...] = (
     _d("obv", "OBV", "OBV_t = OBV_{t−1} + 부호(C_t−C_{t−1}) × V_t — 패널 첫 봉 0 기준으로 누적한다(시작 시점에 따라 전체가 평행이동). "
        "절대값 말고 추세·신호선 교차로 쓸 것", (), "OBV 가 신호선 위", vol=True),
     _d("obv_signal", "OBV 신호선", "SMA_m(OBV) — OBV 는 패널 첫 봉 0 기준 누적이라 절대값 말고 OBV 와의 교차·방향으로 쓸 것",
-       (_n(10, "m"),), "OBV 가 신호선 상향 돌파", vol=True),
+       (_n(10, "m", "신호선 기간(봉)"),), "OBV 가 신호선 상향 돌파", vol=True),
     _d("mfi", "MFI", "100 − 100÷(1+ 양의 자금흐름 합÷음의 자금흐름 합), 자금흐름=TP×V (유출 0 이면 100)", (_n(14),), "MFI ≤ 20", vol=True),
     _d("williams_r", "윌리엄스 %R", "(HH_n − C) ÷ (HH_n − LL_n) × −100", (_n(14),), "%R ≥ −20 (과매수)"),
     _d("momentum", "모멘텀", "C_t − C_{t−n}", (_n(10),), "10봉 모멘텀 > 0"),

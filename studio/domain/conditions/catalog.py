@@ -98,8 +98,15 @@ class IndicatorDef:
         return next((p for p in self.params if p.name == name), None)
 
 
-def _n(default: int = 20, name: str = "n") -> ParamDef:
-    return ParamDef(name, "int", default, N_MIN, N_MAX, label_ko="기간(봉)")
+# 이름만으로 뜻이 정해지는 기간 파라미터의 한글 이름 — 문장 카드·고급 조립기에 영문 설정 이름(conv_n 등)이 그대로 보이지 않게.
+# k·d·m 처럼 지표마다 뜻이 다른 이름은 호출하는 쪽이 label 로 직접 준다. "(봉)" 으로 끝나면 화면이 단위(봉/일)를 붙인다.
+_NAMED_PERIOD_LABEL = {"fast": "빠른 평균 기간(봉)", "slow": "느린 평균 기간(봉)", "sig": "신호선 기간(봉)", "conv_n": "전환선 기간(봉)",
+                       "base_n": "기준선 기간(봉)", "span_n": "선행스팬2 기간(봉)", "shift": "앞으로 미는 칸 수(봉)",
+                       "n1": "첫 번째 이평 기간(봉)", "n2": "두 번째 이평 기간(봉)", "n3": "세 번째 이평 기간(봉)"}
+
+
+def _n(default: int = 20, name: str = "n", label: str | None = None) -> ParamDef:
+    return ParamDef(name, "int", default, N_MIN, N_MAX, label_ko=label or _NAMED_PERIOD_LABEL.get(name, "기간(봉)"))
 
 
 def _src(default: str = "close") -> ParamDef:

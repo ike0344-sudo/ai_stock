@@ -63,3 +63,14 @@ def test_match_gives_sentence_or_null_and_never_crashes_on_odd_conditions(client
     assert r[1:] == [None, None, None]
     assert client.post(BASE + "/match", json={"conditions": "x", "mode": "intraday"}).status_code == 400
     assert client.post(BASE + "/match", json={"conditions": [{}] * 201, "mode": "intraday"}).status_code == 400
+
+
+def test_list_search_query_finds_indicators_by_name_and_flags_auto_cards(client):
+    d = client.get(BASE, params={"mode": "intraday", "q": "엔벨로프"}).json()["data"]["templates"]
+    assert {t["id"] for t in d} == {"envelope_up_break", "envelope_low_break", "envelope_low_touch"} and not any(t["auto"] for t in d)
+    assert [t["id"] for t in client.get(BASE, params={"mode": "daily_portfolio", "q": "cci"}).json()["data"]["templates"]] == ["cci_level"]
+    obv = client.get(BASE, params={"mode": "intraday", "q": "OBV"}).json()["data"]["templates"]
+    assert obv and all(t["auto"] and "기본 문장" in t["tags"] and t["example"] for t in obv)              # 손으로 쓴 문장이 없는 지표는 자동 기본 문장
+    assert client.get(BASE, params={"mode": "intraday", "q": "x" * 101}).status_code == 400
+    everything = client.get(BASE, params={"mode": "intraday"}).json()["data"]["templates"]
+    assert len(everything) >= 100 and all(t["available"] for t in everything)
