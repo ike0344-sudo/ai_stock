@@ -621,3 +621,460 @@ describe('거래대금(억)·새 틱 조건·틱 레시피 (c9)', () => {
     expect(screen.queryByTestId('tick-block-on')).not.toBeInTheDocument()
   })
 })
+
+describe('거래대금(억)을 찾기 쉽게 (17:15 사용자 요청)', () => {
+  const eokDef = (name: string, label: string, extra: Partial<IndicatorDef> = {}): IndicatorDef => ({ name, label, desc: `${label} 설명`, params: [], modes: ['daily_single', 'daily_portfolio', 'intraday'], timing: 't 포함', compute: true, category: 'volume', category_ko: '거래량·순위', live: true, volume_based: true, ...extra })
+  const eokCatalog = (): IndicatorCatalog => ({ ...realCatalog, indicators: [...realCatalog.indicators, eokDef('value_eok', '거래대금(억)'), eokDef('value_sum_eok', '거래대금 합(억)', { params: [{ name: 'n', kind: 'int', default: 3, lo: 1, hi: 500, choices: null, label: '기간' }] }), eokDef('value_ratio', '거래대금 배수')] })
+
+  it('"거래대금" 을 치면 원·억·합·배수가 종류와 상관없이 함께 나오고, 첫 그룹은 가격·거래량이다', async () => {
+    const { operandFindOptions, matchesFind } = await import('@/lib/conditionFind')
+    const all = operandFindOptions(eokCatalog(), 'intraday')
+    expect(all[0].group).toBe('가격·거래량')
+    const hit = all.filter((o) => matchesFind(o, '거래대금')).map((o) => o.label)
+    expect(hit).toEqual(expect.arrayContaining(['거래대금', '거래대금 합(억)', '거래대금 배수']))
+    expect(all.filter((o) => matchesFind(o, 'value')).map((o) => o.label)).toContain('거래대금') // 영문 필드 이름으로도
+    expect(all.filter((o) => o.label === '거래대금')).toHaveLength(1) // 원·억 중복 없이 하나만
+    expect(all.filter((o) => matchesFind(o, '없는말없는말'))).toEqual([])
+  })
+
+  it('찾기로 고르면 이전 조건의 시간 단위·며칠 전·배수를 유지한 채 바뀐다(필드 ↔ 억 ↔ 지표)', async () => {
+    const { pickOperand } = await import('@/lib/conditionFind')
+    const cat = eokCatalog()
+    const prev = { kind: 'field' as const, name: 'close' as const, tf: 'm5', offset: 1, mul: 2 }
+    const eok = pickOperand(cat, 'ind:value_eok', prev)
+    expect(eok).toMatchObject({ kind: 'ind', name: 'value_eok', tf: 'm5', offset: 1, mul: 2 })
+    const back = pickOperand(cat, 'field:value', eok)
+    expect(back).toEqual({ kind: 'field', name: 'value', tf: 'm5', offset: 1, mul: 2 })
+    expect('tf' in pickOperand(cat, 'field:high', { kind: 'field', name: 'close' })).toBe(false) // 없던 칸은 만들지 않는다
+    expect(pickOperand(cat, 'ind:value_sum_eok', { kind: 'field', name: 'close' })).toMatchObject({ kind: 'ind', name: 'value_sum_eok', params: { n: 3 } }) // 기본 파라미터
+  })
+
+  it('빠른 조건: 모드에 맞는 것만, 분봉은 5분봉/전일 일봉 시간 단위를 붙인다(서버가 알릴 때)', async () => {
+    const { quickConditionsFor } = await import('@/lib/conditionFind')
+    const cat = eokCatalog()
+    expect(quickConditionsFor(cat, 'daily_portfolio').map((q) => q.key)).toEqual(['value_eok', 'new_high', 'above_ma', 'vol_ratio']) // VWAP 은 분봉 전용
+    const intra = quickConditionsFor(cat, 'intraday')
+    expect(intra.map((q) => q.key)).toContain('above_vwap')
+    const v = intra.find((q) => q.key === 'value_eok')!
+    expect(v.build(1, true)).toMatchObject({ left: { name: 'value_eok', tf: 'm5' }, op: 'gte', right: { value: 20 } })
+    expect('tf' in v.build(5, true).left).toBe(false) // 실행 봉이 5분이면 "이 봉" 이 5분봉
+    expect('tf' in v.build(1, false).left).toBe(false) // 서버가 시간 단위를 모르면 안 붙인다
+    expect(intra.find((q) => q.key === 'new_high')!.build(5, true)).toMatchObject({ right: { name: 'highest', tf: 'daily_prev' } })
+    expect(quickConditionsFor({ ...cat, indicators: cat.indicators.filter((d) => d.name !== 'value_eok') }, 'intraday').map((q) => q.key)).not.toContain('value_eok') // 카탈로그에 없는 지표는 뺀다
+  })
+
+  it('버튼 하나로 진입 조건 행이 채워져 들어간다(분봉 5분봉 거래대금 20억)', async () => {
+    const { calls } = mockApi(routes({}, eokCatalog()))
+    page()
+    await userEvent.click(await screen.findByRole('tab', { name: '분봉 단타' }))
+    await screen.findByTestId('panel-intraday')
+    await userEvent.click(within(screen.getByTestId('bar-minutes')).getByText('1분')) // 실행 봉 1분 → "5분봉" 시간 단위가 붙는다
+    await waitFor(() => expect(lastSpec(calls).intraday?.bar_minutes).toBe(1))
+    const before = (lastSpec(calls).strategy as { entry: { items: unknown[] } }).entry.items.length
+    await userEvent.click(await screen.findByTestId('quick-value_eok'))
+    await waitFor(() => {
+      const items = (lastSpec(calls).strategy as { entry: { items: Condition[] } }).entry.items
+      expect(items).toHaveLength(before + 1)
+      expect(items[items.length - 1]).toMatchObject({ left: { kind: 'ind', name: 'value_eok', tf: 'm5' }, op: 'gte', right: { kind: 'const', value: 20 } })
+    })
+    expect(screen.getByTestId('quick-above_vwap')).toBeInTheDocument()
+  })
+
+  it('"가격·거래량" 목록에 "거래대금" 하나만(억 기준) 보이고, 고르면 지표 value_eok 로 바뀐다(원 단위는 숨김)', async () => {
+    const { calls } = mockApi(routes({}, eokCatalog()))
+    page()
+    await screen.findByTestId('group-strategy.entry')
+    const left = within(screen.getByTestId('group-strategy.entry')).getAllByTestId('operand-left-field')[0]
+    await userEvent.click(within(left).getByRole('combobox'))
+    const shown = [...document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden)')].pop() as HTMLElement
+    expect(shown).not.toHaveTextContent('거래대금(원)') // 원 단위 필드는 목록에서 숨김
+    expect(shown).toHaveTextContent('거래대금')
+    await userEvent.click(within(shown).getAllByText('거래대금').find((e) => e.closest('.ant-select-item-option'))!)
+    await waitFor(() => expect((lastSpec(calls).strategy as { entry: { items: Condition[] } }).entry.items[0].left).toMatchObject({ kind: 'ind', name: 'value_eok' }))
+    // 바뀐 뒤에도 "가격·거래량" 쪽에 그대로 보인다(종류 칸도 가격·거래량)
+    const entry = screen.getByTestId('group-strategy.entry')
+    await waitFor(() => expect(within(within(entry).getAllByTestId('operand-left')[0]).getAllByText('거래대금').length).toBeGreaterThan(0))
+  })
+
+  it('조건 한쪽의 "찾아서 고르기" 에서 "거래대금" 을 검색해 억을 고른다', async () => {
+    const { calls } = mockApi(routes({}, eokCatalog()))
+    page()
+    await screen.findByTestId('group-strategy.entry')
+    const find = within(screen.getByTestId('group-strategy.entry')).getAllByTestId('operand-left-find')[0]
+    await userEvent.click(within(find).getByRole('combobox'))
+    await userEvent.type(within(find).getByRole('combobox'), '거래대금')
+    const shown = [...document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden)')].pop() as HTMLElement
+    await waitFor(() => expect(shown).toHaveTextContent('거래대금'))
+    expect(shown).not.toHaveTextContent('거래대금(원)')
+    expect(shown).not.toHaveTextContent('종가') // 검색어와 무관한 것은 걸러진다
+    await userEvent.click(within(shown).getAllByText('거래대금').find((e) => e.closest('.ant-select-item-option'))!)
+    await waitFor(() => expect((lastSpec(calls).strategy as { entry: { items: Condition[] } }).entry.items[0].left).toMatchObject({ kind: 'ind', name: 'value_eok' }))
+  })
+})
+
+describe('금액·수량 왼쪽이면 오른쪽이 숫자 입력칸으로 자동 전환 (17:50 긴급)', () => {
+  const eokDef = (name: string, label: string): IndicatorDef => ({ name, label, desc: label, params: [], modes: ['daily_single', 'daily_portfolio', 'intraday'], timing: 't 포함', compute: true, category: 'volume', category_ko: '거래량·순위', live: true, volume_based: true })
+  const eokCatalog = (): IndicatorCatalog => ({ ...realCatalog, indicators: [...realCatalog.indicators, eokDef('value_eok', '거래대금(억)')] })
+  const sm = { kind: 'ind' as const, name: 'sma', params: { src: 'close', n: 20 } }
+  const cond = (left: Condition['left'], right: Condition['right']): Condition => ({ left, op: 'gt', right })
+  type Calls = { path: string; body: unknown }[]
+  const items = (calls: Calls) => (lastSpec(calls).strategy as { entry: { items: Condition[] } }).entry.items
+
+  it('단위 판별: 가격·억·원·주, 모르면 null', async () => {
+    const { operandUnit } = await import('@/lib/conditionUnits')
+    expect([operandUnit({ kind: 'field', name: 'close' }), operandUnit({ kind: 'field', name: 'value' }), operandUnit({ kind: 'field', name: 'volume' }), operandUnit({ kind: 'ind', name: 'value_eok' }), operandUnit(sm), operandUnit({ kind: 'ind', name: 'rsi', params: { n: 14 } }), operandUnit({ kind: 'const', value: 3 })])
+      .toEqual(['price', 'won', 'shares', 'eok', 'price', 'plain', null])
+  })
+
+  it('왼쪽이 거래대금(억)으로 바뀌면 안 맞는 오른쪽(가격 지표)은 숫자 20 으로, 거래량은 비운 숫자로', async () => {
+    const { harmonizeRight } = await import('@/lib/conditionUnits')
+    const st = () => ({ picked: false, auto: false })
+    const r = harmonizeRight(cond({ kind: 'ind', name: 'value_eok' }, sm), { kind: 'field', name: 'close' }, st())
+    expect(r.cond.right).toEqual({ kind: 'const', value: 20 })
+    expect(r.switched && r.auto).toBe(true)
+    const won = harmonizeRight(cond({ kind: 'field', name: 'value' }, sm), { kind: 'field', name: 'close' }, st())
+    expect(won.cond.right).toEqual({ kind: 'const', value: 1_000_000_000 })
+    const vol = harmonizeRight(cond({ kind: 'field', name: 'volume' }, { kind: 'field', name: 'close' }), { kind: 'field', name: 'close' }, st())
+    expect(vol.cond.right).toEqual({ kind: 'const', value: null })
+    expect(harmonizeRight(cond({ kind: 'ind', name: 'value_eok' }, { kind: 'const', value: 5 }), { kind: 'field', name: 'close' }, st()).cond.right).toEqual({ kind: 'const', value: 5 })
+    expect(harmonizeRight(cond({ kind: 'ind', name: 'value_eok' }, { kind: 'ind', name: 'value_eok' }), { kind: 'field', name: 'close' }, st()).switched).toBe(false)
+  })
+
+  it('사용자가 오른쪽을 직접 고른 뒤에는 덮어쓰지 않고, 자동으로 바꿔 둔 것만 가격 계열로 돌아오면 되돌린다', async () => {
+    const { harmonizeRight } = await import('@/lib/conditionUnits')
+    const picked = harmonizeRight(cond({ kind: 'ind', name: 'value_eok' }, sm), { kind: 'field', name: 'close' }, { picked: true, auto: false })
+    expect(picked.cond.right).toEqual(sm)
+    const back = harmonizeRight(cond({ kind: 'field', name: 'close' }, { kind: 'const', value: 20 }), { kind: 'ind', name: 'value_eok' }, { picked: false, auto: true })
+    expect(back.cond.right).toMatchObject({ kind: 'ind', name: 'highest' })
+    expect(back.auto).toBe(false)
+    expect(harmonizeRight(cond({ kind: 'field', name: 'close' }, { kind: 'const', value: 20 }), { kind: 'ind', name: 'value_eok' }, { picked: false, auto: false }).cond.right).toEqual({ kind: 'const', value: 20 })
+  })
+
+  it('단위가 다른 두 값을 비교하면 경고 문구, 상수·모르는 단위는 통과', async () => {
+    const { unitMismatch, specUnitWarnings } = await import('@/lib/conditionUnits')
+    expect(unitMismatch(cond({ kind: 'ind', name: 'value_eok' }, sm))).toContain('왼쪽은 억, 오른쪽은 원(가격)')
+    expect(unitMismatch(cond({ kind: 'ind', name: 'value_eok' }, { kind: 'const', value: 20 }))).toBeNull()
+    expect(unitMismatch(cond({ kind: 'ind', name: 'rsi', params: { n: 14 } }, { kind: 'const', value: 30 }))).toBeNull()
+    expect(unitMismatch(cond({ kind: 'ind', name: 'rsi', params: { n: 14 } }, sm))).toContain('가격') // 점수 vs 가격
+    expect(unitMismatch(cond({ kind: 'ind', name: 'change_pct', params: { n: 1 } }, { kind: 'ind', name: 'rsi', params: { n: 14 } }))).toBeNull() // 점수·퍼센트끼리는 뜻이 넓어 경고 안 함
+    const s = newSpec('intraday')
+    s.strategy = { source: 'builder', entry: { logic: 'all', items: [cond({ kind: 'ind', name: 'value_eok' }, sm)] }, exit: { logic: 'any', items: [] } }
+    expect(specUnitWarnings(s)).toHaveLength(1)
+  })
+
+  const pickLeft = async (_calls: Calls, label: string) => {
+    const entry = await screen.findByTestId('group-strategy.entry')
+    const left = within(entry).getAllByTestId('operand-left-field')[0]
+    await userEvent.click(within(left).getByRole('combobox'))
+    const shown = [...document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden)')].pop() as HTMLElement
+    await userEvent.click(within(shown).getAllByText(label).find((e) => e.closest('.ant-select-item-option'))!)
+    return entry
+  }
+
+  it('화면: 거래대금(억)을 고르면 오른쪽이 바로 "[20] 억" 입력칸이 되고 포커스가 간다 — 30 으로 고치면 명세에 실린다', async () => {
+    const { calls } = mockApi(routes({}, eokCatalog()))
+    page()
+    const entry = await pickLeft(calls, '거래대금')
+    await waitFor(() => expect(items(calls)[0].left).toMatchObject({ kind: 'ind', name: 'value_eok' }))
+    const c = () => within(entry).getAllByTestId('operand-right-const')[0] as HTMLInputElement
+    await waitFor(() => expect(c()).toBeInTheDocument())
+    expect(c().value).toBe('20')
+    await waitFor(() => expect(document.activeElement).toBe(c()))
+    expect(within(within(entry).getAllByTestId('operand-right')[0]).getByText('억')).toBeInTheDocument()
+    expect(items(calls)[0].right).toEqual({ kind: 'const', value: 20 })
+    fireEvent.change(c(), { target: { value: '30' } })
+    await waitFor(() => expect(items(calls)[0].right).toEqual({ kind: 'const', value: 30 }))
+    expect(screen.queryByTestId('unit-warning')).not.toBeInTheDocument()
+  })
+
+  it('화면: 왼쪽을 종가로 되돌리면 자동으로 바꿔 둔 오른쪽이 원래 N봉 최고값으로 돌아온다', async () => {
+    const { calls } = mockApi(routes({}, eokCatalog()))
+    page()
+    await pickLeft(calls, '거래대금')
+    await waitFor(() => expect(items(calls)[0].left).toMatchObject({ name: 'value_eok' }))
+    await pickLeft(calls, '종가')
+    await waitFor(() => expect(items(calls)[0].right).toMatchObject({ kind: 'ind', name: 'highest' }))
+  })
+
+  it('화면: 사용자가 오른쪽을 직접 골라 둔 뒤엔 왼쪽을 억으로 바꿔도 덮어쓰지 않고 경고가 뜬다(행 + 검증 패널)', async () => {
+    const { calls } = mockApi(routes({}, eokCatalog()))
+    page()
+    const entry = await screen.findByTestId('group-strategy.entry')
+    const rk = within(entry).getAllByTestId('operand-right-ind')[0]
+    await userEvent.click(within(rk).getByRole('combobox'))
+    const dd = [...document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden)')].pop() as HTMLElement
+    await userEvent.click(within(dd).getAllByText('N봉 최저값').find((e) => e.closest('.ant-select-item-option'))!)
+    await waitFor(() => expect(items(calls)[0].right).toMatchObject({ name: 'lowest' }))
+    await pickLeft(calls, '거래대금')
+    await waitFor(() => expect(items(calls)[0].left).toMatchObject({ name: 'value_eok' }))
+    expect(items(calls)[0].right).toMatchObject({ kind: 'ind', name: 'lowest' })
+    expect(await screen.findByTestId('unit-warning')).toHaveTextContent('단위가 다른 값을 비교')
+    expect(screen.getByTestId('unit-warnings')).toHaveTextContent('1건')
+  })
+})
+
+
+describe('옛 명세의 거래대금(원) 조건은 불러올 때 억으로 바꿔 보인다 (17:58 lead 요청)', () => {
+  const eokDef: IndicatorDef = { name: 'value_eok', label: '거래대금(억)', desc: '거래대금(억)', params: [], modes: ['daily_single', 'daily_portfolio', 'intraday'], timing: 't 포함', compute: true, category: 'volume', category_ko: '거래량·순위', live: true, volume_based: true }
+  const eokCatalog = (): IndicatorCatalog => ({ ...realCatalog, indicators: [...realCatalog.indicators, eokDef] })
+  const legacy = (): SpecJson => {
+    const s = newSpec('daily_portfolio')
+    s.strategy = { source: 'builder', entry: { logic: 'all', items: [
+      { left: { kind: 'field', name: 'value', tf: 'daily' }, op: 'gte', right: { kind: 'const', value: 3_000_000_000 } },
+      { left: { kind: 'const', value: 1_000_000_000 }, op: 'lt', right: { kind: 'field', name: 'value' } },
+      { left: { kind: 'field', name: 'close' }, op: 'gt', right: { kind: 'field', name: 'open' } },
+    ] }, exit: { logic: 'any', items: [] } }
+    return s
+  }
+
+  it('field:value vs 숫자는 value_eok vs 숫자÷1억 로(시간 단위 유지), 그 밖의 조건·변수 숫자는 그대로', async () => {
+    const { modernizeLegacyValue } = await import('@/lib/conditionUnits')
+    const s = legacy()
+    const r = modernizeLegacyValue(s, () => true)
+    const it = (r.spec.strategy as { entry: { items: Condition[] } }).entry.items
+    expect(r.changed).toBe(2)
+    expect(it[0]).toMatchObject({ left: { kind: 'ind', name: 'value_eok', tf: 'daily' }, right: { kind: 'const', value: 30 } })
+    expect(it[1]).toMatchObject({ left: { kind: 'const', value: 10 }, right: { kind: 'ind', name: 'value_eok' } })
+    expect(it[2]).toEqual((s.strategy as { entry: { items: Condition[] } }).entry.items[2])
+    expect(modernizeLegacyValue(s, () => false).changed).toBe(0) // 억 지표를 못 쓰는 모드·서버면 손대지 않는다
+    expect(modernizeLegacyValue(r.spec, () => true).changed).toBe(0) // 두 번 돌려도 그대로
+    const p = legacy(); const pi = (p.strategy as { entry: { items: Condition[] } }).entry.items
+    pi[0].right = { kind: 'const', value: { param: 'min_value' } } as never
+    expect(modernizeLegacyValue(p, () => true).changed).toBe(1) // 변수 숫자(param)는 못 바꿔 그대로 둔다
+  })
+
+  it('화면: 프리셋으로 불러오면 조건이 억 기준 "거래대금 ≥ 30억" 으로 보이고 안내가 뜬다', async () => {
+    const { calls } = mockApi(routes({ 'GET /api/presets/old_value': { data: { name: 'old_value', spec: legacy() } } }, eokCatalog()))
+    renderApp(<Routes><Route path="/backtest" element={<BacktestPage />} /></Routes>, '/backtest?preset=old_value')
+    expect(await screen.findByTestId('load-note')).toHaveTextContent('억 단위로 바꿔')
+    await waitFor(() => expect((lastSpec(calls).strategy as { entry: { items: Condition[] } }).entry.items[0]).toMatchObject({ left: { kind: 'ind', name: 'value_eok' }, right: { kind: 'const', value: 30 } }))
+    const entry = screen.getByTestId('group-strategy.entry')
+    expect(within(within(entry).getAllByTestId('operand-right')[0]).getByText('억')).toBeInTheDocument()
+  })
+})
+
+
+describe('가격이 아닌 단위 지표 전부 — 오른쪽이 숫자칸으로 자동 전환 (18:20 lead 요청: "1분봉에 1% 상승시 진입")', () => {
+  const sm = { kind: 'ind' as const, name: 'sma', params: { src: 'close', n: 20 } }
+  const cond = (left: Condition['left'], right: Condition['right'], op: Condition['op'] = 'gt'): Condition => ({ left, op, right })
+  const fresh = () => ({ picked: false, auto: false })
+  const items = (calls: { path: string; body: unknown }[]) => (lastSpec(calls).strategy as { entry: { items: Condition[] } }).entry.items
+  const close = { kind: 'field' as const, name: 'close' as const }
+
+  it('지표별 기본값·단위 글자: 등락률 1% · 몸통 3% · RSI 30 · 순위 20위 · 연속 봉 3봉 · 거래량 배수 3배', async () => {
+    const { harmonizeRight, operandSuffix } = await import('@/lib/conditionUnits')
+    const rows: [string, number, string | undefined][] = [['change_pct', 1, '%'], ['body_pct', 3, '%'], ['rsi', 30, undefined], ['value_rank', 20, '위'], ['up_streak', 3, '봉'], ['vol_ratio', 3, '배'], ['minutes_since_open', 30, '분'], ['day_change_pct', 1, '%']]
+    for (const [name, def, suffix] of rows) {
+      const left = { kind: 'ind' as const, name, params: {} }
+      const r = harmonizeRight(cond(left, sm), close, fresh())
+      expect([name, r.cond.right]).toEqual([name, { kind: 'const', value: def }])
+      expect([name, r.auto, operandSuffix(left)]).toEqual([name, true, suffix])
+    }
+  })
+
+  it('1/0 지표(정배열 등)는 "참이면" 연산자로 — 가격 쪽으로 돌아오면 초과 + 기본 오른쪽으로', async () => {
+    const { harmonizeRight } = await import('@/lib/conditionUnits')
+    const flag = harmonizeRight(cond({ kind: 'ind', name: 'ma_aligned', params: {} }, sm), close, fresh())
+    expect(flag.cond.op).toBe('is_true')
+    expect(flag.cond.right).toBeUndefined()
+    expect(flag.auto).toBe(true)
+    const back = harmonizeRight({ ...flag.cond, left: close }, { kind: 'ind', name: 'ma_aligned', params: {} }, { picked: false, auto: true })
+    expect(back.cond.op).toBe('gt')
+    expect(back.cond.right).toMatchObject({ kind: 'ind', name: 'highest' })
+    expect(back.auto).toBe(false)
+    const own = harmonizeRight(cond({ kind: 'ind', name: 'ma_aligned', params: {} }, sm, 'is_true'), close, fresh()) // 사용자가 직접 "참이면" 을 골랐으면 그대로
+    expect(own.switched).toBe(false)
+  })
+
+  it('가격 단위(종가·이평·최고가)면 지표 비교 그대로, 직접 고른 오른쪽은 안 덮고, 자동으로 넣은 숫자는 다른 지표로 바꾸면 그 지표 기본값으로', async () => {
+    const { harmonizeRight } = await import('@/lib/conditionUnits')
+    expect(harmonizeRight(cond(close, sm), { kind: 'ind', name: 'rsi', params: {} }, fresh()).cond.right).toEqual(sm)
+    expect(harmonizeRight(cond({ kind: 'ind', name: 'rsi', params: {} }, sm), close, { picked: true, auto: false }).cond.right).toEqual(sm)
+    const rsi = { kind: 'ind' as const, name: 'rsi', params: {} }
+    const first = harmonizeRight(cond(rsi, sm), close, fresh())
+    const next = harmonizeRight({ ...first.cond, left: { kind: 'ind', name: 'change_pct', params: { n: 1 } } }, rsi, { picked: false, auto: first.auto })
+    expect(next.cond.right).toEqual({ kind: 'const', value: 1 })
+    const same = harmonizeRight({ ...first.cond, left: { ...rsi, params: { n: 9 } } }, rsi, { picked: false, auto: first.auto }) // 같은 지표의 기간만 바꾸면 그대로
+    expect(same.cond.right).toEqual({ kind: 'const', value: 30 })
+  })
+
+  const pickFind = async (label: string) => {
+    const entry = await screen.findByTestId('group-strategy.entry')
+    const find = within(entry).getAllByTestId('operand-left-find')[0]
+    await userEvent.click(within(find).getByRole('combobox'))
+    await userEvent.type(within(find).getByRole('combobox'), label)
+    const shown = [...document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden)')].pop() as HTMLElement
+    await userEvent.click(within(shown).getAllByText(label).find((e) => e.closest('.ant-select-item-option'))!)
+    return entry
+  }
+
+  it.each([['N봉 등락률(%)', 'change_pct', '1', '%'], ['RSI', 'rsi', '30', null], ['몸통(%)', 'body_pct', '3', '%']])('화면: %s 를 고르면 오른쪽이 바로 숫자칸(기본 %s)이 된다', async (label, name, def, suffix) => {
+    const body: IndicatorDef = { name: 'body_pct', label: '몸통(%)', desc: '몸통 크기', params: [], modes: ['daily_single', 'daily_portfolio', 'intraday'], timing: 't 포함', compute: true, category: 'trend', category_ko: '추세', live: true, volume_based: false }
+    const { calls } = mockApi(routes({}, { ...realCatalog, indicators: [...realCatalog.indicators, body] }))
+    page()
+    const entry = await pickFind(label)
+    await waitFor(() => expect(items(calls)[0].left).toMatchObject({ kind: 'ind', name }))
+    const c = () => within(entry).getAllByTestId('operand-right-const')[0] as HTMLInputElement
+    await waitFor(() => expect(c().value).toBe(def))
+    if (suffix) expect(within(within(entry).getAllByTestId('operand-right')[0]).getByText(suffix)).toBeInTheDocument()
+    expect(items(calls)[0].right).toEqual({ kind: 'const', value: Number(def) })
+    fireEvent.change(c(), { target: { value: '2' } })
+    await waitFor(() => expect(items(calls)[0].right).toEqual({ kind: 'const', value: 2 }))
+  })
+
+  it('화면: 정배열(1/0) 을 고르면 연산자가 "참이면" 이 되고 오른쪽 칸이 없어진다', async () => {
+    const { calls } = mockApi(routes())
+    page()
+    const entry = await pickFind('정배열(1/0)')
+    await waitFor(() => expect(items(calls)[0].op).toBe('is_true'))
+    expect(within(entry).queryAllByTestId('operand-right')).toHaveLength(0)
+  })
+})
+
+
+describe('문장 빈칸 채우기 카드 (설계서 §5.5, c10)', () => {
+  const tf = { name: 'tf', kind: 'tf', label: '어떤 봉으로 볼까요?', default: 'bar', choices: [{ value: 'bar', label: '지금 보는 봉', enabled: true, reason: null }, { value: 'm5', label: '5분봉', enabled: true, reason: null }, { value: 'daily_live', label: '오늘 지금까지 반영한 일봉', enabled: false, reason: '통합 분봉에서는 못 써요' }] }
+  const TPLS = {
+    mode: 'daily_portfolio', bar_minutes: 5, source: 'al',
+    categories: [{ key: 'volume', label: '거래량·거래대금' }, { key: 'candle', label: '오르내림·캔들' }, { key: 'exit', label: '팔 때(청산)' }],
+    templates: [
+      { id: 'value_eok', category: 'volume', category_label: '거래량·거래대금', sentence: '{tf}거래대금이 {x}억 {cmp}', example: '거래대금이 20억 이상이다', hint: '한 봉 동안 오간 돈이에요.', warn: '', tags: ['거래대금', '억'], role: 'both', available: true, reason: '',
+        slots: [tf, { name: 'x', kind: 'number', label: '몇 억', default: 20, unit: '억', lo: 0.1, hi: 100000, integer: false }, { name: 'cmp', kind: 'choice', label: '이상 / 이하', default: 'gte', choices: [{ value: 'gte', label: '이상이다', enabled: true, reason: null }, { value: 'lte', label: '이하다', enabled: true, reason: null }] }] },
+      { id: 'change_up', category: 'candle', category_label: '오르내림·캔들', sentence: '{tf}가격이 직전 {봉}보다 {x}% 이상 올랐다', example: '가격이 직전 봉보다 1% 이상 올랐다', hint: '바로 앞 봉보다 몇 % 올랐는지 봐요.', warn: '', tags: ['급등'], role: 'both', available: true, reason: '',
+        slots: [{ name: 'x', kind: 'number', label: '몇 %', default: 1, unit: '%', lo: 0.1, hi: 30, integer: false }] },
+      { id: 'pos_profit', category: 'exit', category_label: '팔 때(청산)', sentence: '산 가격보다 {x}% 이상 올랐다(수익)', example: '산 가격보다 5% 이상 올랐다(수익)', hint: '수익이 나면 팔아요.', warn: '', tags: ['익절'], role: 'exit', available: true, reason: '',
+        slots: [{ name: 'x', kind: 'number', label: '몇 %', default: 5, unit: '%', lo: 0.1, hi: 1000, integer: false }] },
+      { id: 'cum_value', category: 'volume', category_label: '거래량·거래대금', sentence: '오늘 지금까지 거래대금이 {x}억 이상이다', example: '오늘 지금까지 거래대금이 100억 이상이다', hint: '오늘 누적이에요.', warn: '', tags: ['누적'], role: 'both', available: false, reason: '분봉 실행에서만 쓸 수 있어요', slots: [] },
+    ],
+  }
+  const eokCond = (x: number, cmp = 'gte'): Condition => ({ left: { kind: 'ind', name: 'value_eok', params: {} }, op: cmp as Condition['op'], right: { kind: 'const', value: x } })
+  const num = (c: Condition) => (c.right as { value: number }).value
+  const tplRoutes = (over: Record<string, Parameters<typeof mockApi>[0][string]> = {}) => routes({
+    'GET /api/meta/condition-templates': { data: TPLS },
+    'POST /api/meta/condition-templates/build': (call) => {
+      const b = call.body as { id: string; values?: Record<string, number | string> }
+      const v = { x: b.id === 'change_up' ? 1 : 20, cmp: 'gte', ...b.values } as Record<string, number | string>
+      if (b.id === 'value_eok') return { data: { condition: eokCond(v.x as number, String(v.cmp)), sentence: `거래대금이 ${v.x}억 이상이다`, values: v } }
+      return { data: { condition: { left: { kind: 'ind', name: 'change_pct', params: { n: 1 } }, op: 'gte', right: { kind: 'const', value: v.x as number } }, sentence: `가격이 직전 봉보다 ${v.x}% 이상 올랐다`, values: v } }
+    },
+    'POST /api/meta/condition-templates/match': (call) => ({
+      data: (call.body as { conditions: Condition[] }).conditions.map((c) => (c.left.kind === 'ind' && c.left.name === 'value_eok' ? { id: 'value_eok', category: 'volume', values: { x: num(c), cmp: c.op }, sentence: `거래대금이 ${num(c)}억 이상이다` }
+        : c.left.kind === 'ind' && c.left.name === 'change_pct' ? { id: 'change_up', category: 'candle', values: { x: num(c) }, sentence: '가격이 직전 봉보다 이상 올랐다' } : null)),
+    }),
+    ...over,
+  })
+  const entryItems = (calls: { path: string; body: unknown }[]) => (lastSpec(calls).strategy as { entry: { items: Condition[] } }).entry.items
+  const pickTemplate = async (search: string, id: string) => {
+    await userEvent.click(await screen.findByTestId('cards-strategy.entry-add'))
+    const picker = await screen.findByTestId('tpl-picker')
+    await userEvent.type(within(picker).getByRole('searchbox'), search)
+    await userEvent.click(await within(picker).findByTestId(`tpl-${id}`))
+  }
+
+  it('서버가 문장 카드를 지원하면 카드 화면이 기본 — "모두 만족하면 산다", 문장에 안 맞는 옛 조건은 그대로 고칠 수 있는 행으로', async () => {
+    mockApi(tplRoutes())
+    page()
+    const box = await screen.findByTestId('cards-strategy.entry')
+    expect(box).toHaveTextContent('모두 만족하면 산다')
+    expect(await screen.findByTestId('cards-strategy.exit')).toHaveTextContent('모두 만족하면 판다')
+    expect(await within(box).findByTestId('card-strategy.entry.0-plain')).toHaveTextContent('문장 카드로 나타낼 수 없는')
+    expect(screen.queryByTestId('group-strategy.entry')).not.toBeInTheDocument()
+  })
+
+  it('[조건 추가] → 검색 → 문장을 고르면 카드가 붙고 명세에 조건이 실린다 · 빈칸을 고치면 서버가 만든 조건으로 바뀐다', async () => {
+    const { calls } = mockApi(tplRoutes())
+    page()
+    await pickTemplate('거래대금', 'value_eok')
+    const card = await screen.findByTestId('card-value_eok')
+    expect(within(card).getByTestId('card-sentence')).toHaveTextContent('거래대금이')
+    const x = within(card).getByTestId('card-slot-x') as HTMLInputElement
+    await waitFor(() => expect(x.value).toBe('20'))
+    expect(card).toHaveTextContent('억')
+    expect(card).toHaveTextContent('한 봉 동안 오간 돈이에요.') // 서버가 준 쉬운 설명
+    await waitFor(() => expect(entryItems(calls).some((c) => c.left.kind === 'ind' && c.left.name === 'value_eok')).toBe(true))
+    fireEvent.change(x, { target: { value: '30' } })
+    await waitFor(() => expect(entryItems(calls).find((c) => c.left.kind === 'ind' && c.left.name === 'value_eok')?.right).toEqual({ kind: 'const', value: 30 }), { timeout: 4000 })
+    const built = calls.filter((c) => c.path.endsWith('/build')).pop()!.body as { id: string; values: Record<string, number> }
+    expect([built.id, built.values.x]).toEqual(['value_eok', 30])
+  })
+
+  it('못 쓰는 문장은 회색 + 이유, 청산 전용 문장은 진입 목록엔 없고 청산 목록에만 있다, 검색으로 좁혀진다', async () => {
+    mockApi(tplRoutes())
+    page()
+    await userEvent.click(await screen.findByTestId('cards-strategy.entry-add'))
+    const picker = await screen.findByTestId('tpl-picker')
+    expect(within(picker).getByTestId('tpl-cum_value')).toHaveAttribute('aria-disabled', 'true')
+    expect(within(picker).queryByTestId('tpl-pos_profit')).not.toBeInTheDocument()
+    await userEvent.type(within(picker).getByRole('searchbox'), '급등')
+    expect(within(picker).queryByTestId('tpl-value_eok')).not.toBeInTheDocument()
+    expect(within(picker).getByTestId('tpl-change_up')).toBeInTheDocument()
+  })
+
+  it('청산 자리의 [조건 추가] 목록에는 청산 전용 문장이 나온다', async () => {
+    mockApi(tplRoutes())
+    page()
+    await userEvent.click(await screen.findByTestId('cards-strategy.exit-add'))
+    expect(await screen.findByTestId('tpl-pos_profit')).toBeInTheDocument()
+  })
+
+  it('빈칸 값이 틀리면 서버가 알린 쉬운 말이 카드에 빨갛게 뜨고 명세는 안 바뀐다', async () => {
+    const { calls } = mockApi(tplRoutes({ 'POST /api/meta/condition-templates/build': (call) => {
+      const b = call.body as { values?: { x?: number } }
+      return (b.values?.x ?? 0) >= 77 ? { status: 400, error: { code: 'VALIDATION_ERROR', message: '요청 값이 올바르지 않음', details: { fieldErrors: { x: '이 값은 너무 커요' } } } }
+        : { data: { condition: eokCond(b.values?.x ?? 20), sentence: '거래대금이 20억 이상이다', values: { x: b.values?.x ?? 20, cmp: 'gte' } } }
+    } }))
+    page()
+    await pickTemplate('거래대금', 'value_eok')
+    const card = await screen.findByTestId('card-value_eok')
+    await waitFor(() => expect((within(card).getByTestId('card-slot-x') as HTMLInputElement).value).toBe('20'))
+    await waitFor(() => expect(entryItems(calls).some((c) => c.left.kind === 'ind' && c.left.name === 'value_eok')).toBe(true))
+    fireEvent.change(within(card).getByTestId('card-slot-x'), { target: { value: '77' } })
+    expect(await within(card).findByTestId('card-error', {}, { timeout: 4000 })).toHaveTextContent('이 값은 너무 커요')
+    expect(entryItems(calls).find((c) => c.left.kind === 'ind' && c.left.name === 'value_eok')?.right).toEqual({ kind: 'const', value: 20 })
+  })
+
+  it('"직접 조립(고급)" 으로 바꾸면 옛 조립기가 그대로 나오고, 다시 문장으로 돌아올 수 있다', async () => {
+    mockApi(tplRoutes())
+    page()
+    const box = await screen.findByTestId('cards-strategy.entry')
+    await userEvent.click(within(within(box).getByTestId('cards-strategy.entry-view')).getByText('직접 조립(고급)'))
+    expect(await screen.findByTestId('group-strategy.entry')).toBeInTheDocument()
+    await userEvent.click(within(screen.getByTestId('cards-strategy.entry-view')).getByText('문장으로 만들기'))
+    expect(await screen.findByTestId('cards-strategy.entry-add')).toBeInTheDocument()
+  })
+
+  it('서버가 문장 카드를 모르면(404) 옛 조립기가 그대로 나온다', async () => {
+    mockApi(routes())
+    page()
+    expect(await screen.findByTestId('group-strategy.entry')).toBeInTheDocument()
+    expect(screen.queryByTestId('cards-strategy.entry')).not.toBeInTheDocument()
+  })
+})
+
+
+describe('기간 칸 데이터 범위 표시 (19:22) — 불러오는 중과 진짜 실패를 구분', () => {
+  it('범위 응답을 기다리는 동안은 "불러오는 중…", 도착하면 범위 문구로 바뀐다(못 불러옴이 아니다)', async () => {
+    let open!: () => void
+    const gate = new Promise<void>((r) => { open = r })
+    const { fetchMock } = mockApi(routes())
+    const orig = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation(async (i: RequestInfo | URL, init?: RequestInit) => { if (String(i).includes('data-ranges')) await gate; return orig(i, init) })
+    page()
+    expect(await screen.findByTestId('ranges-loading')).toHaveTextContent('불러오는 중')
+    expect(screen.queryByTestId('ranges-error')).not.toBeInTheDocument()
+    open()
+    await waitFor(() => expect(screen.getByTestId('panel-period')).toHaveTextContent('데이터 2'))
+    expect(screen.queryByTestId('ranges-loading')).not.toBeInTheDocument()
+  })
+
+  it('진짜 실패(서버 오류)일 때만 "못 불러옴" + [다시 시도] — 누르면 다시 요청해 범위가 채워진다', async () => {
+    let fail = true
+    const { calls } = mockApi(routes({ 'GET /api/meta/data-ranges': () => (fail ? { status: 500, error: { code: 'INTERNAL', message: '서버 오류' } } : { data: RANGES }) }))
+    page()
+    expect(await screen.findByTestId('ranges-error')).toHaveTextContent('못 불러옴')
+    fail = false
+    await userEvent.click(screen.getByTestId('ranges-retry'))
+    await waitFor(() => expect(screen.getByTestId('panel-period')).toHaveTextContent('데이터 2'))
+    expect(calls.filter((c) => c.path.startsWith('/api/meta/data-ranges')).length).toBeGreaterThanOrEqual(2)
+  })
+})

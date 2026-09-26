@@ -22,7 +22,7 @@ from studio.application.services import Services
 from . import errors
 from .guard import GuardMiddleware
 from .heartbeat import INTERVAL_SECONDS, run_heartbeat
-from .routes import catalog, conditions, formulas, jobs, meta, presets, runs, validation
+from .routes import catalog, conditions, formulas, jobs, meta, presets, runs, templates, validation
 
 
 def create_app(root: Path | str | None = None, *, dispatcher: Dispatcher | None = None,
@@ -56,7 +56,7 @@ def create_app(root: Path | str | None = None, *, dispatcher: Dispatcher | None 
     app.add_middleware(GuardMiddleware)
     app.include_router(meta.router)
     app.include_router(jobs.router)
-    for r in (catalog.router, runs.router, conditions.router, presets.router, validation.router, formulas.router):
+    for r in (catalog.router, runs.router, conditions.router, presets.router, validation.router, formulas.router, templates.router):
         app.include_router(r)
     app.include_router(hub_router)  # /api/data/* (datahub/api.py) — 아래 /api/{rest} 404 캐치올보다 앞에
 

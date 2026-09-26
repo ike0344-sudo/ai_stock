@@ -2,7 +2,7 @@
 import { useQuery, type UseQueryResult } from '@tanstack/react-query'
 import type { JobRow } from '@/types'
 import type {
-  BarsData, CompareData, IntradaySources, DataRanges, EquityPoint, FoldsFile, GridInfo, GridRow, HoldoutHistory, IndicatorCatalog, LegacyStrategyDef, PresetRow, PreviewResult, Recipe,
+  BarsData, CompareData, CondTemplates, Condition, Mode, TplBuilt, TplMatch, TplValues, IntradaySources, DataRanges, EquityPoint, FoldsFile, GridInfo, GridRow, HoldoutHistory, IndicatorCatalog, LegacyStrategyDef, PresetRow, PreviewResult, Recipe,
   RunDetail, RunRow, SpecJson, StockHit, Trade, ValidateResult, ValidationConfig, WalkforwardConfig,
 } from '@/types/studio'
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost, apiPut } from './client'
@@ -79,3 +79,11 @@ export const useGrid = (id: string | undefined, enabled: boolean): Q<GridRow[]> 
   useQuery({ queryKey: ['run', id, 'grid'], queryFn: () => apiGet<GridRow[]>(`/api/runs/${id}/grid`), enabled: !!id && enabled, staleTime: 60_000 })
 export const useFolds = (id: string | undefined, enabled: boolean): Q<FoldsFile> =>
   useQuery({ queryKey: ['run', id, 'folds'], queryFn: () => apiGet<FoldsFile>(`/api/runs/${id}/folds`), enabled: !!id && enabled, staleTime: 60_000 })
+
+// ── 조건 템플릿(문장 카드) — 서버가 안 지원하면(404) 화면이 옛 조립기로 남는다
+export const useCondTemplates = (mode: Mode, barMinutes: number, source: string, enabled = true): Q<CondTemplates> =>
+  useQuery({ enabled, queryKey: ['meta', 'cond-templates', mode, barMinutes, source], queryFn: () => apiGet<CondTemplates>(`/api/meta/condition-templates?mode=${mode}&bar_minutes=${barMinutes}&source=${source}`), staleTime: 5 * 60_000, retry: false })
+export const buildTemplate = (id: string, values: TplValues | undefined, mode: Mode, barMinutes: number, source: string) =>
+  apiPost<TplBuilt>('/api/meta/condition-templates/build', { id, ...(values ? { values } : {}), mode, bar_minutes: barMinutes, source })
+export const matchTemplates = (conditions: Condition[], mode: Mode, barMinutes: number) =>
+  apiPost<(TplMatch | null)[]>('/api/meta/condition-templates/match', { conditions, mode, bar_minutes: barMinutes })

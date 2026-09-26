@@ -393,3 +393,24 @@ export interface Recipe {
   available: boolean
   unavailable_reason: string | null
 }
+
+// ── 조건 템플릿(문장 빈칸 채우기, 설계서 §5.5) — 서버 studio/api/routes/templates.py
+export interface TplChoice { value: string; label: string; enabled: boolean; reason: string | null }
+export type TplSlot =
+  | { name: string; kind: 'number'; label: string; default: number; unit?: string; lo?: number; hi?: number; integer?: boolean }
+  | { name: string; kind: 'tf' | 'choice'; label: string; default: string; choices: TplChoice[] }
+export interface CondTemplate {
+  id: string; category: string; category_label: string
+  /** 빈칸 자리표시 문장 — `{x}억 {cmp}` 처럼 슬롯 이름이 중괄호 안, `{봉}` 은 일/봉으로 바꿔 보이는 자리 */
+  sentence: string
+  /** 기본값을 채운 완성 문장 */
+  example: string
+  hint: string; warn: string; tags: string[]
+  role: 'entry' | 'exit' | 'both'
+  available: boolean; reason: string
+  slots: TplSlot[]
+}
+export interface CondTemplates { mode: Mode; bar_minutes: number; source: string; categories: { key: string; label: string }[]; templates: CondTemplate[] }
+export type TplValues = Record<string, number | string>
+export interface TplBuilt { condition: Condition; sentence: string; values: TplValues }
+export interface TplMatch { id: string; category: string; values: TplValues; sentence: string }

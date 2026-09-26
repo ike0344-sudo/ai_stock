@@ -6,9 +6,10 @@ import { useQuery } from '@tanstack/react-query'
 import { Alert, Button, Col, Input, Row, Space, Spin, Switch, Tabs, Typography, theme } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { getPreset, previewSpec, useDataRanges, useIndicators, useLegacyStrategies, validateSpec } from '@/api/studio'
+import { getPreset, previewSpec, useCondTemplates, useDataRanges, useIndicators, useLegacyStrategies, validateSpec } from '@/api/studio'
 import { ApiError, apiGet } from '@/api/client'
 import { ConditionGroupEditor } from '@/components/builder/ConditionGroupEditor'
+import { SentenceGroupEditor } from '@/components/builder/SentenceCards'
 import { NarrationPanel, PreviewTable, ValidationPanel } from '@/components/builder/CheckPanels'
 import { ParamsContext, type ParamsApi } from '@/components/builder/ParamsContext'
 import { RunModal } from '@/components/builder/RunModal'
@@ -16,8 +17,11 @@ import { CompatPanel, CostsPanel, ExitsPanel, ParamsTable, PeriodPanel, Portfoli
 import { ConditionContext } from '@/components/builder/ConditionContext'
 import { FormulaPanel } from '@/components/builder/FormulaPanel'
 import { IntradayPanel, TickPanel } from '@/components/builder/ModePanels'
+import { QuickConditions } from '@/components/builder/QuickConditions'
 import { RecipePicker } from '@/components/builder/RecipePicker'
 import { LegacyForm, PresetBar, StrategySourceSwitch } from '@/components/builder/StrategyPanels'
+import { indicatorSupport } from '@/lib/conditionMeta'
+import { modernizeLegacyValue, specUnitWarnings } from '@/lib/conditionUnits'
 import { addItem, applyRecipe, clampPeriodToRange, clone, newGroup, newSpec, normalizeSpec, pruneParams, setTickEntrySource, switchMode, toParam } from '@/lib/spec'
 import type { Condition, Group, PreviewResult, Recipe, RunDetail, SpecJson, StrategySpec } from '@/types/studio'
 
@@ -58,6 +62,7 @@ export function BacktestPage() {
   specRef.current = spec
   const pristine = useRef(true)
   const periodEdited = useRef(false) // 사용자가 기간을 직접 고르거나 명세를 불러왔으면 자동으로 옮기지 않는다
+  const legacyCheck = useRef(false)
   const [runSpec, setRunSpec] = useState<SpecJson | null>(null)
   const [preview, setPreview] = useState<{ data?: PreviewResult; loading: boolean; error?: string }>({ loading: false })
   const [loadNote, setLoadNote] = useState<string | null>(null)
@@ -66,6 +71,10 @@ export function BacktestPage() {
 
   const cat = useIndicators()
   const legacy = useLegacyStrategies()
+  const barMinutes = spec.intraday?.bar_minutes ?? 5
+  const intradaySource = spec.intraday?.source ?? 'al'
+  const tplQ = useCondTemplates(spec.mode, barMinutes, intradaySource, spec.mode !== 'tick') // 서버가 문장 카드를 지원하면 카드가 기본, 아니면(404) 옛 조립기
+  const sentenceTpl = tplQ.data
   const ranges = useDataRanges()
 
   const edit = useCallback((fn: (s: SpecJson) => SpecJson) => { pristine.current = false; setSpec(fn) }, [])
@@ -89,6 +98,7 @@ export function BacktestPage() {
           if (dead) return
           pristine.current = false
           periodEdited.current = true
+          legacyCheck.current = true
           setSpec({ ...normalizeSpec(clone(d.spec)), name: `${d.spec.name} (복사)` })
           setLoadNote(`실행 ${from} 의 조건을 복제했습니다 — 고쳐서 다시 돌리세요`)
         } else if (presetName) {
@@ -96,6 +106,7 @@ export function BacktestPage() {
           if (dead) return
           pristine.current = false
           periodEdited.current = true
+          legacyCheck.current = true
           setSpec(normalizeSpec(r.spec))
           setLoadNote(`프리셋 "${presetName}" 을 불러왔습니다`)
         }
@@ -105,6 +116,17 @@ export function BacktestPage() {
     })()
     return () => { dead = true }
   }, [from, presetName])
+
+  // 옛 명세의 "거래대금(원) 필드 vs 숫자" 는 불러온 직후 한 번 억 기준으로 바꿔 보인다(결과 같음 — 숫자÷1억)
+  useEffect(() => {
+    if (!legacyCheck.current || !cat.data) return
+    legacyCheck.current = false
+    const eok = cat.data.indicators.find((d) => d.name === 'value_eok' && d.compute)
+    const r = modernizeLegacyValue(spec, (m) => !!eok && indicatorSupport(eok, m).ok)
+    if (!r.changed) return
+    setSpec(r.spec)
+    setLoadNote((n) => `${n ? n + ' · ' : ''}거래대금(원) 조건 ${r.changed}건을 억 단위로 바꿔 보였습니다(결과는 같음)`)
+  }, [spec, cat.data])
 
   // 검증 — 명세가 바뀌고 0.5초 조용하면 서버에 묻는다(오류 경로로 행을 강조하고 풀이 문장을 받는다)
   const pruned = useMemo(() => pruneParams(spec), [spec])
@@ -156,6 +178,7 @@ export function BacktestPage() {
         portfolio: { ...s.portfolio, max_positions: 1, max_weight_pct: 100, sizing: 'equal_slot_fixed' }, fills: { ...s.fills, volume_cap_pct: null } }
     : { ...s, compat: { legacy: false } })
 
+  const unitWarnings = specUnitWarnings(spec)
   const doRecipe = (r: Recipe) => {
     periodEdited.current = false // 모드가 바뀌면 기간을 그 모드 데이터 끝으로 다시 잡는다
     edit((s) => applyRecipe(s, r, ranges.data?.[rangeKeyOf(r.modes.includes(s.mode) ? s.mode : r.modes[0], s.intraday?.source ?? 'al')]))
@@ -172,7 +195,8 @@ export function BacktestPage() {
   const presetBar = <PresetBar spec={pruned} onLoad={(s, name) => { periodEdited.current = true; edit(() => normalizeSpec(s)); setLoadNote(`프리셋 "${name}" 을 불러왔습니다`) }} />
   const recipeBar = <RecipePicker spec={spec} onApply={doRecipe} />
   const universe = <UniversePanel value={spec.universe} onChange={patch('universe')} mode={spec.mode} />
-  const period = <PeriodPanel value={spec.period} onChange={(p) => { periodEdited.current = true; patch('period')(p) }} ranges={ranges.data} holdoutPct={fine ? undefined : spec.validation?.holdout_pct} rangeKey={rangeKeyOf(spec.mode, spec.intraday?.source ?? 'al')} />
+  const period = <PeriodPanel value={spec.period} onChange={(p) => { periodEdited.current = true; patch('period')(p) }} ranges={ranges.data} holdoutPct={fine ? undefined : spec.validation?.holdout_pct} rangeKey={rangeKeyOf(spec.mode, spec.intraday?.source ?? 'al')}
+    rangesStatus={ranges.isError ? 'error' : ranges.data ? 'ok' : 'loading'} onRetryRanges={() => void ranges.refetch()} />
   const strategyBlock = (
     <div>
       <Space style={{ marginBottom: 8 }}>
@@ -186,10 +210,18 @@ export function BacktestPage() {
         <LegacyForm strategy={strategy} defs={legacy.data ?? []} onChange={(s) => setStrategy(() => s)} />
       ) : strategy?.source === 'builder' ? (
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <QuickConditions cat={catalog} mode={spec.mode} barMinutes={spec.intraday?.bar_minutes ?? 5} onAdd={(c) => insertFormula('entry', c)} />
+          {sentenceTpl ? (<>
+            <SentenceGroupEditor role="entry" path="strategy.entry" group={strategy.entry} required cat={catalog} mode={spec.mode} errors={errors} tpl={sentenceTpl} barMinutes={barMinutes} source={intradaySource}
+              onChange={(g) => setStrategy((s) => (s.source === 'builder' ? { ...s, entry: g } : s))} />
+            <SentenceGroupEditor role="exit" path="strategy.exit" group={strategy.exit} cat={catalog} mode={spec.mode} errors={errors} tpl={sentenceTpl} barMinutes={barMinutes} source={intradaySource}
+              onChange={(g) => setStrategy((s) => (s.source === 'builder' ? { ...s, exit: g } : s))} />
+          </>) : (<>
           <ConditionGroupEditor title="진입 조건 (이 조건이 참이면 다음 봉 시가에 산다)" path="strategy.entry" group={strategy.entry} required cat={catalog} mode={spec.mode} errors={errors}
             onChange={(g) => setStrategy((s) => (s.source === 'builder' ? { ...s, entry: g } : s))} />
           <ConditionGroupEditor title="청산 조건 (이 조건이 참이면 다음 봉 시가에 판다)" path="strategy.exit" group={strategy.exit} cat={catalog} mode={spec.mode} errors={errors} allowPos
             onChange={(g) => setStrategy((s) => (s.source === 'builder' ? { ...s, exit: g } : s))} />
+          </>)}
         </Space>
       ) : null}
     </div>
@@ -231,7 +263,7 @@ export function BacktestPage() {
   const checks = (
     <>
       <NarrationPanel result={result} loading={validation.isFetching || !settled} />
-      <ValidationPanel result={result} error={validation.isError ? validation.error.message : undefined} />
+      <ValidationPanel result={result} unitWarnings={unitWarnings} error={validation.isError ? validation.error.message : undefined} />
       {(preview.data || preview.loading || preview.error) && <PreviewTable {...preview} />}
     </>
   )
@@ -251,7 +283,7 @@ export function BacktestPage() {
       <Col xs={24} xl={15}>{stack(<>{presetBar}{universe}{period}{modeBlock}{strategyBlock}{marketBlock}{formulaBlock}{settings}{paramsTable}</>)}</Col>
       <Col xs={24} xl={9}>
         <div style={{ position: 'sticky', top: 8 }}>
-          {stack(<><NarrationPanel result={result} loading={validation.isFetching || !settled} /><ValidationPanel result={result} error={validation.isError ? validation.error.message : undefined} />{actions}{(preview.data || preview.loading || preview.error) && <PreviewTable {...preview} />}</>)}
+          {stack(<><NarrationPanel result={result} loading={validation.isFetching || !settled} /><ValidationPanel result={result} unitWarnings={unitWarnings} error={validation.isError ? validation.error.message : undefined} />{actions}{(preview.data || preview.loading || preview.error) && <PreviewTable {...preview} />}</>)}
         </div>
       </Col>
     </Row>
