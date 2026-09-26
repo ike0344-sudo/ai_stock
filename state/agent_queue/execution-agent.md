@@ -40,3 +40,6 @@
       보고: STATUS + `state/agent_reports/execution-agent_<날짜시각>_conditions_c5.md`.
 
 - [x] (lead 판정 2026-09-26 10:06 — backtest-agent 12:00 편지로 완료: 수식 대조 재실행·D.HIGHEST 손계산 테스트·docstring 갱신) c5 후속 — backtest-agent 가 `daily_prev` 를 "오늘 장 시작 전에 알 수 있는 값"(현재 봉을 빼는 highest/lowest 는 행 D, 나머지 D−1)으로 바꾼다는 편지가 오면: ① 수식=조립기 대조(`tests/studio/conditions/test_formula.py`)·전체 Spec 대조 다시 돌리기 ② `test_daily_prev_highest_is_literal_d_minus_1_row_value` 를 새 규칙에 맞게 고치고 도움말·예시를 `C > D.HIGHEST(H,20)` 로(바뀐 규칙 한 줄 설명), `formula.py` docstring ④ 도 갱신. 컴파일러 로직은 문자 그대로 유지(결정 확정). git commit 금지.
+
+- [x] (완료 2026-09-26) (lead 지시 2026-09-26 16:45, studio-conditions c9 — 사용자 "몇분봉에 몇억 이상") **수식 숫자에 억·만 단위**
+      `M5.VALUE >= 20억`, `5000만`, `1.5억`, `1억5000만` 같은 숫자를 해석(억=1e8, 만=1e4, 조=1e12). 모호하면 오류 위치로. 기존 수식 결과 불변 + 단위 테스트. git commit 금지. 보고: STATUS 한 줄.

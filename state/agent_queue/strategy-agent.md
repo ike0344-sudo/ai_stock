@@ -124,3 +124,6 @@
 - [x] (**14:30 풀림 — backtest-agent c8 완료·편지 1520 도착**) (lead 지시 2026-09-26 14:10, studio-conditions c8 풀이 문장) **틱 모드 풀이 문장에 추가 조건·사전 필터**
       "틱 조건(…) 이면서, 체결 시각 전에 끝난 1분봉 기준으로 (필터 풀이) 일 때 산다", 사전 필터 문장. 테스트 작성 후 STATUS 에 "테스트 준비됨" — lead 가 돌린다. 편지 오면 [ ] 로.
       **[2026-09-26 완료]** 편지 1520 처리와 같은 작업이라 앞 턴에 이미 구현(`narration.py` prefilter·filter 문장·주의문, 테스트 `tests/studio/conditions/test_narration_c1.py::test_tick_filter_and_prefilter_…`, 실행은 lead 대기). 상세: `state/agent_reports/strategy-agent_20260926-1400_narration_c1.md` "후속 2".
+
+- [x] (**16:35 풀림 — backtest c9 편지 1740 도착**) (lead 지시 2026-09-26 16:45, studio-conditions c9 풀이 문장) **"5분봉 거래대금이 20억 이상", "최근 1분 체결대금 합이 10억 이상" 풀이 문장** — 테스트 작성 후 STATUS 에 "테스트 준비됨". 편지 오면 [ ] 로.
+      **[2026-09-26 완료]** 편지 1740 처리와 같은 작업이라 이미 구현(`narration.py` value_eok·value_sum_eok·근사 주의문·틱 value_window 외 trade_strength·block_trades·daily_breakout 빈 곳 보강, 테스트 `tests/studio/conditions/test_narration_c1.py` 신규 3건, 실행은 lead 대기). 상세: `state/agent_reports/strategy-agent_20260926-1400_narration_c1.md` "후속 3".

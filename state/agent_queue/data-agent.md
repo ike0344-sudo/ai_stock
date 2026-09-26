@@ -398,10 +398,23 @@
 - [x] (lead 지시 2026-09-26 13:15, 작게) **`test_handler_reports_waiting_lock` 가끔 실패 고치기** — module-2 점검 G2-4("원인 불명 1회")가 오늘 전체 스위트(1,725건, 3분)에서 다시 실패, 단독 6회는 전부 통과 → **부하 때 시간에 기대는 테스트**로 보인다.
       전체 스위트나 CPU 부하를 걸고 재현 → 붙여 둔 진단 메시지로 원인 확인 → 고정 대기(sleep) 대신 "조건이 될 때까지 기다리되 상한" 식으로 결정적으로. 고친 뒤 단독 10회 + 부하 5회 + 전체 스위트 1회 통과. 제품 코드 문제면 그쪽을 고치고 보고. git commit 금지. 보고: STATUS 한 줄.
 
-- [ ] (lead 지시 2026-09-26 15:00 — 13:50 수정 후속) **`test_handler_reports_waiting_lock` 이 아직 가끔 실패 — 이번엔 증상이 다르다**
+- [x] (lead 지시 2026-09-26 15:00 — 13:50 수정 후속) **`test_handler_reports_waiting_lock` 이 아직 가끔 실패 — 이번엔 증상이 다르다**
       lead 실측: `pytest tests/studio tests/jobrunner tests/datahub` **한 번에** 돌리면 4회 중 2회 실패, `tests/datahub` 만은 통과.
       실패 내용: `assert 'failed' == 'succeeded'` — 대기 표시는 나왔는데 **작업이 failed 로 끝남**(13:50 고친 건 대기 시간 문제였다).
       의심: 앞선 studio·jobrunner 테스트가 남긴 프로세스·잠금 파일·작업 폴더·환경변수와 부딪힘(격리 부족), 또는 부하 때 자식 수집기 실패.
       1. 세 폴더를 한 번에 돌려 재현 → 네가 붙인 타임라인 메시지·작업 log.txt 로 **실패 원인**부터
       2. 테스트 격리 문제면 테스트(임시 루트·잠금 경로·정리)를, 제품 문제(잠금 대기 중 자식이 죽는 등)면 제품을 고쳐라 — 어느 쪽인지 보고
       3. 고친 뒤 세 폴더 한 번에 5회 연속 통과. git commit 금지. 보고: STATUS 한 줄.
+
+- [x] (lead 판정 2026-09-26 16:05 — monitoring-agent 훑기 보고 1650 의 lead 확인 요청) **`backtesting/daily_cache.py:45` 임시 파일 이름에도 스레드 id+난수**
+      같은 결함 모양(`{cache_path}.{os.getpid()}.tmp`) — 8780 서버 스레드풀에서 두 요청이 동시에 일봉 캐시를 다시 만들면 서로 덮어쓴다. **고친다.** 네가 오늘 고친 store 와 같은 방식으로 한 줄 + 회귀 테스트(스레드 동시 재생성, 고침 없으면 실패 확인).
+      8765 는 이것 때문에 재기동하지 않는다(다음 재기동 때 반영). 8780 은 다음 재기동 때(급하지 않음). git commit 금지. 보고: STATUS 한 줄.
+
+- [x] (lead 지시 2026-09-26 16:25 — **사용자 "문제 있는거 체크하고 고쳐"**, daily_cache 다음 최우선) **테스트가 실제 허브 장부·잠금을 건드린다 — 격리 + 재발 방지 + 오염 기록 보존 이동**
+      lead 발견: 오늘 13:37·13:41 `state/datahub/ledger-2026-09.jsonl` 의 `update_top35 [daily_minute] external` 30줄은 전부 `cmd = python -m pytest tests ...` — `tests/backtesting` 쪽 테스트가
+      `DATAHUB_ROOT` 없이 관문(`datahub.write`)을 지나 **실제 장부에 쓰고 실제 daily_minute 잠금을 잡는다**(데이터 파일은 임시 폴더라 안전). 위험: 감사 기록 오염(10-02 장부 1주 확인에 섞임),
+      밤에 실제 수집이 잠금을 쥐면 테스트가 무한 대기. (lead 가 16:20 에 돌린 `pytest tests` 도 같은 줄을 더 남겼을 것)
+      1. 관문을 지나는 테스트를 전부 찾아(장부 cmd 에 pytest 가 든 writer 들부터) `DATAHUB_ROOT` 임시 폴더로 격리 — **실데이터 읽기 테스트(패리티·P5 등)는 데이터 경로가 바뀌면 안 되니** 잠금·장부만 옮기는 방법이 필요하면 허브에 테스트용 상태 경로 설정을 추가(너의 판단)
+      2. 재발 방지: 테스트 세션 전후로 실제 장부 크기가 바뀌면 실패하는 가드(conftest)
+      3. 오염 기록: **지우지 말고** cmd 에 pytest 가 든 줄을 `state/datahub/ledger-test-pollution-2026-09.jsonl` 로 옮겨 보존(원본에서 빠진 줄 수 = 옮긴 줄 수 확인)
+      4. 확인: `pytest tests` 전체 1회 뒤 실제 장부 줄 수 불변. git commit 금지. 보고: STATUS 한 줄 + 짧은 보고서.

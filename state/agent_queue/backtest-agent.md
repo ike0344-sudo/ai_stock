@@ -667,3 +667,8 @@
       4. 카나리아 **C8**(s 이후 분봉·틱 변조 → s 이하 신호·진입 불변, 미마감 분봉 값 안 씀) + **SC-C8** 손계산("체결강도 ≥ 150 그리고 5분봉 20선 위 그리고 일봉 정배열(전일)") + 실데이터 실측(시간)
       끝나면 monitoring-agent(틱 탭 조건 편집기)·strategy-agent(풀이 문장)에 명세 모양 편지.
       미래참조 없음 최우선 · 분봉 기본 출처 통합 · git commit 금지. 보고: STATUS + `state/agent_reports/backtest-agent_<날짜시각>_conditions_c8.md`.
+
+- [x] (lead 지시 2026-09-26 16:45, **studio-conditions c9 — 사용자 "몇분봉에 몇억 이상 터질 때 진입조건 추가해줘"**) **거래대금(억) 조건 — 분봉·일봉 `value_eok`·`value_sum_eok(n)` + 틱 `value_window(w_min, min_eok)`**
+      설계서 §3.4c(v0.5). `ind_volume.py`(data-agent 파일 — 고치기 직전 다시 읽고 Edit)·`tick.py`·TickCatalog 칸·카탈로그 메타(정의·억 단위·예시).
+      분봉 대금은 종가×거래량 근사(경고), 틱은 가격×수량 정확값. 틱 창은 `(s−w, s]`, 진입은 s 뒤(기존 규칙). 레시피 2개(분봉 5분봉 ≥20억+양봉+VWAP 위 / 틱 최근 1분 ≥10억).
+      테스트: 손계산(5분봉 묶음 대금·합·틱 창 경계) + 카나리아. 끝나면 monitoring(화면 억 단위)·strategy(풀이 문장) 에 편지. git commit 금지. 보고: STATUS + 짧은 보고서.
