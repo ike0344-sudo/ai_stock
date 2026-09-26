@@ -28,3 +28,15 @@
          나스닥 감시 PID 10832 불변 · 8780(`-m studio`) 생존 · 워치독 1개 · 5분 한 주기 뒤 8765 PID 불변·`monitor-dashboard` 거짓 다운 알림 없음
       **금지**: 실주문, `KIWOOM_IS_MOCK` 변경, 신뢰된 Origin 으로 POST 보내기(매도·킬스위치·전략 시작 등 어떤 POST 도 — 403 확인용 위조 요청만), 나스닥 감시 종료. 문제가 생기면 백업으로 즉시 되돌리고 보고.
       git commit 금지. 보고: STATUS.md 자기 행 + `state/agent_reports/execution-agent_<날짜시각>_8765_dual_bind.md`.
+
+- [x] (완료 2026-09-26, 보고: state/agent_reports/execution-agent_20260926-093946_conditions_c5.md) (lead 지시 2026-09-26 10:00, **studio-conditions c5 — 사용자 승인 "C안, 5명 병렬"**) **사용자 수식 — 안전한 해석기 → 조건 AST**
+      설계 §3.5(문법)·§3.1(AST)·§7(보안). `studio/domain/conditions/formula.py`: 토큰 → 재귀 하강 → AST(비교→Condition, AND/OR→Group, NOT→negate, 산술→expr, 단위 접두어→tf, POS.→pos). **eval·exec·import 금지**, 상한(길이 2,000·깊이 20·호출 50), 오류 (줄, 칸, 기대한 것).
+      `infrastructure/formula_store.py`(presets/studio/formulas/*.json)·`application` 서비스·`api/routes/formulas.py`(CRUD + validate 에 formula) — **app.py 연결·화면은 monitoring-agent 에 편지로**.
+      AST 새 칸(tf·expr·pos·hold·negate)은 backtest-agent 가 만든다 — 해석기·토크나이저·문법·오류 처리는 먼저 쓰고, AST 편지가 오면 연결. 테스트: 대표 20식 = 조립기로 만든 같은 조건(신호 동일), 악성 입력 거부.
+      너는 이번이 첫 스튜디오 작업이다 — `studio/domain/conditions/` 기존 코드와 테스트부터 읽어라. 실주문 코드 무접촉.
+      공통: 설계서 `docs/02-design/features/studio-conditions.design.md` 를 먼저 읽어라(§3 전부·§8·§11.3). **미래참조 없음이 최우선** — 새 조건마다 카나리아. 기존 명세·프리셋·실행 결과·패리티(P1~P8) 무회귀.
+      파일 규칙: 새 지표는 **자기 분류 모듈**(`ind_*.py`)에 정의 + `catalog.py`·`indicators.py` 에는 등록 한 줄만(고치기 직전 다시 읽고 Edit, 전체 덮어쓰기 금지). `ast.py`·`evaluator.py`·엔진은 backtest-agent 만.
+      분봉 기본 출처 통합(AL), 실주문·KIWOOM_IS_MOCK 무접촉, git commit 금지. 그대로 믿지 말고 검증 — 설계가 틀렸으면 틀렸다고 써라.
+      보고: STATUS + `state/agent_reports/execution-agent_<날짜시각>_conditions_c5.md`.
+
+- [x] (lead 판정 2026-09-26 10:06 — backtest-agent 12:00 편지로 완료: 수식 대조 재실행·D.HIGHEST 손계산 테스트·docstring 갱신) c5 후속 — backtest-agent 가 `daily_prev` 를 "오늘 장 시작 전에 알 수 있는 값"(현재 봉을 빼는 highest/lowest 는 행 D, 나머지 D−1)으로 바꾼다는 편지가 오면: ① 수식=조립기 대조(`tests/studio/conditions/test_formula.py`)·전체 Spec 대조 다시 돌리기 ② `test_daily_prev_highest_is_literal_d_minus_1_row_value` 를 새 규칙에 맞게 고치고 도움말·예시를 `C > D.HIGHEST(H,20)` 로(바뀐 규칙 한 줄 설명), `formula.py` docstring ④ 도 갱신. 컴파일러 로직은 문자 그대로 유지(결정 확정). git commit 금지.

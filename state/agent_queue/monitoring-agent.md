@@ -141,3 +141,14 @@
 
 - [x] (**00:15 풀림 — 선행 둘 다 끝남: module-4 완료 · backtest-agent module-5 서비스 편지(2345·2450 family_hash)**) (lead 지시 2026-09-25 22:55) **module-5 화면 — 최적화 페이지(§5.4 OptimizePage) + 그리드·폴드·홀드아웃 API(§8.3 #20 GRID_TOO_LARGE 422)**
 - [x] (**07:55 풀림 — 선행 끝남: module-6 엔진(backtest 0100) · Spec `intraday.source` 칸(strategy, 28 passed) · 서비스 출처 연결(backtest). module-5 화면 다음에**) (lead 지시 2026-09-25 22:55) **module-6 화면 — 분봉·틱 탭 활성화 + 틱 정밀화 비교(결과 화면)** — **lead 정정 00:15(사용자 결정)**: 분봉 출처 선택은 **통합(AL) 기본** / KRX 는 골라 쓸 때만 — 고르면 결과·화면 상단에 "KRX 기준(NXT 제외, 거래량 20~40% 작음)" 크게. 출처별 사용 가능 기간·종목 수 표시(`/api/meta/data-ranges` 확장). 선행에 strategy-agent Spec `intraday.source` 칸 추가
+
+- [x] (lead 지시 2026-09-26 10:00, **studio-conditions c6 — 사용자 승인 "C안, 5명 병렬"**) **조건 고르기 화면·청산 규칙·수식 편집기·레시피**
+      설계 §5.4 체크리스트 전부 + §4 API(`/api/meta/indicators` 확장·`/api/meta/recipes`·수식 CRUD 연결). 지표 메타 모양은 backtest-agent 편지(IndicatorDef 새 칸)로 확정 — 그 전엔 분류 나무·검색·시간 단위 선택기 골격을 먼저.
+      분봉 모드 피연산자마다 시간 단위 선택, live 미지원·모드 미지원은 비활성+이유, 풀이 문장에 시간 단위. 청산: 분할 익절 표·익절 방식·트레일링 발동·본전·시간 청산·포지션 피연산자(c2 뒤).
+      수식 편집기(검사·오류 위치·저장·목록) — execution-agent 의 라우트를 app.py 에 연결. E2E: 레시피 "분봉 N일 신고가 돌파" → 실행 → 결과 / 수식 → 검사 → 저장 → 실행.
+      공통: 설계서 `docs/02-design/features/studio-conditions.design.md` 를 먼저 읽어라(§3 전부·§8·§11.3). **미래참조 없음이 최우선** — 새 조건마다 카나리아. 기존 명세·프리셋·실행 결과·패리티(P1~P8) 무회귀.
+      파일 규칙: 새 지표는 **자기 분류 모듈**(`ind_*.py`)에 정의 + `catalog.py`·`indicators.py` 에는 등록 한 줄만(고치기 직전 다시 읽고 Edit, 전체 덮어쓰기 금지). `ast.py`·`evaluator.py`·엔진은 backtest-agent 만.
+      분봉 기본 출처 통합(AL), 실주문·KIWOOM_IS_MOCK 무접촉, git commit 금지. 그대로 믿지 말고 검증 — 설계가 틀렸으면 틀렸다고 써라.
+      보고: STATUS + `state/agent_reports/monitoring-agent_<날짜시각>_conditions_c6.md`.
+
+- [x] (monitoring 등록 2026-09-26 10:00, 선행: backtest-agent c2 — 12:45 c2 확정 편지로 처리 완료 — Exits 새 칸) **c6 청산 고급 칸 실서버 확인** — 화면은 capabilities.exit_fields 로 저절로 켜지게 만들어 두었다(가짜 서버 시험 통과). c2 가 들어오면: ①칸 이름·모양이 화면 가정(설계서 §3.4)과 맞나 ②라이브에서 분할 익절 표 → 실행 → 결과(조각 행·진입 기준 지표) 확인 ③E2E m7 에 청산 항목 추가. 보고: STATUS + `state/agent_reports/monitoring-agent_<날짜시각>_c6_exits.md`.

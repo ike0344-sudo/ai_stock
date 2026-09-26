@@ -642,3 +642,19 @@
       2. 새 저장소 없이 되는 것부터: 필요한 열만 읽기, 격자화 벡터화, 한 번 읽은 종목-일 재사용 — **판단 로직·결과는 그대로**(전·후 거래 목록 동일 테스트)
       3. 디스크 캐시(파생 데이터)가 꼭 필요하다고 보이면 **만들지 말고 보고** — `data/` 아래 새 데이터는 허브 카탈로그·쓰기 관문 대상이라 lead·data-agent 가 정한다
       4. 재측정: 8일·36일 전·후 시간. 이득이 작으면 작다고 써라. git commit 금지. 보고: STATUS 한 줄 + 엔진 보고서 덧붙임.
+
+- [x] (완료 2026-09-26 — state/agent_reports/backtest-agent_20260926-1105_conditions_c1.md) (lead 지시 2026-09-26 10:00, **studio-conditions c1 — 사용자 승인 "C안, 5명 병렬"**) **시간 단위·새 연산자 — 분봉에서 일봉 지표 쓰기, N일 신고가 돌파**
+      1. AST: 피연산자 `tf`(bar·m1~m60·daily_prev·daily_live, 기본 bar), `expr`(산술)·`pos`(청산 전용) 종류, Condition `hold`, Group `negate`, 연산자 cross_*_within(k)·is_true/is_false (설계 §3.1)
+      2. `conditions/timeframe.py`: mN(마감된 봉만)·daily_prev(D−1)·daily_live(가상 오늘 봉, live 지표만, 거래량 계열은 krx 출처에서만) — §3.2. memo 키에 tf
+      3. **IndicatorDef 에 칸 추가**(category·definition·timing·example·live) — **제일 먼저 해서 strategy·data·monitoring 에 편지**(그들이 이 모양으로 정의·표시한다)
+      4. 검증: 모드별 tf 허용·live 미지원·pos 진입 금지 오류 문구. 카나리아 C5·C6. 레시피 프리셋 "분봉 N일 신고가 돌파"(`C > D.HIGHEST(H,20)` 에 해당) + SC-C1·C2 실측
+      끝나면 execution-agent(수식)·monitoring-agent(화면)에 AST 모양 편지. 이어서 큐의 c2(청산 확장).
+      공통: 설계서 `docs/02-design/features/studio-conditions.design.md` 를 먼저 읽어라(§3 전부·§8·§11.3). **미래참조 없음이 최우선** — 새 조건마다 카나리아. 기존 명세·프리셋·실행 결과·패리티(P1~P8) 무회귀.
+      파일 규칙: 새 지표는 **자기 분류 모듈**(`ind_*.py`)에 정의 + `catalog.py`·`indicators.py` 에는 등록 한 줄만(고치기 직전 다시 읽고 Edit, 전체 덮어쓰기 금지). `ast.py`·`evaluator.py`·엔진은 backtest-agent 만.
+      분봉 기본 출처 통합(AL), 실주문·KIWOOM_IS_MOCK 무접촉, git commit 금지. 그대로 믿지 말고 검증 — 설계가 틀렸으면 틀렸다고 써라.
+      보고: STATUS + `state/agent_reports/backtest-agent_<날짜시각>_conditions_c1.md`.
+
+- [x] (lead 지시 2026-09-26 10:00, studio-conditions c2 — 선행 c1) **청산 확장 — 포지션 조건·분할 익절·트레일링 발동·본전·시간 청산**
+      설계 §3.3 포지션 표·§3.4. 보유 종목별 봉 t 평가(나머지 피연산자는 미리 계산한 표), 분할 조각 기록(entry_id·slice)·**진입 기준 승률**, C7, SC-C7 손계산. c1 끝나면 [ ] 로 바꾸고 시작.
+
+- [x] (lead 지시 2026-09-26 10:05 — **c2 보다 먼저, 작게**) **c1 보정: `daily_prev` = "오늘 장 시작 전에 알 수 있는 값"** — 편지 `20260926-1005_lead_c1_판정.md` 1번 그대로. 끝나면 execution-agent 에 편지, c2 계속.

@@ -107,3 +107,16 @@
       2. 풀이 문장: `krx` 면 "KRX 분봉 기준 — NXT 체결이 빠져 거래량·거래대금이 통합보다 20~40% 작다" 한 줄
       3. 프리셋은 `al` 그대로(바꾸지 마라). 테스트: 기본값 al · krx 선택 시 키·메시지 · 옛 명세(칸 없음) 로드 = al
       끝나면 STATUS 에 "테스트 준비됨: <경로>" — lead 가 돌리고, 결과가 통과면 backtest-agent 가 서비스에 연결한다. git commit 금지.
+
+- [x] (lead 지시 2026-09-26 10:00, **studio-conditions c3 — 사용자 승인 "C안, 5명 병렬"**) **지표 카탈로그 — 가격·이평·신고가 / 보조지표 / 캔들**
+      설계 §3.3 의 `ind_trend.py`·`ind_oscillator.py`·`ind_candle.py` 표 전부(기존 ✔ 는 그대로 두고 새 것만). 지표마다: 정의 식·파라미터 범위·시점·지원 모드·live 여부(IndicatorDef 새 칸 — backtest-agent 편지 기다리되, 계산 함수는 먼저 써도 된다).
+      일목 선행스팬은 "t 에서 보이는 구름 = t−26 에 계산된 값"(미래참조 금지), 상한가는 호가 반올림. 테스트: 지표마다 손계산 기대값 + live 지원 지표는 "가상 봉 재계산 = 점화식 값" 대조.
+      너는 Bash 가 없다 — 테스트 파일을 다 쓰면 STATUS 에 "테스트 준비됨: <경로>" (lead 가 돌린다). 분류 하나 끝날 때마다 알려도 된다(한꺼번에 몰지 말 것).
+      공통: 설계서 `docs/02-design/features/studio-conditions.design.md` 를 먼저 읽어라(§3 전부·§8·§11.3). **미래참조 없음이 최우선** — 새 조건마다 카나리아. 기존 명세·프리셋·실행 결과·패리티(P1~P8) 무회귀.
+      파일 규칙: 새 지표는 **자기 분류 모듈**(`ind_*.py`)에 정의 + `catalog.py`·`indicators.py` 에는 등록 한 줄만(고치기 직전 다시 읽고 Edit, 전체 덮어쓰기 금지). `ast.py`·`evaluator.py`·엔진은 backtest-agent 만.
+      분봉 기본 출처 통합(AL), 실주문·KIWOOM_IS_MOCK 무접촉, git commit 금지. 그대로 믿지 말고 검증 — 설계가 틀렸으면 틀렸다고 써라.
+      보고: STATUS + `state/agent_reports/strategy-agent_<날짜시각>_conditions_c3.md`.
+      **[2026-09-26 완료]** 63종 구현·테스트 작성(실행은 lead 대기). 상세: `state/agent_reports/strategy-agent_20260926-1130_conditions_c3.md`
+
+- [x] c3 후속 ① `daily_live` 켜기 — backtest-agent c1 편지(1010)로 `timeframe.LiveBars` 서명 확정 → 구현 완료(2026-09-26, 실행은 lead 대기): 각 `ind_*.py` 에 `LIVE` 점화식 함수 46종(가격·이평·신고가 16 / 보조지표 15 / 캔들 15) 등록·`live=True`, 테스트 `tests/studio/conditions/test_ind_live.py`(재계산 대조 + 미래참조 카나리아). 상세: `state/agent_reports/strategy-agent_20260926-1130_conditions_c3.md` "후속" 절.
+- [>] c3 후속 ② `rel_strength`(상대강도, 지수 연결) — **선행: backtest-agent c1 의 market/지수 연결.** 편지가 오면 `[ ]` 로 되돌려 시작.

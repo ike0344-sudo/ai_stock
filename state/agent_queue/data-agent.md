@@ -382,3 +382,18 @@
       4. `backtesting/orderbook_collector.py`·`orderbook_parser.py`(2~10단 미확인)를 쓸지, 월요일 첫날은 몇 종목·몇 분으로 시험할지
       5. 위험 표: 소피증권·8765·나스닥 감시에 주는 영향과 막는 방법
       **아무것도 켜지 말고 수집도 하지 마라**(WS 연결 시험도 사용자 승인 뒤). git commit 금지. 보고: `state/agent_reports/data-agent_<날짜시각>_orderbook_plan.md` + STATUS 한 줄.
+
+- [x] (lead 지시 2026-09-26 10:00, **studio-conditions c4 — 사용자 승인 "C안, 5명 병렬"**) **거래량·순위·테마·업종·분봉/틱 전용 조건**
+      설계 §3.3 의 `ind_volume.py`·`ind_group.py`·분봉 전용(`intraday.py` 확장)·틱 전용(`tick.py` 확장) 표 + `infrastructure/reference_data.py`(테마 그룹·업종 구성 — 카탈로그 경로, domain 엔 dict 로 주입).
+      top_value_count(최근 n일 대금 상위 m 진입 횟수)는 사용자 테마 점수 기준과 같은 계산인지 확인해 적어라. 테마·업종은 현재 구성 — 결과 경고 문구 제공. 테스트: 손계산 + 카나리아.
+      공통: 설계서 `docs/02-design/features/studio-conditions.design.md` 를 먼저 읽어라(§3 전부·§8·§11.3). **미래참조 없음이 최우선** — 새 조건마다 카나리아. 기존 명세·프리셋·실행 결과·패리티(P1~P8) 무회귀.
+      파일 규칙: 새 지표는 **자기 분류 모듈**(`ind_*.py`)에 정의 + `catalog.py`·`indicators.py` 에는 등록 한 줄만(고치기 직전 다시 읽고 Edit, 전체 덮어쓰기 금지). `ast.py`·`evaluator.py`·엔진은 backtest-agent 만.
+      분봉 기본 출처 통합(AL), 실주문·KIWOOM_IS_MOCK 무접촉, git commit 금지. 그대로 믿지 말고 검증 — 설계가 틀렸으면 틀렸다고 써라.
+      보고: STATUS + `state/agent_reports/data-agent_<날짜시각>_conditions_c4.md`.
+
+- [x] (**취소 10:05 — 사용자: "수급 공매도는 없어도 될 거 같아". 하지 마라**) (lead 지시 2026-09-26 10:00, studio-conditions c7) **외국인·기관·개인 순매수, 공매도 과거 자료 견적**
+      어떤 키움 TR/KRX 경로로 종목별 **일별 과거**를 받을 수 있는지(기간 한계), 전 종목·N년 받는 요청 수·시간(계정 단위 한도 실측 기준), 용량, 허브 데이터셋 안(카탈로그·잠금·일정), 매일 증분 방법.
+      REST 는 스키마 확인용 몇 건만(주말). 결과는 표로 → 사용자 결정. 보고: `state/agent_reports/data-agent_<날짜시각>_flows_short_estimate.md`.
+
+- [~] (lead 지시 2026-09-26 13:15, 작게) **`test_handler_reports_waiting_lock` 가끔 실패 고치기** — module-2 점검 G2-4("원인 불명 1회")가 오늘 전체 스위트(1,725건, 3분)에서 다시 실패, 단독 6회는 전부 통과 → **부하 때 시간에 기대는 테스트**로 보인다.
+      전체 스위트나 CPU 부하를 걸고 재현 → 붙여 둔 진단 메시지로 원인 확인 → 고정 대기(sleep) 대신 "조건이 될 때까지 기다리되 상한" 식으로 결정적으로. 고친 뒤 단독 10회 + 부하 5회 + 전체 스위트 1회 통과. 제품 코드 문제면 그쪽을 고치고 보고. git commit 금지. 보고: STATUS 한 줄.
