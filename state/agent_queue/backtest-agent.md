@@ -484,3 +484,161 @@
       (test_risk_manager 동시쓰기, test_sophie_feed_monitor 폴링루프)는 내가 건드린
       모듈을 import조차 안 해 구조적으로 무관 —
       state/agent_reports/backtest-agent_20260910-174132_lookahead_guard.md
+
+- [x] (완료 2026-09-25 — state/agent_reports/backtest-agent_20260925-1800_studio_engine.md) (lead 지시, **사용자 승인 2026-09-25 "다른 에이전트로 같이 시작해"**) **백테스트 스튜디오 module-3 (엔진 쪽) — 새 일봉 엔진 + 호환 모드 + 패리티**
+
+      설계서: `docs/02-design/features/backtest-studio.design.md` — **§3 전체(특히 §3.1 엔티티 · §3.5 체결 규칙 ·
+      §3.6 호환 모드 · §3.8 지표), §8.7 패리티, §8.8 카나리아, §9.3 import 규칙**을 먼저 읽어라.
+      Plan: `docs/01-plan/features/backtest-studio.plan.md` (v0.4). B안(새로 짓기) — 사용자 선택.
+
+      **왜**: 백테스트 GUI 용 새 엔진(손절·익절·트레일링·보유기간·사이징·현금·일별 평가)을 짓는다.
+      가장 큰 위험은 **새 엔진 숫자가 네가 19번 돌린 기존 연구와 어긋나는 것** — 그래서 호환 모드가
+      기존 `simulator.run` + `metrics.compute` 와 거래·지표까지 똑같이 나와야 한다(깨지면 머지 금지).
+
+      **분담 (파일이 안 겹치게 나눴다)**
+      - **너(backtest-agent)**: `studio/__init__.py`(ENGINE_VERSION="0.1.0") · `studio/domain/__init__.py` ·
+        `studio/domain/models.py`(§3.1 — **제일 먼저 만들어라**, strategy-agent 가 `Panel` 속성 이름에 맞춰 짠다) ·
+        `market_rules.py` · `costs.py` · `engine/fills.py` · `engine/portfolio.py` · `engine/compat.py` · `metrics.py` ·
+        `tests/studio/domain/`·`tests/studio/parity/` 중 네 몫
+      - **strategy-agent**: `studio/domain/spec.py` · `studio/domain/conditions/*` · `narration.py` ·
+        `studio/infrastructure/legacy_strategies.py` · `presets/studio/*` — **이 파일들은 만들지도 고치지도 마라.**
+        엔진은 Spec 을 몰라도 된다: 엔진 입력은 네가 정의하는 규칙 dataclass(체결·비용·청산·배분) +
+        진입/청산 bool 표(index=날짜, columns=종목코드) 또는 호환 모드의 Signal 시계열이다.
+        Spec → 엔진 규칙 연결(`backtest_service`)은 둘 다 끝난 뒤 lead 가 따로 넣는다.
+
+      **할 일**
+      1. `models.py`(§3.1 그대로: ExitReason · Panel · Position · Fill · Trade · BacktestResult) → STATUS 에 "models 완료" 한 줄
+      2. `market_rules.py`(상하한가 ±30%·여유 0.5% · KRX 호가단위 · 정규장 시각), `costs.py`(CostModel: rate/ticks/max_rate_tick,
+         `round_trip_pct`) — **P4**: `t0_forward_return.round_trip_cost_pct` 와 가격 1,000~1,000,000 격자 1e-12 일치
+      3. `engine/fills.py` + `engine/portfolio.py` — §3.5 표의 봉 안 순서 1~9 그대로(갭 · 봉 안 손절/익절 · 같은 봉 정책 ·
+         트레일링은 판정 **뒤** 갱신 · 보유기간 종가 청산 · 상하한가 매수 취소/매도 이월 · 거래량 한도 · 사이징 4종 · 우선순위 ·
+         현금·슬롯 · 일별 MTM · `skipped` 사유별 · 데이터 끝 청산)
+      4. `engine/compat.py` — §3.6 규칙 1~9 **줄 단위로** 재현 + `legacy_slots`
+         - **P1**: 호환 모드 vs `backtesting.simulator.run` — ma_crossover(5/20)·rsi(14/30/70)·new_high_swing(20) ×
+           실제 20종목 고정 구간 + 합성 모서리(상하한가 잠김 이월 · force_eod_close · 끝까지 미청산) → 거래 목록 동일(1e-9)
+         - **P2**: 기존 CLI 기준 지표 6개 vs `metrics.compute` (1e-9)
+         - **P3**: `legacy_slots` vs `portfolio_sim.simulate_slot_portfolio` — final_capital·채택/건너뜀 집합 동일
+         - 신호는 기존 전략 클래스의 `evaluate()` 결과를 그대로 넣어라(조립기는 strategy-agent 몫, P6 은 그쪽)
+         - 실데이터 테스트는 `@pytest.mark.parity`, 데이터 없으면 skip
+      5. `metrics.py` — §3.8 표준 지표(일별 평가 기준) + 기존 CLI 기준 지표(P2 정의 그대로)
+      6. **카나리아 C1**(일봉 t 이후 ×10 → t 이하 신호·t+1 이하 체결 불변) — 엔진이 미래 봉을 안 보는지
+      7. `studio.domain` import 규칙 검사(§9.3: os/io/subprocess/psutil/fastapi/backtesting 등 금지) — 테스트 파일로
+      8. 성능 실측: 전 종목 × 5년 일봉 포트폴리오(단순 신호로) — 목표 ≤ 30초(§8.9), 실측값 보고
+
+      **읽기 전용 참고**: `backtesting/{simulator,metrics,portfolio_sim,types}.py`, `t0_forward_return.py`, `strategies/*`,
+      `backtesting/daily_cache.load_daily_all`(실데이터 로드). **기존 `backtesting/*.py` 는 수정하지 마라.**
+      data-agent 가 지금 `datahub/`·수집기들을 고치는 중이다 — 그 파일들은 건드리지 마라.
+
+      **"그대로 믿지 말고 검증해라. 내 설계(§3.5·§3.6)가 기존 코드와 다르거나 틀렸으면 틀렸다고 해라."**
+      패리티가 안 맞으면 엔진을 억지로 맞추기 전에 **어느 쪽 규칙이 옳은지부터 보고**해라.
+      git commit 금지(사람이 한다). 보고: 시작·models 완료·50%·끝에 STATUS.md 자기 행,
+      자세한 건 `state/agent_reports/backtest-agent_<날짜시각>_studio_engine.md`.
+
+- [x] (완료 2026-09-25, 보고서 갱신) (lead 판정 2026-09-25, 네 결정요청 답) **거래량 한도를 전 봉(신호 봉) 거래량 기준으로 바꿔라 — 옵션 말고 유일 규칙으로**
+
+      네 지적이 맞다: 시가 체결 시점엔 체결 봉 전체 거래량을 모른다(설계서 §3.5 가 틀렸다, 이미 고쳤다 —
+      "수량 ≤ 전 봉(신호 봉) 거래량 × volume_cap_pct%"). 미래참조를 기본값으로 둘 이유가 없어 옵션도 만들지 않는다.
+      1. `engine/fills.py`(또는 portfolio 쪽 해당 자리) 거래량 한도를 전 봉 거래량으로. 첫 봉(전 봉 없음)은 한도 판정 불가 →
+         그 봉 진입은 `skipped.volume_cap` 가 아니라 **체결 허용**(알 수 없는 값으로 막지 않는다 — 기존 전일종가 NaN 규칙과 같은 원칙)
+         인지, 막을지는 네 판단으로 정하고 보고서에 적어라.
+      2. 카나리아 추가: 체결 봉 거래량만 바꿔도(×0.01, ×100) 체결·수량 불변.
+      3. 네 보고서 §"설계서와 다른 곳" 4번에 "lead 판정: 전 봉 기준으로 변경" 한 줄 추가.
+      `pytest tests/studio` 통과 확인. 보고: STATUS.md 자기 행 한 줄 + 보고서 갱신. git commit 금지.
+      나머지 "네가 정한 것" 목록은 lead 가 검토해 설계서 §3.5 "구현에서 확정한 세부 규칙" 표로 수용했다 — 더 할 것 없음.
+
+- [x] (완료 2026-09-25 — state/agent_reports/backtest-agent_20260925-2000_studio_service.md) (lead 지시 2026-09-25, module-3 마무리 — 사용자 승인 범위) **조립기 → 엔진 연결: `backtest_service` + `market_data`(일봉) + `run_store`**
+
+      엔진(네 몫)·조건식(strategy-agent 몫) 둘 다 끝났다(`pytest tests/studio` 195 passed, 전 종목×5년 평가+엔진 5.7초).
+      이제 Spec 하나로 끝까지 도는 길을 잇는다. 설계서 §2.2(e) 흐름, §3.2 Spec, §3.3 저장 형식, §3.7 지표 계산 규칙,
+      §9.3 계층 규칙(application 은 infrastructure 를 모른다 — 포트로만)을 먼저 읽어라.
+
+      **만들 것**
+      1. `studio/application/ports.py` — `MarketData` Protocol(일봉 패널 로드(기간+워밍업 봉), 지수 프레임, 종목 정보
+         (이름·업종·시장), 데이터 범위(`validate_against` 용)), `RunStore` Protocol(저장·조회)
+      2. `studio/infrastructure/market_data.py` — 일봉은 `backtesting.daily_cache.load_daily_all`, 지수는
+         `data/index/daily/001·101.csv`, 이름 `data/stock_names.json`, 업종 `data/sectors.csv`, 시장은
+         `kospi-theme-engine/(dist/)data/reference/universe.csv` 의 market 열. **경로는 `datahub.catalog.path()` 로**
+         (data-agent 가 만든 카탈로그가 있다 — 없는 데이터셋 id 면 보고)
+      3. `studio/application/backtest_service.py` — `run_backtest(spec, market_data, progress=None)`:
+         - `bind_params` → `validate_against`(오류면 예외, 경고는 결과에 붙임)
+         - 유니버스 마스크(전체 / 거래대금 상위 N = `value_rank` t 기준 / 종목 지정 / 시장 / 제외: 스팩(이름 "스팩")·
+           우선주(이름 끝 우·우B 등)·초대형주(`data_exclude.MEGA_CAP_EXCLUDE`))
+         - 조건식은 **워밍업 봉까지 포함해 평가**하고 **진입은 기간 안에서만**(기간 시작 전 봉으로 체결하지 않게)
+         - builder → `evaluate` / legacy → `legacy_strategies` 어댑터(BUY→진입, SELL→청산 표)
+         - 모드: `daily_single`·`daily_portfolio` (+ `compat.legacy` 면 `run_compat` + 기존 CLI 기준 지표). intraday·tick 은 module-6 —
+           명확한 예외로 거절
+         - Spec → `CostModel`·`ExitRules`·`FillRules`·`PortfolioRules` 변환 한 곳
+         - 결과 = 엔진 결과 + 표준 지표 + (호환이면) 기존 CLI 지표 + 경고 목록(표본 부족 <30건, 생존편향, 거래대금 KRX 근사
+           — value/value_rank 를 썼을 때, 데이터가 기간보다 먼저 끝난 종목 수)
+      4. `studio/infrastructure/run_store.py` — `results/studio/<run_id>/` 에 spec.json · meta.json(엔진 버전, git 커밋·dirty,
+         데이터 범위, spec_hash, structure_hash(파라미터 값 뺀 구조), 경고, 소요 시간) · summary.json · trades.parquet · equity.parquet.
+         run_id 형식 `YYYYMMDD-HHMMSS-xxxxxx`. tmp + 교체. `results/studio/` 는 .gitignore 에 추가.
+      5. 테스트
+         - **SC-4(플랜 성공기준)**: 프리셋 `golden_cross_5_20` 을 `daily_single` + 호환 모드로 `run_backtest` 에 넣은 결과가
+           같은 종목·기간의 `simulator.run(MovingAverageCrossover 5/20)` + `metrics.compute` 와 거래·지표 1e-9 일치 — 실제 3종목, `@pytest.mark.parity`
+         - 포트폴리오 스모크(합성 패널) · 워밍업(기간 시작 전 체결 0건) · 유니버스 제외 규칙 · run_store 왕복(저장 → 읽기 동일)
+         - 서비스 경유 카나리아(기간 끝쪽 변조 → 앞쪽 거래 불변)
+      6. 계층 규칙 검사에 application→infrastructure import 금지 추가(없으면)
+
+      **하지 말 것**: `backtesting/*.py`·`datahub/*`·조건식 파일 수정(필요하면 편지로 요청), 서버·화면(module-2/4), git commit.
+      보고: 시작·끝에 STATUS.md 자기 행, 자세한 건 `state/agent_reports/backtest-agent_<날짜시각>_studio_service.md`.
+      **"그대로 믿지 말고 검증해라"** — Spec 필드가 엔진 규칙에 1:1 로 안 맞는 게 있으면 억지로 끼우지 말고 보고해라.
+
+- [x] (완료 2026-09-25) (lead 지시 2026-09-25, module-3 점검 G3-2 — 사용자 "지금 모두 수정") **`git_info.py` 인코딩 수정**
+      `subprocess.run(..., text=True)` 가 git 출력을 cp949 로 읽어, 수정 파일 목록에 한글 경로가 있으면 디코딩 실패 →
+      meta.json `dirty` 가 늘 None 이 된다(lead 가 `pytest tests/studio` 경고로 확인). `encoding="utf-8", errors="replace"` 로 고치고,
+      한글 경로가 있는 저장소에서도 commit·dirty 가 채워지는 테스트 추가(임시 git 저장소 + 한글 파일명).
+      `datahub.catalog.path("index")` 우회는 **data-agent 가 카탈로그를 고친 뒤** 제거한다 — 지금 고쳐졌는지 확인해서
+      고쳐졌으면 우회 제거, 아니면 그대로 두고 보고. 보고: STATUS.md 한 줄. git commit 금지.
+
+- [x] (완료 2026-09-25 — state/agent_reports/backtest-agent_20260925-2345_module5_validation.md) (lead 지시 2026-09-25 22:45, **module-5 검증 — 사용자 승인 "module-2 끝나면 4~6 바로"**) **그리드·워크포워드·홀드아웃·견고성 — 도메인·서비스·작업 처리기**
+      설계서 §3.8(전부)·§3.3(grid.parquet·folds.json·holdout_ledger.json)·§3.2(`params`·`validation`·숫자 칸 `{"param":..}`)·§2.4.6 CPU 줄·§8.3 #20·§8.9(그리드 100조합 ≤5분), 계획서 BT-10~12·SC-6 을 먼저 읽어라.
+      1. `studio/domain/validation.py` — 거래일 달력(`datahub.calendar` 는 infrastructure 경유로 주입) 기준 분할: IS/OOS · 홀드아웃(기본 마지막 20% 거래일, 최적화 범위에서 제외) ·
+         워크포워드 폴드(학습·검증·이동 거래일, 롤링/누적) · 검증 구간만 이은 곡선 · WFE · 사전 판정 기준(실행 전 입력 → 통과/기각, 실행 뒤 수정 불가)
+      2. `studio/domain/robustness.py` — 비용 ×{0,0.5,1,1.5,2,3} 순수익·손익분기 배수 · 몬테카를로(거래 순수익률 복원추출 1,000회, 시드 42 → 최종수익·MDD 5/50/95%, MDD>30% 확률, "겹친 보유 무시 근사" 표시) ·
+         집중도(기여 상위 1·2·3 종목/날짜 제외 순손익 + 부호 반전). **일반 백테스트 결과 summary.robustness 에도 넣는다**(결과 화면이 쓴다 — §4.2 `GET /api/runs/{id}`)
+      3. 그리드: 조합 ≤5,000(초과 → `GRID_TOO_LARGE`, 500 초과 경고) · 목표 지표 sharpe/cagr/calmar/profit_factor/expectancy + 최소 거래 30 · 이웃 안정성(한 칸 옆 중앙값÷최고, <0.5 경고) ·
+         **후보 선택은 IS 로만**(OOS·홀드아웃을 보고 고르면 검증이 아니다) · 병렬 수 = 소피증권 가동 시간 `cpu//4`, 야간 `cpu//2`(정책 함수 주입, BELOW_NORMAL)
+      4. 홀드아웃: `holdout_check` 작업으로만 연다, `results/studio/holdout_ledger.json` 에 `structure_hash` 별 열람 기록, 두 번째부터 경고(막지는 않음). 네가 정의한 structure_hash 가 여기서 맞는지 판단해 보고
+      5. `studio/application/optimize_service.py` + 처리기 `studio.application.jobs:run_optimize_job`·`run_walkforward_job`·`run_holdout_check_job`(허용 접두사 그대로), 진행률·협조 취소, 저장은 run_store(grid.parquet·folds.json)
+      6. 테스트: 분할 경계(휴장일 포함 달력) · IS 만으로 선택(OOS 를 바꿔도 선택 불변 — 카나리아) · 홀드아웃 두 번째 경고 · 몬테카를로 시드 재현 · 비용 0 배수에서 비용 전 수익과 일치 · GRID_TOO_LARGE · 실측(실데이터 그리드 100조합 시간)
+      API 라우트·최적화 화면은 monitoring-agent 몫(module-4 뒤) — 서비스 함수 서명과 오류 코드를 끝날 때 **monitoring-agent 에 편지**로.
+      공유 파일(`run_store.py`·`wiring.py`·`application/jobs.py`)은 monitoring-agent 도 고친다 — **고치기 직전에 다시 읽고, 전체 덮어쓰기(Write) 금지, Edit 로 필요한 부분만**.
+      그대로 믿지 말고 검증해라 — 설계서가 틀렸으면 틀렸다고 써라. 실데이터 예시 결과가 나쁘면 나쁘다고 써라(성과 주장 아님). git commit 금지.
+      보고: STATUS.md + `state/agent_reports/backtest-agent_<날짜시각>_module5_validation.md`.
+
+- [x] (완료 2026-09-26 — 직렬 217.8→98.3초·4워커 85.0→53.1초, 표 동일, 보고서 덧붙임) (lead 지시 2026-09-25 23:15, module-5 후속 — 병목 원칙 "측정→고치기→재측정") **지표 memo 연결 + 그리드 재측정**
+      strategy-agent 가 네 제안(2340)대로 `compute`·`evaluate_group`·`evaluate` 에 `memo` 인자를 넣었다(lead 실행 test_memo·evaluator·P6 62 passed). `RunContext` 에서 `context.cache["indicator_memo"]` 를 넘겨라(한 Panel 전용).
+      재측정: 그리드 100조합 직렬·4워커 — 전·후 시간, **그리드 표 전·후 완전 동일**(assert_frame_equal). 이득이 없으면 없다고 써라. 보고: STATUS 한 줄 + module-5 보고서 덧붙임.
+
+- [x] (완료 2026-09-26 — state/agent_reports/backtest-agent_20260926-0130_grid_memory_cap.md) (lead 지시 2026-09-25 23:10 — **안전, module-6 엔진보다 먼저**) **그리드 병렬 수에 메모리 상한**
+      23:05 네 `perf_grid.py 4`(워커 4개 × 0.65~0.93GB) 도는 동안 이 PC 의 **커밋 여유가 2.4GB 까지 떨어졌다**(물리 32GB 중 여유 4.4GB, Claude 세션 8개·소피증권·8765·나스닥 감시 상주).
+      Claude Code 가 메모리 부족으로 lead 의 백그라운드 작업 3개를 강제 종료했다. 야간 정책은 `cpu//2` = **8워커**라 그대로 두면 커밋이 바닥나 **나스닥 감시·8765 가 할당 실패로 죽을 수 있다**.
+      1. `studio/infrastructure/wiring.py:31` 의 워커 수 = `min(정책 cpu 워커, (psutil 가용 메모리 − 예비 6GB) ÷ 워커당 메모리)`, 최소 1. 워커당 메모리는 **실측값**(패널 크기 기반 추정 + 여유)
+      2. 가용 메모리가 예비보다 작으면 직렬로 돌고 결과 경고에 "메모리 부족으로 직렬" 한 줄
+      3. 테스트: 가짜 메모리 값으로 워커 수 계산 · 실측: 워커 1개가 실제로 차지하는 메모리(피크)
+      측정용 스크립트도 이 상한을 따르게 하거나, 수동 측정 때는 예비를 확인하고 돌려라. git commit 금지. 보고: STATUS 한 줄.
+
+- [x] (완료 2026-09-26 — state/agent_reports/backtest-agent_20260926-0100_module6_engine.md) (lead 지시 2026-09-25 22:45, module-6 엔진 — 선행 끝남 23:15: module-5 수용 · data-agent 로더 편지 2250·2320) **분봉 단타 엔진 + 틱 모드 A·B**
+      `studio/domain/engine/intraday.py`: 2단계(일봉 D−1 거래대금 상위 N 사전 필터 → 분봉 신호), 봉 t 까지·일봉 피연산자 D−1, `eod_time` 15:20 종가 청산(§3.5 7번).
+      `studio/domain/engine/tick.py`: **모드 A** = 분봉 신호의 체결을 체결 데이터로 정밀화(매매별 분봉 체결가 vs 틱 체결가 차이 = SC-7), **모드 B** = 틱 조건 진입(쿨다운·갭시작 +5% 제외·시간 손절·15:19:59 청산, 진입은 신호 초 s **다음** 체결).
+      backtest_service 의 `ModeNotSupportedError` 해제. 카나리아 C3(분봉 k 이후+당일 일봉 변조 → k 이하 신호 불변)·C4(틱 s 이후 변조 → s 이하 불변, 진입가는 s 뒤). 성능 §8.9(60거래일×상위 30 ≤60초).
+      조건식(분봉 지표·틱 조건)은 strategy-agent, 로더는 data-agent — 둘의 편지를 받고 시작. 보고: `state/agent_reports/backtest-agent_<날짜시각>_module6_engine.md`.
+      lead 추가(23:15): ① **분봉 보관 기간이 종목마다 다르다**(005930 은 08-24~) → `strict=False`·`minute_coverage` 로 받되 조용히 줄이지 말고 "쓴 (날짜,종목) 쌍 / 기대 쌍"과
+      "분봉 짧은 표본" 경고를 결과에 ② 분봉 `value`=종가×거래량 근사 → "거래대금 근사" 경고에 분봉 포함 ③ 체결 파일 40% 에 시각 어긋남(로더가 `to_grid` 식 안정 정렬) → 틱 결과 경고에 한 줄
+      ④ 15:30 종가 단일가 봉은 끝 라벨 15:35 — `eod_time` 15:20 청산과 겹치지 않는지 테스트
+
+- [x] (완료 2026-09-26 — module-6 보고서 덧붙임) (**00:35 풀림 — strategy-agent Spec 칸 lead 실행 28 passed, 전체 studio+jobrunner 612 passed**) (lead 지시 2026-09-26 00:15 — **사용자 결정 "통합 기본 + KRX 선택"**) **분봉 출처를 Spec 에서 받기 — 기본 통합(AL), KRX 는 선택**
+      (아래 23:50 원문의 "기본 krx" 는 **폐기**. 네 배관 `LocalMarketData(minute_source=)` 는 그대로 쓰고, 서비스가 `spec.intraday.source` 를 넘긴다. 기본 al, krx 경고는 네가 만든 문구 유지.)
+      (원 지시 2026-09-25 23:50) **분봉 엔진 데이터 출처 선택**
+      사용자 지적: 과거 분봉은 `data/stocks/minute`(KRX, 2025-07~)에 이미 있다 — 통합 보관소(1~2개월)만 쓰면 분봉 결과가 얇다. 다시 받지 않는다.
+      Spec `intraday.source: "krx" | "al"`(기본 `krx`) → 서비스·엔진이 그 출처로 읽고, meta 에 출처·종목별 사용 기간 기록, `krx` 면 경고 "NXT 체결 제외 — 2025-03 이후 거래량·거래대금 낮게 잡힘".
+      틱 모드 A(정밀화)는 체결이 통합이라 출처가 섞인다는 것도 경고에. 기존 테스트·카나리아 유지. 보고: STATUS 한 줄 + module-6 보고서 덧붙임.
+
+- [x] (완료 2026-09-26 — 36일 127.0→18.1초(7.0×), 거래 목록 동일, 엔진 보고서 덧붙임) (lead 지시 2026-09-26 08:25 — module-6 엔진 수용 후속, 병목 원칙 "측정→고치기→재측정") **틱 모드 B 체결 읽기 병목 줄이기**
+      엔진 보고서(0100) 수용: 세션 규칙·C3·C4·지수 D−1 카나리아·모드 A 사후 정밀화(2차 효과 미반영 경고)·모드 B 근사 경고 — 전부 결과에 표시되는 조건으로 수용.
+      남은 병목: 모드 B 8거래일×173종목 40.8초, 대부분 "종목-일 parquet 읽기·격자화"(36일이면 약 3분 추정).
+      1. 먼저 **프로파일로 나눠 재라**(읽기 / 격자화 / 신호 / 시뮬레이션 비율)
+      2. 새 저장소 없이 되는 것부터: 필요한 열만 읽기, 격자화 벡터화, 한 번 읽은 종목-일 재사용 — **판단 로직·결과는 그대로**(전·후 거래 목록 동일 테스트)
+      3. 디스크 캐시(파생 데이터)가 꼭 필요하다고 보이면 **만들지 말고 보고** — `data/` 아래 새 데이터는 허브 카탈로그·쓰기 관문 대상이라 lead·data-agent 가 정한다
+      4. 재측정: 8일·36일 전·후 시간. 이득이 작으면 작다고 써라. git commit 금지. 보고: STATUS 한 줄 + 엔진 보고서 덧붙임.

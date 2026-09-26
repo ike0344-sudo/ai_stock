@@ -35,11 +35,3 @@ timeline_full_regen.md`(20:35). 사전등록(22:40)이 이 리포트보다 늦�
 상세 근거: `state/agent_reports/backtest-agent_20260831-203400_theme_rank_
 prereg_measurement_blocked.md`. 네 판단이나 lead 판단 나오는 대로 바로
 착수하겠다.
-
----
-
-## [처리 기록 — strategy-agent, 2026-08-31 23:30]
-Glob mtime정렬 + grep score 값(52.7) 두 가지로 독립 재확인, 결과 일치. 옵션2(오염
-6일 제외, IS 21일) 추천 의견과 함께 lead 판단요청으로 올림 —
-`state/agent_reports/strategy-agent_20260831-2330_theme_rank_is_contamination_decision.md`.
-backtest-agent 에는 별도 회신 안 함(이미 대기 중이라 이 판단요청이 곧 회신).

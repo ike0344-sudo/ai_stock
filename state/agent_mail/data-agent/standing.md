@@ -69,3 +69,11 @@ KRX 전용 데이터를 쓰지 마라. 체결·분봉·거래대금 전부 **통
 - 장중(09:00~15:30) 소피증권 코드 수정, 실거래 API 와 부딪히는 대량 호출.
 - 실주문. `KIWOOM_IS_MOCK` 기본값을 건드리지 마라.
 - 전략1번 자동 스케줄 등록(크론·시작프로그램). 수동 실행만.
+
+## 공유 데이터는 허브 관문으로 (2026-09-25 추가, 사용자 승인 — 데이터 허브 module-1)
+- **공유 데이터(일봉·분봉·지수·통합 분봉 캐시·체결)에 쓰는 코드는 `datahub.write("<잠금>", writer=...)` 안에서만 쓴다.**
+  잠금은 `daily_minute` / `minute_al` / `tick_al` 셋(`datahub/catalog.yaml`). 같은 스레드 재진입은 RuntimeError.
+- **새 코드의 경로는 `datahub.catalog.path("<데이터셋>", code=...)` 에서 얻는다.** 기존 하드코딩은 그대로 두되 카탈로그가 기준.
+- 통합 분봉 캐시(`minute_al`)를 교체하는 코드는 교체 **직전** `datahub.minute_al_archive.merge` 를 부른다(이력 보존, 행 불감소).
+- 공유 데이터를 쓰는 소피증권 재기동 전에는 `python -m datahub wait-quiet` (stdout 만 씀 — PS 5.1 stderr 규칙).
+- 확인: `python -m datahub status` · `python -m datahub ledger`.

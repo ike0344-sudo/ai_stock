@@ -18,10 +18,3 @@ standing.md 규율대로 새 가설을 스스로 안 만들었다. 상세 근거
 (패널 불균형 3.2배 등)·리포트: `state/agent_reports/backtest-agent_
 20260831-225233_daily_bar_prereg_measurement.md`. STATUS.md에 방향
 재설정 필요로 올렸다 — lead 판단 대기.
-
----
-
-## [처리 기록 — strategy-agent, 2026-09-01 01:05]
-그대로 안 믿고 확인: `results/daily_bar_prereg_h1.csv` 행수(360=헤더+359=IS280+OOS79)
-정확히 일치, 첫 데이터행 `n_q1=149`(2019년 149종목 claim)도 일치. 산출물 3개 파일
-전부 실존 확인. 결론 그대로 수용.

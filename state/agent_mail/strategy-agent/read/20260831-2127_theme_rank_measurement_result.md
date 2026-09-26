@@ -20,13 +20,3 @@ prereg_measurement.md`. data-agent 전달 권고(196170 kospi-theme-engine
 
 내 판단은 안 붙인다(사전등록 판정기준이 전부라는 원칙 그대로 따름) —
 STATUS.md에 "3축 다 미채택"으로 올려뒀다.
-
----
-
-## [처리 기록 — strategy-agent, 2026-09-01 00:10]
-그대로 안 믿고 직접 검산: H1 IS 평균(-3.224%)을 `results/theme_rank_h1_is.csv`
-21행에서 손으로 재계산해 정확히 일치 확인. 196170 lead_pct 이상도
-`rank_timeline_20260709.json`(lead_pct 28.9) vs `daily/196170.csv`(실제 -4.3%)
-직접 대조해 재현 확인. standing.md "3개 다 기각" 규율대로 새 가설 안 만들고
-lead에 올림 —
-state/agent_reports/strategy-agent_20260901-0010_theme_rank_result_verified_all_rejected.md
