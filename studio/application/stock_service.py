@@ -45,10 +45,10 @@ def search(md: MarketData, q: str, limit: int = 20) -> list[dict[str, Any]]:
             for c, r in hit.head(limit).iterrows()]
 
 
-def _minute_bars(md: MarketData, code: str, bar_minutes: int, start: dt.date | None, end: dt.date | None, source: str) -> dict[str, Any]:
+def _minute_bars(md: MarketData, code: str, bar_minutes: int, start: dt.date | None, end: dt.date | None, source: str, ranges: dict | None = None) -> dict[str, Any]:
     if source not in SOURCES:
         raise BarsNotSupported(f"분봉 출처는 {SOURCES} 중 하나: {source!r}")
-    rng = md.data_ranges().get(f"minute_{source}")
+    rng = (ranges if ranges is not None else md.data_ranges()).get(f"minute_{source}")  # data_ranges 는 파일 목록 스캔이라 3초대 — 호출자가 캐시한 값을 줄 수 있다
     if rng is None:
         raise StockNotFound(code)
     hi = min(end or rng[1], rng[1])
@@ -82,14 +82,14 @@ def intraday_sources(md: MarketData, start: dt.date, end: dt.date) -> dict[str, 
                                        "last": str(days[-1]) if days else None, "days_in_range": sum(1 for d in days if start <= d <= end)}}
 
 
-def bars(md: MarketData, code: str, interval: str, start: dt.date | None, end: dt.date | None, source: str = "al") -> dict[str, Any]:
+def bars(md: MarketData, code: str, interval: str, start: dt.date | None, end: dt.date | None, source: str = "al", ranges: dict | None = None) -> dict[str, Any]:
     m = MINUTE_RE.fullmatch(interval)
     if m:
-        return _minute_bars(md, code, int(m.group(1)), start, end, source)
+        return _minute_bars(md, code, int(m.group(1)), start, end, source, ranges)
     if interval != "1d":
         raise BarsNotSupported(f"'{interval}' 봉은 지원하지 않는다(1d · 1m·3m·5m·10m·15m·30m·60m)")
-    ranges = md.data_ranges()["daily"]
-    lo, hi = start or ranges[0], min(end or ranges[1], ranges[1])
+    daily = (ranges if ranges is not None else md.data_ranges())["daily"]
+    lo, hi = start or daily[0], min(end or daily[1], daily[1])
     panel = md.load_panel(lo, hi, 0, [code])
     if code not in panel.close.columns:
         raise StockNotFound(code)

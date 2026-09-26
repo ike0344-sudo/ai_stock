@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
+import threading
 import time
 from typing import Any
 
@@ -27,19 +29,54 @@ def _param(p: cat.ParamDef) -> dict[str, Any]:
             "choices": list(p.choices) if p.choices else None, "label": p.label_ko}
 
 
-TTL_SECONDS = 60.0  # 데이터 범위·보관 기간 스캔 결과를 잠깐 들고 있는다 — 매 요청 3~5초(파일 목록 스캔)라 화면이 느리다. 야간 갱신은 1분 늦어도 무방하다
+TTL_SECONDS = 300.0  # 데이터 범위·보관 기간 스캔 결과(파일 목록 스캔, 첫 호출 3~5초). 데이터는 하루 한 번 바뀐다 — 아래 _ttl 이 낡은 값을 바로 주고 뒤에서 갱신하므로 길어도 안 낡는다
+_LOCK = threading.Lock()
+_log = logging.getLogger(__name__)
 
 
 def _ttl(svc: Services, key: Any, fn: Any) -> Any:
-    """Services 객체마다(서버·테스트가 서로 안 섞이게) 결과를 TTL 동안 재사용."""
-    cache = svc.__dict__.setdefault("_ttl_cache", {})
-    hit = cache.get(key)
-    now = time.monotonic()
-    if hit and now - hit[0] < TTL_SECONDS:
-        return hit[1]
-    val = fn()
-    cache[key] = (now, val)
+    """Services 객체마다(서버·테스트가 서로 안 섞이게) 결과를 재사용. 처음 한 번만 기다리고, TTL 이 지나면 낡은 값을 바로 돌려주며 뒤 스레드가 한 번만 갱신한다(사용자가 스캔을 기다리지 않게)."""
+    with _LOCK:
+        cache = svc.__dict__.setdefault("_ttl_cache", {})
+        busy = svc.__dict__.setdefault("_ttl_busy", set())
+        hit = cache.get(key)
+        now = time.monotonic()
+        if hit and now - hit[0] < TTL_SECONDS:
+            return hit[1]
+        if hit:
+            if key not in busy:
+                busy.add(key)
+                threading.Thread(target=_refresh, args=(svc, key, fn), name=f"ttl-refresh-{key}", daemon=True).start()
+            return hit[1]
+    val = fn()  # 값이 아직 없을 때만 동기 계산
+    with _LOCK:
+        cache[key] = (time.monotonic(), val)
     return val
+
+
+def _refresh(svc: Services, key: Any, fn: Any) -> None:
+    try:
+        val = fn()
+        with _LOCK:
+            svc.__dict__["_ttl_cache"][key] = (time.monotonic(), val)
+    except Exception:  # noqa: BLE001 — 갱신 실패는 낡은 값을 그대로 쓰고 다음 요청이 다시 시도한다(조용히 삼키지 않고 로그)
+        _log.warning("캐시 갱신 실패 %s — 이전 값 유지", key, exc_info=True)
+    finally:
+        with _LOCK:
+            svc.__dict__["_ttl_busy"].discard(key)
+
+
+def warm_caches(svc: Services) -> None:
+    """서버가 뜬 직후 데이터 범위 스캔을 미리 해 둔다 — 첫 화면이 3초 기다리지 않게(실패해도 서버는 산다, 첫 요청이 다시 계산)."""
+    try:
+        _ranges(svc)
+    except Exception:  # noqa: BLE001
+        _log.warning("데이터 범위 미리 채우기 실패 — 첫 요청이 계산한다", exc_info=True)
+
+
+def _ranges(svc: Services) -> dict:
+    """데이터 범위(날짜 튜플) — 60초 캐시. 봉 API 도 같은 값을 써서 요청마다 3초씩 스캔하지 않는다."""
+    return _ttl(svc, "ranges_raw", lambda: svc.market_data().data_ranges())
 
 
 def _route_paths(app: Any) -> list[str]:
@@ -97,7 +134,7 @@ def strategies(svc: Services = Depends(get_services)) -> dict[str, Any]:
 @router.get("/meta/data-ranges")
 def data_ranges(svc: Services = Depends(get_services)) -> dict[str, Any]:
     """기간 선택기용 — 데이터셋별 (가장 이른 날, 가장 늦은 날). 일봉·코스피·코스닥 지수."""
-    return {"data": _ttl(svc, "ranges", lambda: {k: [str(a), str(b)] for k, (a, b) in svc.market_data().data_ranges().items()})}
+    return {"data": {k: [str(a), str(b)] for k, (a, b) in _ranges(svc).items()}}
 
 
 @router.get("/meta/intraday-sources")
@@ -120,7 +157,7 @@ def stock_bars(code: str, interval: str = Query("1d", max_length=8), start: dt.d
     if not stock_service.CODE_RE.fullmatch(code):
         raise not_found()
     try:
-        return {"data": stock_service.bars(svc.market_data(), code, interval, start, end, source)}
+        return {"data": stock_service.bars(svc.market_data(), code, interval, start, end, source, _ranges(svc))}
     except stock_service.StockNotFound:
         raise not_found("그 봉 데이터가 없는 종목") from None
     except stock_service.BarsNotSupported as exc:

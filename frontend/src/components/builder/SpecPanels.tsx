@@ -10,7 +10,7 @@ import type { DataRanges, ParamRange, SpecJson, TakeProfitLevel } from '@/types/
 import { NumField } from './NumField'
 
 type Part<K extends keyof SpecJson> = { value: SpecJson[K]; onChange: (v: SpecJson[K]) => void; disabled?: boolean }
-const Row = ({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) => (
+const Row = ({ label, children, hint }: { label: string; children: React.ReactNode; hint?: React.ReactNode }) => (
   <div style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '4px 0', flexWrap: 'wrap' }}>
     <span style={{ width: 132, flexShrink: 0 }}>{label}</span>
     {children}
@@ -69,12 +69,13 @@ export function UniversePanel({ value: u, onChange, mode }: Part<'universe'> & {
 export const rangeKeyOf = (mode: SpecJson['mode'], source: 'al' | 'krx' = 'al') => (mode === 'intraday' ? `minute_${source}` : mode === 'tick' ? 'tick_al' : 'daily')
 const RANGE_LABEL = (key: string) => (key === 'daily' ? '일봉' : key === 'tick_al' ? '통합 체결' : key === 'minute_krx' ? 'KRX 분봉' : '통합 분봉')
 
-export function PeriodPanel({ value: p, onChange, ranges, holdoutPct, rangeKey = 'daily' }: Part<'period'> & { ranges?: DataRanges; holdoutPct?: number; rangeKey?: string }) {
+export function PeriodPanel({ value: p, onChange, ranges, holdoutPct, rangeKey = 'daily', rangesStatus = 'ok', onRetryRanges }: Part<'period'> & { ranges?: DataRanges; holdoutPct?: number; rangeKey?: string; rangesStatus?: 'loading' | 'error' | 'ok'; onRetryRanges?: () => void }) {
   const r = ranges?.[rangeKey]
   const outside = (d: dayjs.Dayjs) => !!r && (d.isBefore(dayjs(r[0]), 'day') || d.isAfter(dayjs(r[1]), 'day'))
   return (
     <Card size="small" title="기간" data-testid="panel-period">
-      <Row label="시작 ~ 종료" hint={r ? `${RANGE_LABEL(rangeKey)} 데이터 ${fmtDate(r[0])} ~ ${fmtDate(r[1])}${rangeKey === 'daily' ? ' (허브 기준일)' : ' — 종목마다 더 짧을 수 있다'}` : '데이터 범위를 못 불러옴'}>
+      <Row label="시작 ~ 종료" hint={r ? `${RANGE_LABEL(rangeKey)} 데이터 ${fmtDate(r[0])} ~ ${fmtDate(r[1])}${rangeKey === 'daily' ? ' (허브 기준일)' : ' — 종목마다 더 짧을 수 있다'}` : rangesStatus === 'loading' ? <span data-testid="ranges-loading">데이터 범위 불러오는 중…</span>
+          : <span data-testid="ranges-error">데이터 범위를 못 불러옴 {onRetryRanges && <a onClick={onRetryRanges} data-testid="ranges-retry">다시 시도</a>}</span>}>
         <DatePicker.RangePicker value={[dayjs(p.start), dayjs(p.end)]} disabledDate={outside} allowClear={false} data-testid="period-range"
           onChange={(v) => v && v[0] && v[1] && onChange({ start: v[0].format('YYYY-MM-DD'), end: v[1].format('YYYY-MM-DD') })} />
       </Row>

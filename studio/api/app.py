@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -38,6 +39,8 @@ def create_app(root: Path | str | None = None, *, dispatcher: Dispatcher | None 
         if heartbeat_path is not None:
             task = asyncio.create_task(run_heartbeat(Path(heartbeat_path), heartbeat_interval), name="studio-heartbeat")
             app.state.heartbeat_task = task
+        if heartbeat_path is not None:  # 운영 서버만 — 데이터 범위 스캔(3초+)을 뒤에서 미리 해 둔다(테스트는 안 함)
+            threading.Thread(target=catalog.warm_caches, args=(app.state.services,), name="warm-ranges", daemon=True).start()
         try:
             yield
         finally:
