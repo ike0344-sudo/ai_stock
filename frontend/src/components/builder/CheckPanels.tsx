@@ -15,7 +15,7 @@ export function NarrationPanel({ result, loading }: { result?: ValidateResult; l
   )
 }
 
-export function ValidationPanel({ result, error }: { result?: ValidateResult; error?: string }) {
+export function ValidationPanel({ result, error, unitWarnings = [] }: { result?: ValidateResult; error?: string; unitWarnings?: string[] }) {
   if (error) return <Alert type="error" showIcon message="검증을 못 함" description={error} data-testid="validation-error" />
   if (!result) return null
   return (
@@ -24,6 +24,10 @@ export function ValidationPanel({ result, error }: { result?: ValidateResult; er
         <Alert type="error" showIcon message={`오류 ${result.errors.length}건 — 고쳐야 실행할 수 있습니다`}
           description={<List size="small" data-testid="validation-errors" dataSource={result.errors}
             renderItem={(e) => <List.Item style={{ padding: '2px 0' }}><Typography.Text type="danger"><code>{e.path || '(전체)'}</code> — {e.message}</Typography.Text></List.Item>} />} />
+      )}
+      {unitWarnings.length > 0 && (
+        <Alert type="warning" showIcon message={`단위가 안 맞는 비교 ${unitWarnings.length}건`} data-testid="unit-warnings"
+          description={<ul style={{ margin: 0, paddingLeft: 18 }}>{unitWarnings.map((w, i) => <li key={i}>{w}</li>)}</ul>} />
       )}
       {result.warnings.length > 0 && (
         <Alert type="warning" showIcon message={`주의 ${result.warnings.length}건`}

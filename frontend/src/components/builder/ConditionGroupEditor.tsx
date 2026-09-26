@@ -1,7 +1,9 @@
 // 진입·청산 조건 그룹 편집기 (§5.4): AND/OR · 행 추가·삭제·복제 · 하위 그룹 1단계. 서버 오류 경로가 가리키는 행은 빨갛게 강조한다(§8.4 #8).
 import { CopyOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import { Button, Card, InputNumber, Radio, Select, Space, Switch, Tooltip, Typography } from 'antd'
-import { EOK_INDICATORS, isUnaryOp, isWithinOp, opLabel } from '@/lib/conditionMeta'
+import { useRef } from 'react'
+import { isUnaryOp, isWithinOp, opLabel } from '@/lib/conditionMeta'
+import { harmonizeRight, operandSuffix, unitMismatch } from '@/lib/conditionUnits'
 import { addItem, changeOp, duplicateItem, errorsUnder, groupDepth, MAX_DEPTH, newCondition, newGroup, removeItem, replaceItem } from '@/lib/spec'
 import type { Condition, Group, IndicatorCatalog, Mode, Op, Operand, ValidationIssue } from '@/types/studio'
 import { isGroup } from '@/types/studio'
@@ -80,36 +82,52 @@ export function ConditionGroupEditor({ group, onChange, cat, mode, path, errors,
   )
 }
 
-function ConditionRow({ cond, onChange, cat, mode, allowMarket, allowPos, actions }: {
+export function ConditionRow({ cond, onChange, cat, mode, allowMarket, allowPos, actions }: {
   cond: Condition; onChange: (c: Condition) => void; cat: IndicatorCatalog; mode: Mode; allowMarket: boolean; allowPos: boolean; actions: React.ReactNode
 }) {
   const canHold = !!cat.capabilities?.condition_fields.includes('hold')
-  const isEok = (o?: Operand | null) => o?.kind === 'ind' && EOK_INDICATORS.has(o.name)
-  const eok = isEok(cond.left) || isEok(cond.right) ? '억' : undefined // 거래대금(억) 지표와 비교하는 숫자는 억 원 단위
+  // 상대편이 금액·수량 지표면 숫자 칸 옆에 그 단위(억·원·주)를 붙인다
+  const unit = operandSuffix(cond.left) ?? operandSuffix(cond.right)
+  const box = useRef<HTMLDivElement>(null)
+  // 오른쪽을 사용자가 직접 골랐으면(picked) 다시는 덮어쓰지 않는다. auto: 우리가 숫자로 바꿔 둔 상태(가격 계열로 돌아오면 되돌린다)
+  const st = useRef({ picked: false, auto: false })
+  const warn = unitMismatch(cond)
+
+  const changeLeft = (left: Operand) => {
+    const r = harmonizeRight({ ...cond, left }, cond.left, st.current)
+    st.current.auto = r.auto
+    onChange(r.cond)
+    if (r.switched) setTimeout(() => box.current?.querySelector<HTMLInputElement>('[data-testid="operand-right-const"]')?.focus(), 60) // 바로 입력할 수 있게 포커스
+  }
+  const changeRight = (right: Operand) => { st.current.picked = true; st.current.auto = false; onChange({ ...cond, right }) }
+
   return (
-    <Space align="start" style={{ width: '100%', justifyContent: 'space-between' }}>
-      <Space wrap size={6}>
-        <OperandEditor op={cond.left} side="left" cat={cat} mode={mode} allowMarket={allowMarket} allowPos={allowPos} constSuffix={eok} onChange={(left) => onChange({ ...cond, left })} />
-        <Select<Op> size="small" style={{ width: 150 }} value={cond.op} data-testid="op-select"
-          options={cat.ops.map((o) => ({ value: o, label: opLabel(o) }))} onChange={(op) => onChange(changeOp(cond, op))} />
-        {isWithinOp(cond.op) && (
-          <Space size={2}>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>최근</Typography.Text>
-            <InputNumber size="small" min={1} max={100} style={{ width: 64 }} value={cond.within ?? 3} data-testid="within-input" onChange={(v) => v && onChange({ ...cond, within: Number(v) })} />
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>봉 안</Typography.Text>
-          </Space>
-        )}
-        {!isUnaryOp(cond.op) && cond.right && <OperandEditor op={cond.right} side="right" cat={cat} mode={mode} allowMarket={allowMarket} allowPos={allowPos} constSuffix={eok} onChange={(right) => onChange({ ...cond, right })} />}
-        {canHold && (
-          <Space size={2}>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>연속</Typography.Text>
-            <InputNumber size="small" min={1} max={100} style={{ width: 64 }} value={cond.hold ?? 1} data-testid="hold-input"
-              onChange={(v) => { const { hold: _h, ...rest } = cond; void _h; onChange(!v || v === 1 ? rest : { ...rest, hold: Number(v) }) }} />
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>봉 만족</Typography.Text>
-          </Space>
-        )}
+    <div ref={box} style={{ width: '100%' }}>
+      <Space align="start" style={{ width: '100%', justifyContent: 'space-between' }}>
+        <Space wrap size={6}>
+          <OperandEditor op={cond.left} side="left" cat={cat} mode={mode} allowMarket={allowMarket} allowPos={allowPos} constSuffix={unit} onChange={changeLeft} />
+          <Select<Op> size="small" style={{ width: 150 }} value={cond.op} data-testid="op-select"
+            options={cat.ops.map((o) => ({ value: o, label: opLabel(o) }))} onChange={(op) => onChange(changeOp(cond, op))} />
+          {isWithinOp(cond.op) && (
+            <Space size={2}>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>최근</Typography.Text>
+              <InputNumber size="small" min={1} max={100} style={{ width: 64 }} value={cond.within ?? 3} data-testid="within-input" onChange={(v) => v && onChange({ ...cond, within: Number(v) })} />
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>봉 안</Typography.Text>
+            </Space>
+          )}
+          {!isUnaryOp(cond.op) && cond.right && <OperandEditor op={cond.right} side="right" cat={cat} mode={mode} allowMarket={allowMarket} allowPos={allowPos} constSuffix={unit} onChange={changeRight} />}
+          {canHold && (
+            <Space size={2}>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>연속</Typography.Text>
+              <InputNumber size="small" min={1} max={100} style={{ width: 64 }} value={cond.hold ?? 1} data-testid="hold-input"
+                onChange={(v) => { const { hold: _h, ...rest } = cond; void _h; onChange(!v || v === 1 ? rest : { ...rest, hold: Number(v) }) }} />
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>봉 만족</Typography.Text>
+            </Space>
+          )}
+        </Space>
+        {actions}
       </Space>
-      {actions}
-    </Space>
+      {warn && <div><Typography.Text type="warning" style={{ fontSize: 12 }} data-testid="unit-warning">⚠ {warn}</Typography.Text></div>}
+    </div>
   )
 }

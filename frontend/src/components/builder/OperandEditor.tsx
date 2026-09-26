@@ -3,13 +3,14 @@
 import { InfoCircleOutlined } from '@ant-design/icons'
 import { Popover, Select, Space, Switch, Tag, Tooltip, Typography } from 'antd'
 import { indicatorTree, matchesQuery, POS_LABEL, tfLabel, timeframeOptions } from '@/lib/conditionMeta'
+import { EOK_KEY, FIELD_LABEL, matchesFind, operandFindOptions, pickOperand, type FindOption } from '@/lib/conditionFind'
 import { indOperand, operandKindDefault } from '@/lib/spec'
 import type { IndicatorCatalog, IndicatorDef, IndOperand, Mode, Operand, ParamValue } from '@/types/studio'
 import { isParam } from '@/types/studio'
 import { useConditionCtx } from './ConditionContext'
 import { NumField } from './NumField'
 
-export const FIELD_KO: Record<string, string> = { open: '시가', high: '고가', low: '저가', close: '종가', volume: '거래량', value: '거래대금' }
+export const FIELD_KO: Record<string, string> = FIELD_LABEL // 원 단위 거래대금은 "거래대금(원)" — 억 단위와 헷갈리지 않게
 const KIND_KO: Record<Operand['kind'], string> = { field: '가격·거래량', ind: '지표', market: '시장 지수', const: '숫자', pos: '포지션' }
 const INDEX_KO = { kospi: '코스피', kosdaq: '코스닥' }
 const MARKET_NAME_KO = { close: '종가', sma: '이동평균', change_pct: '등락률(%)' }
@@ -33,6 +34,9 @@ export function OperandEditor({ op, onChange, cat, mode, allowMarket, allowPos =
   const kinds = (['field', 'ind', 'const', ...(allowMarket ? ['market'] : []), ...(posOk ? ['pos'] : [])] as Operand['kind'][])
   const tid = `operand-${side}`
   const ctx = useConditionCtx()
+  const hasEok = cat.indicators.some((d) => d.name === 'value_eok' && d.compute)
+  const showAsField = op.kind === 'ind' && op.name === 'value_eok' // 억 단위 거래대금은 "가격·거래량" 쪽에 보인다(지표 목록에서도 고를 수 있다)
+  const findGroups = groupFind(operandFindOptions(cat, mode))
   const def = op.kind === 'ind' ? cat.indicators.find((d) => d.name === op.name) : undefined
   const tfs = op.kind === 'ind' || op.kind === 'field' ? timeframeOptions(cat.capabilities, def, mode, ctx.barMinutes, ctx.source) : []
   const setTf = (tf: string) => {
@@ -44,16 +48,25 @@ export function OperandEditor({ op, onChange, cat, mode, allowMarket, allowPos =
 
   return (
     <Space size={4} wrap data-testid={tid}>
-      <Select<Operand['kind']> size="small" style={{ width: 104 }} value={op.kind} data-testid={`${tid}-kind`}
+      {(op.kind === 'field' || op.kind === 'ind') && (
+        // 종류와 상관없이 이름으로 찾기 — "거래대금" 을 치면 원·억·합·배수·순위가 함께 나온다
+        <Select size="small" style={{ width: 150 }} showSearch value={null} placeholder="찾아서 고르기…" data-testid={`${tid}-find`}
+          options={findGroups} filterOption={(input, option) => !!option && 'find' in option && matchesFind((option as unknown as { find: FindOption }).find, input)}
+          optionRender={(o) => { const d = o.data as { find?: FindOption }; return d.find ? <span style={{ opacity: d.find.disabled ? 0.5 : 1 }}>{o.label}{d.find.reason ? <Typography.Text type="secondary" style={{ fontSize: 12 }}> — {d.find.reason}</Typography.Text> : null}</span> : o.label }}
+          onChange={(key: string) => onChange(pickOperand(cat, key, op))} />
+      )}
+      <Select<Operand['kind']> size="small" style={{ width: 104 }} value={showAsField ? 'field' : op.kind} data-testid={`${tid}-kind`}
         options={kinds.map((k) => ({ value: k, label: KIND_KO[k] }))}
         onChange={(k) => onChange(operandKindDefault(k, cat))} />
 
-      {op.kind === 'field' && (
-        <Select size="small" style={{ width: 90 }} value={op.name} options={cat.fields.map((f) => ({ value: f, label: FIELD_KO[f] }))}
-          onChange={(name) => onChange({ ...op, name })} data-testid={`${tid}-field`} />
+      {(op.kind === 'field' || showAsField) && (
+        // "가격·거래량" 목록: 시가·고가·저가·종가·거래량 + "거래대금"(억 기준 — 고르면 지표 value_eok 로 바뀜, 시간 단위·며칠 전·배수는 유지). 원 단위 field:value 는 옛 명세일 때만 보인다
+        <Select size="small" style={{ width: 120 }} value={showAsField ? EOK_KEY : (op as { name: string }).name} data-testid={`${tid}-field`}
+          options={[...cat.fields.filter((f) => !(f === 'value' && hasEok && !(op.kind === 'field' && op.name === 'value'))).map((f) => ({ value: f, label: FIELD_KO[f] ?? f })), ...(hasEok ? [{ value: EOK_KEY, label: '거래대금' }] : [])]}
+          onChange={(v: string) => onChange(pickOperand(cat, v.includes(':') ? v : `field:${v}`, op))} />
       )}
 
-      {op.kind === 'ind' && <IndFields op={op} onChange={onChange} cat={cat} mode={mode} tid={tid} />}
+      {op.kind === 'ind' && !showAsField && <IndFields op={op} onChange={onChange} cat={cat} mode={mode} tid={tid} />}
 
       {op.kind === 'market' && (
         <>
@@ -113,6 +126,12 @@ export function IndicatorInfo({ def }: { def: IndicatorDef }) {
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>쓸 수 있는 곳: {[...new Set(def.modes.map((m) => MODE_KO[m]))].join(' · ')}</Typography.Text>
     </Space>
   )
+}
+
+function groupFind(opts: FindOption[]) {
+  const m = new Map<string, FindOption[]>()
+  for (const o of opts) m.set(o.group, [...(m.get(o.group) ?? []), o])
+  return [...m.entries()].map(([label, list]) => ({ label, options: list.map((o) => ({ value: o.value, label: o.label, disabled: o.disabled, find: o })) }))
 }
 
 function IndFields({ op, onChange, cat, mode, tid }: { op: IndOperand; onChange: (o: Operand) => void; cat: IndicatorCatalog; mode: Mode; tid: string }) {

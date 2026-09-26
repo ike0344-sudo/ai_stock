@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 from pydantic import ValidationError
 
-from studio.domain.conditions.ast import Group, IndOperand
+from studio.domain.conditions.ast import FieldOperand, Group, IndOperand
 from studio.domain.conditions.catalog import INDICATORS, LIVE_REGISTRY
 from studio.domain.conditions.evaluator import _operand
 from studio.domain.conditions.tick import TickDay, build_grid, detect_signals, value_window_series
@@ -202,3 +202,15 @@ def test_service_tick_run_entries_match_brute_force_window_and_value_eok_warning
     assert any("종가×거래량 근사" in w for w in condition_warnings(Spec.model_validate(d2)))
     assert not any("종가×거래량 근사" in w for w in condition_warnings(spec))
     assert not any("종가×거래량 근사" in w for w in rec.warnings if "거래대금(억)" in w)
+
+
+@pytest.mark.parametrize("tf", ["bar", "m15"])
+def test_legacy_value_field_vs_won_equals_value_eok_vs_eok(tf):
+    """옛 명세 `field:value >= N원` 을 화면이 `value_eok >= N÷1억` 으로 바꿔 보여도 진입 판정이 같다(17:58 lead 요청)."""
+    daily, minute = make_data(n_hist=40, n_min_days=3)
+    fld = _operand(FieldOperand.model_validate({"kind": "field", "name": "value", "tf": tf}),
+                   minute, None, [], None, TimeContext(minute, daily, BAR))
+    eok = val(daily, minute, "value_eok", {}, tf)
+    for won in (1e9, 2.5e9, float(np.nanmedian(fld.values))):
+        a, b = fld >= won, eok >= won / EOK
+        pd.testing.assert_frame_equal(a, b)

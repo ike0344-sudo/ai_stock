@@ -47,7 +47,7 @@ export function indicatorTree(cat: IndicatorCatalog, mode: Mode, query = ''): In
     const s = indicatorSupport(d, mode)
     const c = categoryOf(d)
     const list = groups.get(c) ?? []
-    list.push({ value: d.name, label: d.label, def: d, disabled: !s.ok, reason: s.reason })
+    list.push({ value: d.name, label: d.name === 'value_eok' ? '거래대금' : d.label, def: d, disabled: !s.ok, reason: s.reason }) // 억 기준 거래대금은 이름을 "거래대금" 으로(원 단위 항목은 목록에 없다)
     groups.set(c, list)
   }
   const order = [...(cat.categories?.map((c) => c.label) ?? []), ...CATEGORIES, OTHER_CATEGORY] // 서버가 준 분류 순서가 먼저
