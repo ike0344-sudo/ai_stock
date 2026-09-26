@@ -1,0 +1,32 @@
+# 체결데이터 기반 수익구간 자동탐색 — 설정
+# Phase 1에서 실제로 쓰는 값만 넣었다. 나머지 Phase는 구현할 때 추가한다.
+
+data:
+  raw_root: "../data/stocks/tick_al"      # 원본 (키움 ka10079 수집분, symbol/date.parquet)
+  processed_root: "data/processed/tick"   # 표준 스키마 출력
+  regular_only: true                      # 분석 기본값 — 시간외 혼입 사고 방지
+
+session:
+  open: "09:00:00"
+  close: "15:30:00"
+
+# --- 아래는 Phase 3 이후에 쓴다. 지금은 선언만 해두고 코드에서 참조하지 않는다. ---
+label:
+  root: "data/labels/tick"
+  # 사용자가 고정한 라벨: 5분내 +2%. horizon/target은 이 값으로 못 박는다.
+  horizon_sec: 300
+  target: 0.02
+  stops: [-0.005, -0.01, -0.02]   # 셋 다 만들되 선택은 IS에서만 (OOS 보고 고르면 반칙)
+
+cost:                                      # 한국 주식 실제 비용 구조 (왕복)
+  commission_rate: 0.00015                 # 위탁수수료 (편도)
+  tax_rate: 0.0023                         # 증권거래세 (매도 1회)
+  slippage_rate: 0.001                     # 편도, max(이 값, 1틱)
+  use_tick_floor: true
+
+split:                                     # 시간 기준 분할 (랜덤 금지)
+  method: "time"
+
+features:
+  root: "data/features/tick"
+  grid_step_sec: 10        # 1초 전부 저장하면 58GB — 10초 간격으로 1/20. 근거는 store.py

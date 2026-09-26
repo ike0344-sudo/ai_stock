@@ -1,0 +1,10 @@
+polars>=1.44
+pyarrow>=15
+numpy>=2.0
+pandas>=2.0
+scipy>=1.11
+scikit-learn>=1.5
+statsmodels>=0.14
+pyyaml>=6.0
+pytest>=8.0
+# Phase 5 이후: vectorbt, lightgbm, plotly, streamlit

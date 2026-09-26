@@ -1,0 +1,33 @@
+{
+  "confirmed_combo": {
+    "liquidity": "5e8",
+    "context": "off",
+    "fallback_used": true,
+    "reason": "조건을 만족하는 조합 없음(Validation 불확정) -> 사전지정 기본값 사용"
+  },
+  "verdicts": {
+    "a_net_le_0": false,
+    "b_fails_vs_control": true,
+    "b_detail": {
+      "beats_random": false,
+      "beats_updown": false
+    },
+    "c_ci_includes_0": true,
+    "c_detail": {
+      "ci95": [
+        -1.1533943697597204,
+        0.49525400237691986
+      ]
+    },
+    "d_loo_flip": true,
+    "e_context_flip": false,
+    "e_detail": {
+      "context_on_net_mean_pct": 0.060508594306353254,
+      "context_off_net_mean_pct": 0.04863430908713494
+    },
+    "f_n_cells_below_10_flagged": 0,
+    "g_slippage_1.5x_net_mean_pct": -0.0010717155034044292,
+    "g_sign_flip": true,
+    "overall_rejected": true
+  }
+}
