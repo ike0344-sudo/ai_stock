@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "name": "20일 신고가 돌파 (시연용·미검증)",
+  "mode": "daily_portfolio",
+  "period": {"start": "2021-01-04", "end": "2026-08-31"},
+  "universe": {"type": "top_value", "n": 100, "lookback_days": 1, "markets": ["거래소", "코스닥"], "exclude": ["spac", "preferred", "mega_cap"], "codes": []},
+  "strategy": {
+    "source": "builder",
+    "entry": {"logic": "all", "items": [
+      {"left": {"kind": "field", "name": "close"}, "op": "gt",
+       "right": {"kind": "ind", "name": "highest", "params": {"src": "high", "n": {"param": "n"}}}},
+      {"left": {"kind": "field", "name": "volume"}, "op": "gte",
+       "right": {"kind": "ind", "name": "sma", "params": {"src": "volume", "n": 20}, "offset": 1, "mul": {"param": "vol_mult"}}}
+    ]},
+    "exit": {"logic": "any", "items": [
+      {"left": {"kind": "field", "name": "close"}, "op": "lt",
+       "right": {"kind": "ind", "name": "lowest", "params": {"src": "low", "n": {"param": "exit_n"}}}}
+    ]}
+  },
+  "market_filter": null,
+  "exits": {"stop_loss_pct": 7, "take_profit_pct": null, "trailing_stop_pct": 10, "max_holding_bars": null},
+  "portfolio": {"initial_capital": 10000000, "max_positions": 5, "sizing": "equal_slot_fixed", "max_weight_pct": 25, "rank_by": "value", "random_seed": 42},
+  "params": {
+    "n": {"default": 20, "min": 10, "max": 120, "step": 10},
+    "vol_mult": {"default": 1.5, "min": 1, "max": 3, "step": 0.5},
+    "exit_n": {"default": 7, "min": 3, "max": 40, "step": 1}
+  },
+  "validation": null
+}

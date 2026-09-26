@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "name": "갭상승 + 거래대금 상위 분봉 단타 (시연용·미검증)",
+  "mode": "intraday",
+  "period": {"start": "2026-06-01", "end": "2026-08-31"},
+  "universe": {"type": "top_value", "n": 30, "lookback_days": 1, "markets": ["거래소", "코스닥"], "exclude": ["spac", "preferred", "mega_cap"], "codes": []},
+  "strategy": {
+    "source": "builder",
+    "entry": {"logic": "all", "items": [
+      {"left": {"kind": "ind", "name": "gap_pct"}, "op": "gte", "right": {"kind": "const", "value": {"param": "gap_min"}}},
+      {"left": {"kind": "ind", "name": "time"}, "op": "gte", "right": {"kind": "const", "value": 905}},
+      {"left": {"kind": "ind", "name": "time"}, "op": "lte", "right": {"kind": "const", "value": 1030}},
+      {"left": {"kind": "field", "name": "close"}, "op": "gt", "right": {"kind": "ind", "name": "vwap"}}
+    ]},
+    "exit": {"logic": "any", "items": [
+      {"left": {"kind": "field", "name": "close"}, "op": "lt", "right": {"kind": "ind", "name": "vwap"}}
+    ]}
+  },
+  "market_filter": null,
+  "exits": {"stop_loss_pct": 3},
+  "portfolio": {"initial_capital": 10000000, "max_positions": 3, "sizing": "equal_slot_fixed", "max_weight_pct": 34, "rank_by": "value", "random_seed": 42},
+  "intraday": {"bar_minutes": 5, "prefilter": null, "prefilter_top_value": 30, "eod_time": "15:20"},
+  "params": {
+    "gap_min": {"default": 3, "min": 1, "max": 8, "step": 1}
+  },
+  "validation": null
+}

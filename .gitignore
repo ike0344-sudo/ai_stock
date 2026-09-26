@@ -45,3 +45,14 @@ dd.zip
 
 # 중첩 저장소 — 자체 .git 을 가진다. 루트에서 add 하면 서브모듈 링크처럼 잡힌다.
 kospi-theme-engine/
+
+# 스튜디오 실행 기록(재생성 가능한 산출물)
+results/studio/
+
+# 스튜디오 프론트
+node_modules/
+frontend/playwright-report/
+frontend/test-results/
+
+# tickresearch 산출 데이터(parquet 1.1만 개·2.8GB) — 코드만 커밋
+tickresearch/data/

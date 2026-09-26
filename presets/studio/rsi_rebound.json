@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "name": "RSI 과매도 반등 (시연용·미검증)",
+  "mode": "daily_portfolio",
+  "period": {"start": "2021-01-04", "end": "2026-08-31"},
+  "universe": {"type": "top_value", "n": 100, "lookback_days": 1, "markets": ["거래소", "코스닥"], "exclude": ["spac", "preferred", "mega_cap"], "codes": []},
+  "strategy": {
+    "source": "builder",
+    "entry": {"logic": "all", "items": [
+      {"left": {"kind": "ind", "name": "rsi", "params": {"n": {"param": "rsi_n"}}}, "op": "cross_above",
+       "right": {"kind": "const", "value": {"param": "buy_level"}}}
+    ]},
+    "exit": {"logic": "any", "items": [
+      {"left": {"kind": "ind", "name": "rsi", "params": {"n": {"param": "rsi_n"}}}, "op": "gt",
+       "right": {"kind": "const", "value": {"param": "sell_level"}}}
+    ]}
+  },
+  "market_filter": null,
+  "exits": {"stop_loss_pct": 7},
+  "portfolio": {"initial_capital": 10000000, "max_positions": 5, "sizing": "equal_slot_fixed", "max_weight_pct": 25, "rank_by": "value", "random_seed": 42},
+  "params": {
+    "rsi_n": {"default": 14, "min": 7, "max": 30, "step": 1},
+    "buy_level": {"default": 30, "min": 20, "max": 40, "step": 5},
+    "sell_level": {"default": 70, "min": 60, "max": 80, "step": 5}
+  },
+  "validation": null
+}

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "name": "20일선 눌림 후 반등 (시연용·미검증)",
+  "mode": "daily_portfolio",
+  "period": {"start": "2021-01-04", "end": "2026-08-31"},
+  "universe": {"type": "top_value", "n": 100, "lookback_days": 1, "markets": ["거래소", "코스닥"], "exclude": ["spac", "preferred", "mega_cap"], "codes": []},
+  "strategy": {
+    "source": "builder",
+    "entry": {"logic": "all", "items": [
+      {"left": {"kind": "ind", "name": "sma", "params": {"src": "close", "n": {"param": "ma_short"}}}, "op": "gt",
+       "right": {"kind": "ind", "name": "sma", "params": {"src": "close", "n": {"param": "ma_long"}}}},
+      {"left": {"kind": "field", "name": "low"}, "op": "lte",
+       "right": {"kind": "ind", "name": "sma", "params": {"src": "close", "n": {"param": "ma_short"}}}},
+      {"left": {"kind": "field", "name": "close"}, "op": "gt",
+       "right": {"kind": "ind", "name": "sma", "params": {"src": "close", "n": {"param": "ma_short"}}}}
+    ]},
+    "exit": {"logic": "any", "items": [
+      {"left": {"kind": "field", "name": "close"}, "op": "lt",
+       "right": {"kind": "ind", "name": "sma", "params": {"src": "close", "n": {"param": "ma_long"}}}}
+    ]}
+  },
+  "market_filter": null,
+  "exits": {"stop_loss_pct": 7},
+  "portfolio": {"initial_capital": 10000000, "max_positions": 5, "sizing": "equal_slot_fixed", "max_weight_pct": 25, "rank_by": "value", "random_seed": 42},
+  "params": {
+    "ma_short": {"default": 20, "min": 10, "max": 40, "step": 5},
+    "ma_long": {"default": 60, "min": 40, "max": 120, "step": 10}
+  },
+  "validation": null
+}

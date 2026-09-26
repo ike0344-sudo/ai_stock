@@ -1,0 +1,233 @@
+"""틱 조건(진입 신호) — 설계서 §3.7 틱 카탈로그 · §3.2 `tick.catalog` · P5·C4.
+
+한 종목·하루(`TickDay`)의 체결만 보고 **신호 초 s** 를 낸다. 돈·체결·비용은 여기 없다(엔진 몫).
+
+## 입력 계약 (`TickDay`)
+`sec` = 정규장 09:00:00 을 0 으로 한 **격자 초**(0..23400), **시간순**(같은 초 안은 체결 순서 그대로),
+`prc`/`qty` = 체결가·체결량. `_precursor_fastpath.to_grid(path)` 의 `tick_sec/tick_prc/tick_qty` 가 이미
+이 모양이다(원본 역시간순 뒤집기·정규장 필터·tie 순서 수정 끝난 판) — 로더는 그걸 그대로 담으면 된다.
+
+## 시점 규칙 (C4)
+- 신호 초 s 는 **s 초까지의 체결**(그 초의 마지막 체결가 포함)만 보고 정해진다.
+- **진입은 s 보다 엄격히 뒤 체결**(`entry_sec > signal_sec`) — 기존 `precursor_master.mfe_mae` 의 T0 다음 체결과 같다.
+- 창은 `[s−w, s)`(s 자신 제외), 단 돌파는 "s 의 가격이 앞 w 초 최고가를 넘음"이라 s 가격을 쓴다(기존 정의 그대로).
+
+## 정의 (기존 연구 함수와 같은 것을 재사용, 수식만 옮김 — 도메인은 backtesting 을 import 못 함)
+- `breakout_min`: `precursor_master.detect_breakouts` 와 같음 — 1초 격자 종가 `px`, `px > max(px[s−w, s))`.
+- `value_speed(w, ratio)`: `[s−w, s)` 체결대금 ÷ **인과적 누적 평균**(s−w 이전 누적 ÷ 그때까지 지난 w 구간 수, 1구간 이상 지나야 값 있음)
+  ≥ ratio. `t0_forward_return._expanding_period_avg` 와 같은 식.
+- `buy_ratio(w, min)`: `[s−w, s)` 틱룰 매수 체결량 ÷ 전체 체결량 ≥ min. 틱룰 = 상승체결 +1 / 하락 −1 / 보합은 직전 방향 계승.
+- `time_from/time_to`: 신호 초의 시각이 이 범위 안(양끝 포함).
+
+**연구 코드와 한 가지 다른 점**: `precursor_master_features._win_at` 는 주석엔 "`[t−w, t)`" 라 쓰지만 실제로는
+`window_sum` 을 t−1 에서 읽어 `[t−1−w, t−1)` 을 본다(1초 지연, 보수적이라 미래참조는 아님). 여기서는 주석대로
+`[s−w, s)` 를 쓴다 → **여기 s 의 값 = 연구 `compute_features` 의 t0 = s+1 값**(P5 보조 테스트가 대조).
+
+## 쿨다운은 조건 쪽에서 한다 (결정)
+`cooldown_sec` 안의 재신호는 **최종 신호(조건 전부 AND 한 뒤)** 를 시간순으로 훑으며 솎아낸다 — `detect_breakouts` 와 같은
+방식(마지막으로 *채택된* 신호로부터 cooldown 이상 떨어져야 채택). 근거: ① P5 가 요구하는 "기존 함수와 동일" 이
+신호 정의 안에 쿨다운이 들어 있어야 성립한다, ② 엔진에 두면 "포지션 보유·슬롯 꽉 참 때문에 못 산 신호"가
+쿨다운 시계를 리셋하지 않아 신호 시각이 포트폴리오 상태에 좌우된다(신호가 돈 상태에 의존 — 계약 위반).
+엔진은 신호를 받아 체결·건너뜀만 한다. 조건이 둘 이상이면 "돌파를 솎은 뒤 나머지로 거르는" 연구 파이프라인과 결과가 다를 수 있다.
+"""
+from __future__ import annotations
+
+import datetime as dt
+from dataclasses import dataclass
+from typing import Any
+
+import numpy as np
+import pandas as pd
+
+SESSION_START, SESSION_END = 32400, 55800  # 09:00:00 ~ 15:30:00 (_precursor_fastpath 와 같은 격자)
+N = SESSION_END - SESSION_START + 1
+GAP_OPEN_PCT = 5.0  # 갭시작 제외 기준(%) — precursor_master.GAP_OPEN_PCT(0.05)와 같은 값
+
+
+@dataclass(frozen=True, eq=False)
+class TickDay:
+    code: str
+    date: dt.date
+    sec: np.ndarray  # int, 격자 초(0=09:00:00), 시간순
+    prc: np.ndarray
+    qty: np.ndarray
+    prev_close: float | None = None
+
+    def __post_init__(self) -> None:
+        if not (len(self.sec) == len(self.prc) == len(self.qty)):
+            raise ValueError("TickDay: sec·prc·qty 길이가 다름")
+        s = np.asarray(self.sec)
+        if len(s) and (s.min() < 0 or s.max() >= N or np.any(np.diff(s) < 0)):
+            raise ValueError("TickDay: sec 는 0..23400 범위의 시간순이어야 함")
+
+
+@dataclass(frozen=True, eq=False)
+class TickGrid:
+    px: np.ndarray   # 1초 격자 종가(같은 초 마지막 체결가, 앞뒤 채움)
+    vol: np.ndarray  # 초당 체결량
+    cnt: np.ndarray  # 초당 체결 건수
+    val: np.ndarray  # 초당 체결대금(가격×수량)
+    buy: np.ndarray  # 초당 틱룰 매수 체결량
+
+
+@dataclass(frozen=True, eq=False)
+class TickEvents:
+    """신호와 그 진입 체결. 배열은 서로 같은 길이·같은 순서이며 항상 `entry_sec > signal_sec`."""
+    code: str
+    date: dt.date
+    signal_sec: np.ndarray   # 신호 초 s (실제 시각 = 09:00:00 + s초)
+    entry_idx: np.ndarray    # 진입 체결의 틱 인덱스(TickDay 배열 기준) — s 보다 엄격히 뒤 첫 체결
+    entry_sec: np.ndarray
+    entry_price: np.ndarray
+    n_no_entry: int = 0      # 뒤에 체결이 없어 진입 못 하는 신호 수(장 끝 근처)
+
+
+def tick_rule_direction(prc: np.ndarray) -> np.ndarray:
+    """표준 틱룰: 상승체결 +1 / 하락 −1 / 보합은 직전 판정 계승 / 최초 틱은 0. (shooting_precursor 와 같음)"""
+    if len(prc) == 0:
+        return np.zeros(0, dtype=np.int8)
+    d = np.sign(np.diff(prc, prepend=prc[0]))
+    d[0] = 0
+    return pd.Series(d).replace(0, np.nan).ffill().fillna(0).to_numpy(dtype=np.int8)
+
+
+def build_grid(day: TickDay) -> TickGrid:
+    sec = np.asarray(day.sec, dtype=np.int64)
+    prc = np.asarray(day.prc, dtype=float)
+    qty = np.asarray(day.qty, dtype=float)
+    last = np.zeros(N)
+    last[sec] = prc  # 같은 초 여러 체결이면 마지막이 남는다(시간순 입력 전제)
+    px = pd.Series(np.where(last > 0, last, np.nan)).ffill().bfill().to_numpy()
+    direction = tick_rule_direction(prc)
+    return TickGrid(
+        px=px,
+        vol=np.bincount(sec, weights=qty, minlength=N),
+        cnt=np.bincount(sec, minlength=N).astype(float),
+        val=np.bincount(sec, weights=prc * qty, minlength=N),
+        buy=np.bincount(sec, weights=np.where(direction > 0, qty, 0.0), minlength=N),
+    )
+
+
+# ---------------------------------------------------------------- 조건 (길이 N bool)
+def _window_sum(x: np.ndarray, w: int) -> np.ndarray:
+    """s 초의 `[s−w, s)` 합계(s < w 이면 NaN)."""
+    out = np.full(N, np.nan)
+    if w >= N:
+        return out
+    cs = np.concatenate(([0.0], np.cumsum(x)))
+    out[w:] = cs[w:N] - cs[: N - w]
+    return out
+
+
+def breakout_hits(grid: TickGrid, w_min: int) -> np.ndarray:
+    """px[s] 가 직전 w 분 `[s−w, s)` 의 최고가를 넘은 초 — `detect_breakouts` 의 쿨다운 전 원시 신호."""
+    w = int(w_min) * 60
+    if N <= w:
+        return np.zeros(N, dtype=bool)
+    s = pd.Series(grid.px).rolling(w).max().shift(1).to_numpy()
+    return (grid.px > s) & np.isfinite(s)
+
+
+def value_speed_series(grid: TickGrid, w_min: int) -> np.ndarray:
+    """s 초의 체결대금 속도 = `[s−w, s)` 체결대금 ÷ 인과적 누적 평균(값 없으면 NaN)."""
+    w = int(w_min) * 60
+    wv = _window_sum(grid.val, w)
+    avg = np.full(N, np.nan)
+    if w < N:
+        cs = np.concatenate(([0.0], np.cumsum(grid.val)))
+        k = np.arange(N) - w  # 창 시작 이전까지 누적
+        ok = k >= w           # 지난 구간이 1개 이상일 때만(인과적 평균)
+        avg[ok] = cs[k[ok]] / (k[ok] / w)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where((avg > 0) & np.isfinite(avg), wv / avg, np.nan)
+
+
+def buy_ratio_series(grid: TickGrid, w_min: int) -> np.ndarray:
+    """s 초의 매수 비중 = `[s−w, s)` 틱룰 매수 체결량 ÷ 전체 체결량(체결 없으면 NaN)."""
+    w = int(w_min) * 60
+    wb, wvol = _window_sum(grid.buy, w), _window_sum(grid.vol, w)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(wvol > 0, wb / wvol, np.nan)
+
+
+def value_speed_hits(grid: TickGrid, w_min: int, ratio: float) -> np.ndarray:
+    sp = value_speed_series(grid, w_min)
+    return np.isfinite(sp) & (sp >= ratio)
+
+
+def buy_ratio_hits(grid: TickGrid, w_min: int, min_ratio: float) -> np.ndarray:
+    r = buy_ratio_series(grid, w_min)
+    return np.isfinite(r) & (r >= min_ratio)
+
+
+def _hms(s: str) -> int:
+    parts = [int(x) for x in s.split(":")]
+    parts += [0] * (3 - len(parts))
+    return parts[0] * 3600 + parts[1] * 60 + parts[2]
+
+
+def time_mask(time_from: str, time_to: str) -> np.ndarray:
+    sod = SESSION_START + np.arange(N)
+    return (sod >= _hms(time_from)) & (sod <= _hms(time_to))
+
+
+def apply_cooldown(idx: np.ndarray, cooldown_sec: int) -> np.ndarray:
+    """마지막으로 **채택된** 신호로부터 cooldown_sec 이상 떨어진 것만 남김 — detect_breakouts 와 같은 루프."""
+    keep, last = [], -10**9
+    for i in idx:
+        if i - last >= cooldown_sec:
+            keep.append(i)
+            last = i
+    return np.array(keep, dtype=np.int64)
+
+
+def _pair(v: Any, a: str, b: str) -> tuple[float, float]:
+    return (getattr(v, a), getattr(v, b)) if hasattr(v, a) else (v[0], v[1])
+
+
+def detect_signals(
+    day: TickDay, *, breakout_min: int | None = None, value_speed: Any = None, buy_ratio: Any = None,
+    time_from: str = "09:00:00", time_to: str = "15:30:00", cooldown_sec: int = 300,
+) -> TickEvents:
+    """켜진 조건을 전부 AND → 시간 범위 → 쿨다운 → 각 신호의 진입 체결(s 보다 엄격히 뒤 첫 체결).
+
+    value_speed = (w분, ratio) 또는 `.w/.ratio` 를 가진 객체, buy_ratio = (w분, min) 또는 `.w/.min` 객체.
+    """
+    if breakout_min is None and value_speed is None and buy_ratio is None:
+        raise ValueError("틱 조건이 하나도 없음 (breakout_min·value_speed·buy_ratio 중 하나 필요)")
+    grid = build_grid(day)
+    hit = time_mask(time_from, time_to)
+    if breakout_min is not None:
+        hit &= breakout_hits(grid, breakout_min)
+    if value_speed is not None:
+        w, ratio = _pair(value_speed, "w", "ratio")
+        hit &= value_speed_hits(grid, int(w), float(ratio))
+    if buy_ratio is not None:
+        w, mn = _pair(buy_ratio, "w", "min")
+        hit &= buy_ratio_hits(grid, int(w), float(mn))
+    sig = apply_cooldown(np.flatnonzero(hit), int(cooldown_sec))
+    j = np.searchsorted(day.sec, sig, side="right")  # s 보다 엄격히 뒤 첫 체결
+    has = j < len(day.sec)
+    sig, j = sig[has], j[has]
+    return TickEvents(
+        code=day.code, date=day.date, signal_sec=sig, entry_idx=j,
+        entry_sec=np.asarray(day.sec)[j], entry_price=np.asarray(day.prc, dtype=float)[j],
+        n_no_entry=int((~has).sum()),
+    )
+
+
+def detect_from_spec(day: TickDay, tick_cfg: Any) -> TickEvents:
+    """`spec.tick`(entry_source='catalog') → 신호. tick_cfg 는 duck typing(`.catalog`, `.cooldown_sec`)."""
+    c = tick_cfg.catalog
+    return detect_signals(
+        day, breakout_min=c.breakout_min, value_speed=c.value_speed, buy_ratio=c.buy_ratio,
+        time_from=c.time_from, time_to=c.time_to, cooldown_sec=tick_cfg.cooldown_sec,
+    )
+
+
+def is_gap_open_day(day: TickDay, pct: float = GAP_OPEN_PCT) -> bool:
+    """첫 체결가가 전일 종가 대비 +pct% 이상이면 갭시작 — `precursor_master.is_gap_open` 과 같은 규칙(엔진이 제외에 씀)."""
+    pc = day.prev_close
+    if not pc or not np.isfinite(pc) or pc <= 0 or len(day.prc) == 0:
+        return False
+    return bool(day.prc[0] / pc - 1 >= pct / 100.0)

@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "name": "5분 고점 돌파 틱 진입 (시연용·미검증)",
+  "mode": "tick",
+  "period": {"start": "2026-08-03", "end": "2026-08-31"},
+  "universe": {"type": "top_value", "n": 35, "lookback_days": 1, "markets": ["거래소", "코스닥"], "exclude": ["spac", "preferred", "mega_cap"], "codes": []},
+  "strategy": null,
+  "market_filter": null,
+  "exits": {},
+  "portfolio": {"initial_capital": 10000000, "max_positions": 3, "sizing": "equal_slot_fixed", "max_weight_pct": 34, "rank_by": "value", "random_seed": 42},
+  "tick": {
+    "entry_source": "catalog",
+    "catalog": {"breakout_min": 5, "value_speed": null, "buy_ratio": null, "time_from": "09:05", "time_to": "15:00"},
+    "cooldown_sec": 300, "exclude_gap_open_pct": 5, "time_stop_sec": 600, "eod_time": "15:19:59"
+  },
+  "params": {},
+  "validation": null
+}

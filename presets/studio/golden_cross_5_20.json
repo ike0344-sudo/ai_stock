@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "name": "5/20 골든크로스 (시연용·미검증)",
+  "mode": "daily_portfolio",
+  "period": {"start": "2021-01-04", "end": "2026-08-31"},
+  "universe": {"type": "top_value", "n": 100, "lookback_days": 1, "markets": ["거래소", "코스닥"], "exclude": ["spac", "preferred", "mega_cap"], "codes": []},
+  "strategy": {
+    "source": "builder",
+    "entry": {"logic": "all", "items": [
+      {"left": {"kind": "ind", "name": "sma", "params": {"src": "close", "n": {"param": "short"}}}, "op": "cross_above",
+       "right": {"kind": "ind", "name": "sma", "params": {"src": "close", "n": {"param": "long"}}}}
+    ]},
+    "exit": {"logic": "any", "items": [
+      {"left": {"kind": "ind", "name": "sma", "params": {"src": "close", "n": {"param": "short"}}}, "op": "cross_below",
+       "right": {"kind": "ind", "name": "sma", "params": {"src": "close", "n": {"param": "long"}}}}
+    ]}
+  },
+  "market_filter": null,
+  "exits": {},
+  "portfolio": {"initial_capital": 10000000, "max_positions": 5, "sizing": "equal_slot_fixed", "max_weight_pct": 25, "rank_by": "value", "random_seed": 42},
+  "params": {
+    "short": {"default": 5, "min": 3, "max": 20, "step": 1},
+    "long": {"default": 20, "min": 10, "max": 120, "step": 5}
+  },
+  "validation": null
+}
