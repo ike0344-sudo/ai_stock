@@ -49,9 +49,11 @@
       예: "{tf} 이 직전 봉보다 {x}% 이상 올랐다"(change_pct n=1, tf), "{tf} 거래대금이 {x}억 {cmp}"(value_eok), "종가가 {n}일 최고가를 넘었다"(일봉 highest / 분봉에선 D.HIGHEST), "{a}일선이 {b}일선 위", "RSI({n})가 {x} 이하", "매수가 대비 {x}% 수익"(pos.return_pct) …
       지표 이름·파라미터는 카탈로그(`/api/meta/indicators`)와 맞출 것. API: `studio/api/routes/templates.py`(GET `/api/meta/condition-templates?mode=`) — **app.py 연결·화면은 monitoring-agent 몫, 끝나면 편지**.
       테스트: 템플릿마다 build → `validate_against` 통과(지원 모드), build→match 되돌리기 동일, 골든 몇 개, 문장이 풀이 문장과 어긋나지 않는지. 사용자에게 보이는 문장은 쉬운 말. git commit 금지. 보고: STATUS + 짧은 보고서(템플릿 전체 목록 표).
-- [~] (lead 지시 2026-09-26 21:25 — **사용자 "보조지표 엔벨로프 있었는데 왜 사라졌어? 조건식에 왜 없어?" · "직관적으로 만들면서 보조지표 많이 없앴어?"**) **문장 카드 목록에 모든 지표가 나오게**
+- [x] (완료 2026-09-26, 보고: state/agent_reports/execution-agent_20260926-214551_conditions_c11_all_indicators.md) (lead 지시 2026-09-26 21:25 — **사용자 "보조지표 엔벨로프 있었는데 왜 사라졌어? 조건식에 왜 없어?" · "직관적으로 만들면서 보조지표 많이 없앴어?"**) **문장 카드 목록에 모든 지표가 나오게**
       사실(lead 계산): 계산 가능한 지표 102개 중 문장 카드가 있는 건 38개. 나머지 64개 — envelope_upper/lower · ichimoku_* · keltner_* · cci · adx · plus_di/minus_di · atr/atr_pct · mfi · ema · wma · vwma · psar · williams_r · roc · momentum · psy · vr · obv · 캔들 패턴(hammer·doji·engulfing·inside_bar …) 등 — 는 [+ 조건 추가]에 안 보여 "사라진" 것처럼 보인다(고급 탭에만 있음).
       ① **카탈로그에서 자동 문장 카드**: 문장 카드가 없는 모든 계산 가능 지표에 지표 성격(가격 수준 / 수치 / 참·거짓 / 순위)에 맞는 기본 문장을 카탈로그 메타로 만들어 목록에 넣는다 — 앞으로 지표가 늘어도 빠지지 않게.
       ② 자주 쓰는 것은 손으로 쓴 문장: **엔벨로프 먼저**(가격이 엔벨로프 상단을 위로 뚫었다 / 하단 아래로 내려갔다 / 하단에 닿았다 — 기간·폭% 빈칸, 시간 단위 분봉·일봉), 일목(구름대 위·전환선이 기준선 위로), 켈트너, EMA 교차, CCI, ADX, 캔들 패턴.
       ③ **카나리아 테스트**: 계산 가능한 카탈로그 지표 전부가 문장 목록(검색 포함)에서 찾아진다 — 하나라도 빠지면 실패. build↔match 왕복, 검색 "엔벨로프"·"일목"·"CCI" 결과 있음.
       ④ 서버 쪽만(templates.py·테스트). 화면(SentenceCards.tsx)·빌드·8780 재기동은 monitoring-agent 가 종목명 작업 중이라 건드리지 말고, 화면 변경이 필요하면 monitoring-agent 에게 편지. git commit 금지. 끝나면 STATUS 자기 행 갱신.
+- [x] (완료 2026-09-26) (lead 지시 2026-09-26 22:05) **자동 문장 카드에 영문 설정 이름이 보임** — lead 전수 확인(126장): 3장 — `auto_stoch_d`("스토캐스틱 %D(14봉, **k** 3봉, **d** 3봉)") · `auto_ichimoku_span_a`("일목 선행스팬1(**conv_n** 9봉, **base_n** 26봉, **shift** 26봉)") · `auto_ichimoku_span_b`("**span_n** 52봉, **shift** 26봉").
+      ① 그 파라미터들에 쉬운 한글 이름(예: 전환선 기간 · 기준선 기간 · 선행스팬2 기간 · 앞으로 미는 칸 · %K 평활 · %D 평활) — 카탈로그 쪽에 넣어 고급 조립기에도 같이 보이게. ② **카나리아**: 모든 카드(모든 모드)의 보이는 문장·예시·빈칸 이름에 영문 식별자(`[a-z_]+` 설정 이름)가 없다. pytest studio. git commit 금지. STATUS 갱신.
