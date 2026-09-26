@@ -1,4 +1,6 @@
 """지표 정확도 — 기존 compute_rsi 와 동일, 봉 t 제외 규칙, 카탈로그 전수."""
+from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -6,6 +8,8 @@ import pytest
 from backtesting.indicators import compute_rsi
 from studio.domain.conditions import indicators as I
 from studio.domain.conditions.catalog import INDICATORS
+from studio.domain.conditions.ind_group import GROUP_INDICATORS, Reference
+from studio.domain.conditions.intraday import INTRADAY_ONLY
 from tests.studio.conditions.helpers import synth_panel
 
 
@@ -78,9 +82,13 @@ def test_value_rank_descending_and_ties_and_nan():
 
 @pytest.mark.parametrize("name", sorted(INDICATORS))
 def test_every_catalog_entry_computes_or_is_declared_pending(panel, name):
-    if name in ("day_change_pct", "time", "cum_value", "vwap"):  # 분봉 전용(module-6) — 일봉 표에선 ValueError
+    if name in INTRADAY_ONLY:  # 분봉 전용(module-6) — 일봉 표에선 ValueError
         with pytest.raises(ValueError, match="분봉 전용"):
             I.compute(panel, name)
+    elif name in GROUP_INDICATORS:  # 테마·업종 — 참조 데이터를 주입받아야 계산(없으면 ValueError, 테스트가 따로 확인)
+        cols = list(panel.close.columns)
+        ref = Reference({"T": cols[:4]}, {c: "S" for c in cols})
+        assert I.compute(SimpleNamespace(**vars(panel), reference=ref), name).shape == panel.close.shape
     else:
         assert I.compute(panel, name).shape == panel.close.shape
     assert INDICATORS[name].compute  # 목록 전용(계산 없음)으로 남은 지표는 이제 없다

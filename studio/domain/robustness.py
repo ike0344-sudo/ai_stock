@@ -11,6 +11,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from .metrics import collapse_entries
+
 MULTIPLIERS = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0)
 MC_SIMS = 1_000
 MC_SEED = 42
@@ -98,6 +100,6 @@ def robustness_report(trades: pd.DataFrame, initial_capital: float, *, is_compat
         cs = cost_sensitivity(closed, initial_capital)
         out.update(cost_sensitivity=cs["rows"], breakeven_cost_mult=cs["breakeven_cost_mult"],
                    cost_sensitivity_meta={k: cs[k] for k in ("gross_before_costs", "total_costs", "approximation")})
-    out["monte_carlo"] = monte_carlo(closed, initial_capital, seed=seed)
+    out["monte_carlo"] = monte_carlo(collapse_entries(closed), initial_capital, seed=seed)  # 분할 청산 조각은 진입 한 건으로 합쳐 섞는다
     out["concentration"] = concentration(closed)
     return out

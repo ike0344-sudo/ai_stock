@@ -65,6 +65,53 @@ def _trade_sharpe(closed: list[Trade]) -> float:
     return mean / std * math.sqrt(len(r))
 
 
+# ---------------------------------------------------------------- 진입 기준 집계 (분할 청산 조각 → 진입 한 건)
+
+
+def entry_level(closed: list[Trade]) -> list[tuple[float, float, "pd.Timestamp", int]]:
+    """청산된 거래(조각 포함) → 진입 한 건씩 (순손익, 순수익률(소수), 마지막 청산 시각, 보유 봉) — 청산 시각 순.
+    같은 `entry_id` 조각은 합산한다(순수익률 = 합계 순손익 ÷ 매수 금액 합). 조각을 따로 세면 승률이 부풀려진다(분할 익절의 첫 조각은 거의 이익).
+    `entry_id < 0`(조각 없음 — 호환·틱 엔진 등)은 각자 한 진입."""
+    groups: dict = {}
+    for k, t in enumerate(closed):
+        key = t.entry_id if t.entry_id >= 0 else ("solo", k)
+        g = groups.get(key)
+        amt = t.entry_price * t.qty
+        if g is None:
+            groups[key] = [t.net_pnl, amt, t.exit_ts, t.bars_held]
+        else:
+            g[0] += t.net_pnl
+            g[1] += amt
+            if t.exit_ts >= g[2]:
+                g[2], g[3] = t.exit_ts, max(g[3], t.bars_held)
+    rows = [(g[0], g[0] / g[1], g[2], g[3]) for g in groups.values()]
+    rows.sort(key=lambda r: r[2])  # 안정 정렬 — 같은 시각이면 진입 순
+    return rows
+
+
+def collapse_entries(trades: pd.DataFrame) -> pd.DataFrame:
+    """거래표(조각 행 포함) → 진입 한 건당 한 행. `entry_id` 칸이 없거나 조각이 없으면 그대로 돌려준다.
+    합산: qty·gross_pnl·commission·tax·slippage_cost·net_pnl. net_pct = 합계 순손익 ÷ (진입가×수량 합). exit_ts=마지막 조각, exit_price=수량 가중,
+    exit_reason=마지막 조각, bars_held·mfe_pct·mae_pct = 마지막 조각(누적 값이라 마지막이 진입 전체의 값)."""
+    if "entry_id" not in trades.columns or "slice" not in trades.columns or trades.empty or not (trades["slice"] > 1).any():
+        return trades
+    t = trades.copy()
+    solo = t["entry_id"] < 0
+    t["_key"] = np.where(solo, -1 - np.arange(len(t)), t["entry_id"])  # 조각 없는 행은 각자 한 진입
+    t["_amt"] = t["entry_price"] * t["qty"]
+    t["_xq"] = t["exit_price"] * t["qty"]
+    agg = {c: "sum" for c in ("qty", "gross_pnl", "commission", "tax", "slippage_cost", "net_pnl", "_amt", "_xq") if c in t.columns}
+    last_cols = [c for c in t.columns if c not in agg and c not in ("_key",)]
+    t = t.sort_values(["_key", "slice"], kind="stable")
+    g = t.groupby("_key", sort=False)
+    out = g.agg({**agg, **{c: "last" for c in last_cols}})
+    out["net_pct"] = out["net_pnl"] / out["_amt"]
+    out["exit_price"] = out["_xq"] / out["qty"]
+    out["slice"] = 1
+    out = out.drop(columns=["_amt", "_xq"]).reset_index(drop=True)
+    return out.sort_values("exit_ts", kind="stable").reset_index(drop=True)
+
+
 # ---------------------------------------------------------------- 표준 지표 (일별 평가)
 
 
@@ -81,8 +128,14 @@ def standard_metrics(result: BacktestResult, initial_capital: float, periods_per
     out.update(equity_stats(e, initial_capital, periods_per_year))
 
     closed = sorted((t for t in result.trades if t.net_pnl is not None), key=lambda t: t.exit_ts)
-    out.update(trade_stats(np.array([t.net_pnl for t in closed]), np.array([t.net_pct for t in closed])))
-    out["avg_holding_bars"] = float(np.mean([t.bars_held for t in closed])) if closed else 0.0
+    if any(t.slice > 1 for t in closed):  # 분할 청산 — 승률·기대값·손익비는 **진입 한 건 기준**(조각 합산)
+        ent = entry_level(closed)
+        out.update(trade_stats(np.array([r[0] for r in ent]), np.array([r[1] for r in ent])))
+        out["num_slices"] = len(closed)
+        out["avg_holding_bars"] = float(np.mean([r[3] for r in ent]))
+    else:
+        out.update(trade_stats(np.array([t.net_pnl for t in closed]), np.array([t.net_pct for t in closed])))
+        out["avg_holding_bars"] = float(np.mean([t.bars_held for t in closed])) if closed else 0.0
     out["exposure_pct"] = float((eq["n_positions"] > 0).mean() * 100)
 
     traded = sum(f.price * f.qty for f in result.fills)

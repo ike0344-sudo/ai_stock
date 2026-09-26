@@ -67,12 +67,25 @@ def _fast_tick_day(code: str, day: dt.date, prev_close: float | None):
 
 class LocalMarketData:
     def __init__(self) -> None:
+        self._inject_reference()
         self._daily: pd.DataFrame | None = None
         self._index: dict[str, pd.DataFrame] | None = None
         self._info: pd.DataFrame | None = None
         self._mcov: dict[str, dict[str, tuple[dt.date, dt.date]]] = {}  # 출처별 종목 커버리지 캐시
         self._close_idx: dict[str, tuple[int, int]] | None = None  # 종목 → (시작, 끝) 위치, 아래 두 배열은 (종목, 날짜) 정렬
         self._close_dates = self._close_vals = None
+
+    @staticmethod
+    def _inject_reference() -> None:
+        """테마·업종 지표(ind_group)가 읽는 참조(구성은 **현재 기준**)를 도메인에 주입한다. 파일이 없으면 주입 안 함 —
+        그 지표를 쓰면 도메인이 '참조 데이터가 없음' 오류를 낸다(조용히 통과하지 않는다)."""
+        try:
+            from studio.domain.conditions import ind_group
+
+            from .reference_data import load_reference
+            ind_group.set_default_reference(load_reference())
+        except (FileNotFoundError, ImportError):
+            pass
 
     # ---- 일봉
     def _all_daily(self) -> pd.DataFrame:

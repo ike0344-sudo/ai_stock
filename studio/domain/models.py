@@ -46,6 +46,10 @@ class Position:
     trail_peak: float | None
     bars_held: int
     entry_costs: float
+    entry_id: int = -1  # 이 진입의 번호 — 분할 청산 조각(Trade)이 같은 번호를 단다
+    slices: int = 0  # 이미 판 조각 수
+    tp_levels: list = field(default_factory=list)  # 남은 분할 익절 [(선 가격, 남은 수량 중 파는 비율)] — 가격 오름차순
+    trail_on: bool = True  # 트레일링 발동(trail_activate_pct 가 있으면 최고 수익률이 넘기 전까지 False)
 
 
 @dataclass(frozen=True)
@@ -80,6 +84,8 @@ class Trade:
     bars_held: int
     mfe_pct: float | None
     mae_pct: float | None
+    entry_id: int = -1  # 같은 진입에서 나온 조각은 같은 번호(분할 익절) — 승률·기대값은 이 번호로 묶어 센다. -1 = 조각 없음(자기 자신이 한 진입)
+    slice: int = 1  # 그 진입의 몇 번째 조각
 
 
 @dataclass(frozen=True)

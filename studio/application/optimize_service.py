@@ -26,7 +26,7 @@ from typing import Any, Callable, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
-from studio.domain.metrics import equity_stats, trade_stats
+from studio.domain.metrics import collapse_entries, equity_stats, trade_stats
 from studio.domain.spec import Period, Spec
 from studio.domain.validation import (
     OBJECTIVE_KEY, WARN_COMBOS, OptimizeConfig, TradeArrays, ValidationConfigError, WalkForwardConfig,
@@ -42,7 +42,7 @@ from .ports import HoldoutLedger, LegacyStrategies, MarketData, RunRecord, Tradi
 
 Progress = Callable[[str, float], None]
 _TRADE_COLS = ["code", "entry_ts", "exit_ts", "entry_price", "qty", "gross_pnl", "commission", "tax", "slippage_cost",
-               "net_pnl", "net_pct", "bars_held", "exit_reason", "mfe_pct", "mae_pct"]
+               "net_pnl", "net_pct", "bars_held", "exit_reason", "mfe_pct", "mae_pct", "entry_id", "slice"]
 MIN_FOLDS_WARN = 3
 MIN_IS_DAYS_WARN = 120
 
@@ -66,7 +66,8 @@ def _eval_one(spec: Spec, overrides: Mapping[str, float], md: MarketData, legacy
     except ValueError as e:  # 변수 값이 Spec·기존 전략 검증을 못 넘는 조합(예: short >= long) — 무효로 표시하고 계속
         return ComboRun(dict(overrides), error=str(e).splitlines()[0][:200])
     t = rec.trades
-    t = t[t["net_pnl"].notna()][_TRADE_COLS].reset_index(drop=True) if len(t) else pd.DataFrame(columns=_TRADE_COLS)
+    # 분할 청산 조각은 진입 한 건으로 합친다(collapse_entries) — 구간 승률·기대값·MC 가 조각이 아니라 진입 기준이 되게
+    t = collapse_entries(t[t["net_pnl"].notna()][_TRADE_COLS].reset_index(drop=True)) if len(t) else pd.DataFrame(columns=_TRADE_COLS)
     return ComboRun(dict(overrides), ts=pd.DatetimeIndex(rec.equity["ts"]), equity=rec.equity["equity"].to_numpy(float),
                     trades=t)
 

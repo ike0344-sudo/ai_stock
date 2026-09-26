@@ -29,21 +29,38 @@ def _operand_values(entry: Group, panel: Any, market: Any, code: str, row: pd.Ti
     gaps = gap_columns(panel.close)
     out = []
     for c in iter_conditions(entry):
-        vals = []
-        for op in (c.left, c.right):
-            if isinstance(op, ConstOperand):
-                v: Any = float(op.value)
-            else:
-                frame = _operand(op, panel, market, gaps)
-                v = float(frame.at[row, code]) if isinstance(frame, pd.DataFrame) else float(frame)
-            vals.append(None if (isinstance(v, float) and not np.isfinite(v)) else v)
+        vals = [_value_of(op, panel, market, gaps, code, row) for op in (c.left, c.right)]  # right 는 참이면·거짓이면 에선 없다(None)
         out.append({"text": _cond_text(c), "left": vals[0], "right": vals[1]})
     return out
 
 
+def _value_of(op: Any, panel: Any, market: Any, gaps: Any, code: str, row: pd.Timestamp) -> float | None:
+    """피연산자의 그날 값. 값이 없거나(NaN) 이 미리보기가 못 계산하는 피연산자(포지션·시간 단위)면 None — 미리보기 전체가 죽지 않게."""
+    if op is None:
+        return None
+    if isinstance(op, ConstOperand):
+        v: Any = float(op.value)
+    else:
+        try:
+            frame = _operand(op, panel, market, gaps)
+            v = float(frame.at[row, code]) if isinstance(frame, pd.DataFrame) else float(frame)
+        except (ValueError, KeyError, TypeError):
+            return None
+    return None if (isinstance(v, float) and not np.isfinite(v)) else v
+
+
+def _text(op: Any) -> str:
+    try:
+        return narrate_operand(op, "일")
+    except Exception:  # 풀이가 아직 못 다루는 피연산자(수식의 산술 등) — 종류 이름으로 대신
+        return f"({getattr(op, 'kind', '?')})"
+
+
 def _cond_text(c: Condition) -> str:
-    sym = {"gt": ">", "gte": "≥", "lt": "<", "lte": "≤", "cross_above": "↗ 상향 돌파", "cross_below": "↘ 하향 돌파"}[c.op]
-    return f"{narrate_operand(c.left, '일')} {sym} {narrate_operand(c.right, '일')}"
+    sym = {"gt": ">", "gte": "≥", "lt": "<", "lte": "≤", "cross_above": "↗ 상향 돌파", "cross_below": "↘ 하향 돌파",
+           "cross_above_within": f"↗ 최근 {c.within}봉 안 상향 돌파", "cross_below_within": f"↘ 최근 {c.within}봉 안 하향 돌파",
+           "is_true": "이(가) 참", "is_false": "이(가) 거짓"}.get(c.op, c.op)
+    return f"{_text(c.left)} {sym}" if c.right is None else f"{_text(c.left)} {sym} {_text(c.right)}"
 
 
 def preview(spec: Spec, market_data: MarketData, legacy: LegacyStrategies | None = None, limit: int = 50) -> dict[str, Any]:

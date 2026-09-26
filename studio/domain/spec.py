@@ -14,9 +14,10 @@ from typing import Annotated, Any, Iterator, Literal, Mapping, Union
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .conditions.ast import (
-    Group, IndOperand, MarketOperand, ParamRef, bind_tree, iter_operands, iter_param_slots,
+    Group, IndOperand, MarketOperand, ParamRef, PosOperand, bind_tree, iter_operands, iter_param_slots,
 )
 from .conditions.catalog import INDICATORS
+from .conditions.validation import validate_group
 
 LEGACY_NAMES = (
     "ma_crossover", "rsi", "envelope", "new_high_swing", "pullback_reentry",
@@ -80,11 +81,25 @@ class LegacyStrategy(_M):
 Strategy = Annotated[Union[BuilderStrategy, LegacyStrategy], Field(discriminator="source")]
 
 
+class TpLevel(_M):
+    pct: Num  # 매수가 대비 익절 % (변수 가능)
+    fraction: float = Field(gt=0, le=1)  # 그 선에서 **남은 수량** 중 파는 비율 — [{5,0.5},{10,1.0}] = +5% 에 절반, +10% 에 나머지 전부
+
+
 class Exits(_M):
     stop_loss_pct: Num | None = None
     take_profit_pct: Num | None = None
     trailing_stop_pct: Num | None = None
     max_holding_bars: Num | None = None
+    # ---- studio-conditions c2 — 옛 명세엔 칸이 없다 = 기본값(해시에서도 기본값이면 뺀다)
+    take_profit_levels: list[TpLevel] | None = Field(None, min_length=1, max_length=10)  # 분할 익절 — take_profit_pct 와 같이 못 씀
+    take_profit_mode: Literal["intrabar", "close"] = "intrabar"  # 익절을 봉 안 즉시(기존) / 종가 확인 뒤 다음 봉 시가
+    trail_activate_pct: Num | None = None  # 최고 수익률이 X% 를 넘은 다음 봉부터 트레일링 작동(trailing_stop_pct 필요)
+    breakeven_after_pct: Num | None = None  # 최고 수익률이 X% 를 넘은 다음 봉부터 손절선을 매수가로
+    max_holding_minutes: Num | None = None  # 분봉 시간 청산 — 진입 봉을 1봉(=봉 길이 분)으로 세어 올림한 봉 수에 종가 청산
+
+    def is_default(self) -> bool:
+        return all(v is None for k, v in self.model_dump().items() if k != "take_profit_mode") and self.take_profit_mode == "intrabar"
 
 
 class Portfolio(_M):
@@ -131,17 +146,36 @@ class BuyRatio(_M):
     min: float = Field(ge=0, le=1)
 
 
+class TradeStrength(_M):
+    w: int = Field(ge=1, le=3600)  # 창(초)
+    min: float = Field(ge=0)  # 체결강도(%) 하한 — 매수체결량 ÷ 매도체결량 × 100
+
+
+class BlockTrades(_M):
+    w: int = Field(ge=1, le=3600)  # 창(초)
+    min_value: float = Field(gt=0)  # 대량 체결 1건의 최소 체결대금(원)
+    min_count: int = Field(1, ge=1)  # 창 안 대량 체결 최소 건수
+
+
+class DailyBreakout(_M):
+    n: int = Field(ge=1, le=250)  # 전일(D−1)까지 n일 최고가를 넘을 때 — 기준선은 서비스가 일봉에서 계산해 준다
+
+
 class TickCatalog(_M):
     breakout_min: int | None = Field(5, ge=1, le=60)
     value_speed: ValueSpeed | None = None
     buy_ratio: BuyRatio | None = None
+    trade_strength: TradeStrength | None = None  # 옛 명세는 칸이 없다 = None
+    block_trades: BlockTrades | None = None
+    daily_breakout: DailyBreakout | None = None
     time_from: str = Field("09:05", pattern=_TIME)
     time_to: str = Field("15:00", pattern=_TIME)
 
     @model_validator(mode="after")
     def _check(self) -> "TickCatalog":
-        if self.breakout_min is None and self.value_speed is None and self.buy_ratio is None:
-            raise ValueError("틱 조건이 하나도 없음 (breakout_min·value_speed·buy_ratio 중 하나 필요)")
+        if all(v is None for v in (self.breakout_min, self.value_speed, self.buy_ratio, self.trade_strength,
+                                   self.block_trades, self.daily_breakout)):
+            raise ValueError("틱 조건이 하나도 없음 (breakout_min·value_speed·buy_ratio·trade_strength·block_trades·daily_breakout 중 하나 필요)")
         if self.time_from >= self.time_to:
             raise ValueError("time_from 이 time_to 보다 같거나 늦음")
         return self
@@ -186,11 +220,17 @@ class Validation(_M):
 _EXIT_RANGES = {
     "stop_loss_pct": (0, 100, False, False), "take_profit_pct": (0, 1000, False, False),
     "trailing_stop_pct": (0, 100, False, False), "max_holding_bars": (1, 5000, True, True),
+    "trail_activate_pct": (0, 1000, False, False), "breakeven_after_pct": (0, 1000, False, False),
+    "max_holding_minutes": (1, 100000, True, True),
 }
 _PORT_RANGES = {
     "max_positions": (1, 100, True, True), "max_weight_pct": (0, 100, False, False),
     "fixed_amount": (0, None, False, False), "risk_pct": (0, 100, False, False),
 }
+
+
+def _has_pos(g: Group) -> bool:
+    return any(isinstance(o, PosOperand) for o in iter_operands(g))
 
 
 def _out_of_range(v: float, lo: float | None, hi: float | None, lo_inclusive: bool) -> bool:
@@ -225,6 +265,16 @@ class Spec(_M):
         if self.intraday is not None and self.intraday.prefilter is not None:
             yield self.intraday.prefilter
 
+    def _role_groups(self) -> Iterator[tuple[str, Group]]:
+        """(역할, 그룹) — 진입·청산·시장 필터·사전 필터. 역할별 규칙(pos 는 청산만 등)을 위해 _groups 와 따로 둔다."""
+        if isinstance(self.strategy, BuilderStrategy):
+            yield "entry", self.strategy.entry
+            yield "exit", self.strategy.exit
+        if self.market_filter is not None:
+            yield "market_filter", self.market_filter
+        if self.intraday is not None and self.intraday.prefilter is not None:
+            yield "prefilter", self.intraday.prefilter
+
     def _slots(self) -> Iterator[tuple[str, str, float | None, float | None, bool, bool]]:
         """(변수 이름, 칸 위치, 최소, 최대, 정수 여부, 최소 포함) — {"param":..} 가 쓰인 모든 칸."""
         for g in self._groups():
@@ -235,10 +285,39 @@ class Spec(_M):
                 v = getattr(section, field)
                 if isinstance(v, ParamRef):
                     yield v.param, field, lo, hi, integer, inclusive
+        for j, lv in enumerate(self.exits.take_profit_levels or []):
+            if isinstance(lv.pct, ParamRef):
+                yield lv.pct.param, f"exits.take_profit_levels.{j}.pct", 0, 1000, False, False
         if isinstance(self.strategy, LegacyStrategy):
             for k, v in self.strategy.params.items():
                 if isinstance(v, ParamRef):
                     yield v.param, f"strategy.params.{k}", None, None, False, True
+
+    def _check_exits(self, m: str) -> None:
+        """청산 확장 칸(c2)끼리·모드와의 관계 — 조용히 무시되는 조합은 오류로 막는다."""
+        ex = self.exits
+        lv = ex.take_profit_levels
+        if lv is not None:
+            if ex.take_profit_pct is not None:
+                raise ValueError("exits.take_profit_levels 와 exits.take_profit_pct 는 같이 쓸 수 없음(분할 익절이 단일 익절을 대신한다)")
+            pcts = [x.pct for x in lv]
+            if all(not isinstance(v, ParamRef) for v in pcts):
+                if any(v <= 0 or v > 1000 for v in pcts):
+                    raise ValueError("exits.take_profit_levels 의 pct 는 0 초과 1000 이하")
+                if any(b <= a for a, b in zip(pcts, pcts[1:])):
+                    raise ValueError("exits.take_profit_levels 의 pct 는 오름차순(중복 없음)이어야 함")
+        if ex.take_profit_mode == "close" and ex.take_profit_pct is None and lv is None:
+            raise ValueError("exits.take_profit_mode='close' 는 익절(take_profit_pct 또는 take_profit_levels)이 있어야 함")
+        if ex.trail_activate_pct is not None and ex.trailing_stop_pct is None:
+            raise ValueError("exits.trail_activate_pct 는 exits.trailing_stop_pct 가 있어야 함(발동 문턱만 있고 트레일링이 없다)")
+        if ex.max_holding_minutes is not None and m != "intraday":
+            raise ValueError("exits.max_holding_minutes 는 분봉(intraday) 모드에서만 쓸 수 있음 — 일봉은 max_holding_bars")
+        if m == "tick":
+            if ex.take_profit_mode != "intrabar" or any(getattr(ex, k) is not None for k in (
+                    "take_profit_levels", "trail_activate_pct", "breakeven_after_pct", "max_holding_minutes")):
+                raise ValueError("틱 모드는 분할 익절·종가 확인 익절·트레일링 발동·본전 손절·분 단위 보유 청산을 아직 지원하지 않음")
+            if isinstance(self.strategy, BuilderStrategy) and _has_pos(self.strategy.exit):
+                raise ValueError("틱 모드는 포지션(pos) 조건 청산을 아직 지원하지 않음")
 
     @model_validator(mode="after")
     def _check(self) -> "Spec":
@@ -256,21 +335,22 @@ class Spec(_M):
         if self.compat.legacy:
             if m != "daily_single":
                 raise ValueError("호환 모드(compat.legacy)는 daily_single 에서만 켤 수 있음")
-            if any(v is not None for v in self.exits.model_dump().values()):
+            if not self.exits.is_default():
                 raise ValueError("호환 모드에서는 손절·익절·트레일링·보유기간을 쓸 수 없음(비활성 규칙)")
+            if isinstance(self.strategy, BuilderStrategy) and _has_pos(self.strategy.exit):
+                raise ValueError("호환 모드에서는 포지션(pos) 조건 청산을 쓸 수 없음")
+        self._check_exits(m)
         p = self.portfolio
         if p.sizing == "fixed_amount" and p.fixed_amount is None:
             raise ValueError("sizing='fixed_amount' 인데 portfolio.fixed_amount 가 없음")
         if p.sizing == "risk_pct" and (p.risk_pct is None or self.exits.stop_loss_pct is None):
             raise ValueError("sizing='risk_pct' 는 portfolio.risk_pct 와 exits.stop_loss_pct 가 모두 필요")
         # 모드 ↔ 지표 (틱 모드의 분봉 정밀화는 분봉 지표를 씀)
-        eff = "intraday" if m == "tick" else m
-        pre = self.intraday.prefilter if self.intraday is not None else None
-        for g in self._groups():
-            gm = "daily_portfolio" if g is pre else eff  # 사전 필터는 일봉(D−1) 조건
-            for op in iter_operands(g):
-                if isinstance(op, IndOperand) and gm not in INDICATORS[op.name].modes:
-                    raise ValueError(f"지표 '{op.name}' 는 '{gm}' 조건에서 쓸 수 없음 (가능: {list(INDICATORS[op.name].modes)})")
+        # 규칙(모드·시간 단위 tf·청산 전용 pos)은 conditions/validation.py — studio-conditions c1
+        bm = self.intraday.bar_minutes if self.intraday is not None else 5
+        src = self.intraday.source if self.intraday is not None else "al"
+        for role, g in self._role_groups():
+            validate_group(g, role, mode=m, bar_minutes=bm, source=src)
         # 숫자 칸의 리터럴 범위
         for section, ranges in ((self.exits, _EXIT_RANGES), (self.portfolio, _PORT_RANGES)):
             for field, (lo, hi, integer, inclusive) in ranges.items():

@@ -1,8 +1,14 @@
 """조건식 AST — 설계서 §3.2. pydantic v2 검증(오류는 loc 경로 포함).
 
-Group(all/any, 깊이 ≤ 2) → Condition(left op right) → Operand(field/ind/market/const).
+Group(all/any, 깊이 ≤ 2, negate) → Condition(left op right, hold) → Operand(field/ind/market/const/expr/pos).
 숫자 칸은 `number | {"param": 이름}` — 최적화 변수. `bind_group`/`bind_tree` 로 값을 채운다.
 domain 계층: pydantic·stdlib 만 쓴다(§9.3).
+
+studio-conditions c1 확장(설계 studio-conditions §3.1) — **새 칸은 전부 기본값이 옛 동작**(저장된 명세·프리셋·결과 그대로):
+  · 피연산자 `tf`(시간 단위, 기본 "bar") — field·ind 에 붙는다. 모드·live 지원 검사는 여기(지표 단위)와 validation.py(모드·출처·청산 전용)
+  · `expr`(산술 + − × ÷, 깊이 ≤ 8, 수식용) · `pos`(포지션 값 — **청산 조건 전용**, 평가는 엔진(c2))
+  · Condition `hold`(연속 k봉 만족, 기본 1) · `within`(cross_*_within 의 k) · 연산자 cross_above_within / cross_below_within / is_true / is_false
+  · Group `negate`(NOT)
 """
 from __future__ import annotations
 
@@ -10,11 +16,17 @@ from typing import Annotated, Any, Iterator, Literal, Mapping, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .catalog import INDICATORS, MARKET_INDEXES, MARKET_NAMES, N_MAX, N_MIN, ParamDef
+from .catalog import INDICATORS, MARKET_INDEXES, MARKET_NAMES, MINUTE_TIMEFRAMES, N_MAX, N_MIN, ParamDef
 
 MAX_GROUP_DEPTH = 2  # 근거: 화면 편집기가 하위 그룹 1단계까지(§5.4)
 OFFSET_MAX = N_MAX
-OPS = ("gt", "gte", "lt", "lte", "cross_above", "cross_below")
+OPS = ("gt", "gte", "lt", "lte", "cross_above", "cross_below", "cross_above_within", "cross_below_within", "is_true", "is_false")
+WITHIN_OPS = ("cross_above_within", "cross_below_within")
+UNARY_OPS = ("is_true", "is_false")  # 왼쪽 값 하나만 본다(1/0 지표용) — right 없음
+MAX_EXPR_DEPTH = 8
+MAX_HOLD = 50
+MAX_WITHIN = 50
+Timeframe = Literal["bar", "m1", "m3", "m5", "m10", "m15", "m30", "m60", "daily_prev", "daily_live"]
 
 
 class _M(BaseModel):
@@ -50,8 +62,9 @@ def _check_param(owner: str, p: ParamDef, v: Any) -> None:
 class FieldOperand(_M):
     kind: Literal["field"]
     name: Literal["open", "high", "low", "close", "volume", "value"]
-    offset: int = Field(0, ge=0, le=OFFSET_MAX)  # 음수 금지 = 미래 참조 금지
+    offset: int = Field(0, ge=0, le=OFFSET_MAX)  # 음수 금지 = 미래 참조 금지. 며칠·몇 봉 전은 tf 자신의 단위로
     mul: Num = 1.0
+    tf: Timeframe = "bar"
 
 
 class IndOperand(_M):
@@ -60,12 +73,20 @@ class IndOperand(_M):
     params: dict[str, ParamValue] = Field(default_factory=dict)
     offset: int = Field(0, ge=0, le=OFFSET_MAX)
     mul: Num = 1.0
+    tf: Timeframe = "bar"
 
     @model_validator(mode="after")
     def _check(self) -> "IndOperand":
         d = INDICATORS.get(self.name)
         if d is None:
             raise ValueError(f"없는 지표 '{self.name}' (가능: {sorted(INDICATORS)})")
+        if self.tf == "daily_live" and not d.live:
+            raise ValueError(f"지표 '{self.name}' 는 일봉 장중(daily_live)을 지원하지 않는다 — 점화식이 O(1) 인 지표만 된다. "
+                             "일봉 전일(daily_prev)로 쓰거나 지원 지표(live)로 바꿔라")
+        if self.tf in ("daily_prev", "daily_live") and not (set(d.modes) & {"daily_single", "daily_portfolio"}):
+            raise ValueError(f"지표 '{self.name}' 는 분봉 전용이라 일봉 시간 단위({self.tf})로 쓸 수 없다")
+        if self.tf in MINUTE_TIMEFRAMES and "intraday" not in d.modes:
+            raise ValueError(f"지표 '{self.name}' 는 일봉 전용이라 분봉 시간 단위({self.tf})로 쓸 수 없다 — 일봉 시간 단위(daily_prev)를 써라")
         known = {p.name: p for p in d.params}
         for k, v in self.params.items():
             if k not in known:
@@ -96,18 +117,62 @@ class ConstOperand(_M):
     value: Num
 
 
+class PosOperand(_M):
+    """포지션 값 — 보유 종목마다 봉 t 에서 엔진이 평가한다. **청산 조건 그룹에서만** 쓸 수 있다(보유 전엔 값이 없다 — validation.py)."""
+
+    kind: Literal["pos"]
+    name: Literal["return_pct", "bars_held", "minutes_held", "max_return_pct", "drawdown_pct", "entry_price"]
+
+
+class ExprOperand(_M):
+    """산술 피연산자 `left op right` (+ − × ÷) — 사용자 수식용. 깊이 ≤ 8. 0 으로 나누면 NaN(= 조건 거짓)."""
+
+    kind: Literal["expr"]
+    op: Literal["+", "-", "*", "/"]
+    left: "Operand"
+    right: "Operand"
+
+    @property
+    def depth(self) -> int:
+        return 1 + max(_expr_depth(self.left), _expr_depth(self.right))
+
+    @model_validator(mode="after")
+    def _check(self) -> "ExprOperand":
+        if self.depth > MAX_EXPR_DEPTH:
+            raise ValueError(f"산술 식은 {MAX_EXPR_DEPTH}단계까지 (현재 {self.depth}단계)")
+        return self
+
+
+def _expr_depth(op: Any) -> int:
+    return op.depth if isinstance(op, ExprOperand) else 0
+
+
 Operand = Annotated[
-    Union[FieldOperand, IndOperand, MarketOperand, ConstOperand], Field(discriminator="kind")
+    Union[FieldOperand, IndOperand, MarketOperand, ConstOperand, PosOperand, ExprOperand], Field(discriminator="kind")
 ]
+ExprOperand.model_rebuild()
 
 
 class Condition(_M):
     left: Operand
-    op: Literal["gt", "gte", "lt", "lte", "cross_above", "cross_below"]
-    right: Operand
+    op: Literal["gt", "gte", "lt", "lte", "cross_above", "cross_below",
+                "cross_above_within", "cross_below_within", "is_true", "is_false"]
+    right: Operand | None = None  # is_true / is_false 는 없음(왼쪽 값 하나만 본다)
+    hold: int = Field(1, ge=1, le=MAX_HOLD)  # 연속 k봉 만족(기본 1 = 그 봉만)
+    within: int | None = Field(None, ge=1, le=MAX_WITHIN)  # cross_*_within 의 k — 최근 k봉 안에 크로스가 있었나
 
     @model_validator(mode="after")
     def _check(self) -> "Condition":
+        if self.op in UNARY_OPS:
+            if self.right is not None:
+                raise ValueError(f"연산자 '{self.op}' 는 오른쪽 값이 없다(왼쪽 값이 0 이 아닌지/0 인지만 본다)")
+        elif self.right is None:
+            raise ValueError(f"연산자 '{self.op}' 는 오른쪽 값이 필요하다")
+        if self.op in WITHIN_OPS:
+            if self.within is None:
+                raise ValueError(f"연산자 '{self.op}' 는 within(최근 몇 봉 안인지)이 필요하다")
+        elif self.within is not None:
+            raise ValueError(f"within 은 cross_above_within·cross_below_within 에서만 쓴다(연산자 '{self.op}')")
         if isinstance(self.left, ConstOperand) and isinstance(self.right, ConstOperand):
             raise ValueError("상수끼리 비교할 수 없음 — 한쪽은 지표·가격이어야 함")
         return self
@@ -116,6 +181,9 @@ class Condition(_M):
 class Group(_M):
     logic: Literal["all", "any"]
     items: list[Union[Condition, "Group"]] = Field(default_factory=list)
+    negate: bool = False  # 그룹 전체를 뒤집는다(NOT)
+    # 사용자 수식 원문(설계 §3.5 "원문도 명세에 같이 저장(재현)") — 맨 위 그룹(entry/exit)에서만 쓴다. **평가·해시에는 무시**(같은 AST 면 같은 전략).
+    formula: str | None = Field(None, max_length=2000)
 
     @property
     def depth(self) -> int:
@@ -139,10 +207,20 @@ def iter_conditions(g: Group) -> Iterator[Condition]:
             yield it
 
 
+def _leaves(op: Any) -> Iterator[Any]:
+    if isinstance(op, ExprOperand):
+        yield from _leaves(op.left)
+        yield from _leaves(op.right)
+    else:
+        yield op
+
+
 def iter_operands(g: Group) -> Iterator[Operand]:
+    """조건 안의 **잎 피연산자**(field·ind·market·const·pos) — expr 는 안쪽 잎으로 펼친다."""
     for c in iter_conditions(g):
-        yield c.left
-        yield c.right
+        yield from _leaves(c.left)
+        if c.right is not None:
+            yield from _leaves(c.right)
 
 
 def iter_param_slots(g: Group) -> Iterator[tuple[str, float | None, float | None, bool]]:

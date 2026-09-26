@@ -60,9 +60,39 @@ def _canon(obj: Any) -> str:
     return json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
+def _strip_new_defaults(o: Any) -> Any:
+    """studio-conditions c1 이 조건 AST 에 추가한 칸(tf·hold·within·right(None)·negate)이 **기본값이면 뺀다** — 새 칸이 없던 때 만든
+    명세(저장된 실행·홀드아웃 장부·프리셋)의 해시가 스키마가 커져도 그대로 같게."""
+    if isinstance(o, list):
+        return [_strip_new_defaults(v) for v in o]
+    if not isinstance(o, dict):
+        return o
+    o = {k: _strip_new_defaults(v) for k, v in o.items()}
+    if o.get("kind") in ("field", "ind") and o.get("tf") == "bar":
+        o.pop("tf")
+    if "left" in o and "op" in o and o.get("kind") != "expr":  # Condition
+        if o.get("hold") == 1:
+            o.pop("hold")
+        if o.get("within") is None:
+            o.pop("within", None)
+        if o.get("right") is None:
+            o.pop("right", None)
+    if "stop_loss_pct" in o and "max_holding_bars" in o:  # Exits — c2 가 추가한 칸이 기본값이면 뺀다(옛 해시·홀드아웃 장부 보존)
+        for k in ("take_profit_levels", "trail_activate_pct", "breakeven_after_pct", "max_holding_minutes"):
+            if o.get(k) is None:
+                o.pop(k, None)
+        if o.get("take_profit_mode") == "intrabar":
+            o.pop("take_profit_mode")
+    if "logic" in o and "items" in o:  # Group
+        if o.get("negate") is False:
+            o.pop("negate")
+        o.pop("formula", None)  # 수식 원문은 같은 AST 의 표기일 뿐 — 전략 해시에 안 넣는다
+    return o
+
+
 def spec_hash(bound: Spec) -> str:
     """값이 다 채워진 명세의 해시(이름 제외) — 같은 설정이면 같다."""
-    d = bound.model_dump(mode="json")
+    d = _strip_new_defaults(bound.model_dump(mode="json"))
     d.pop("name", None)
     return hashlib.sha256(_canon(d).encode()).hexdigest()[:16]
 
@@ -70,7 +100,7 @@ def spec_hash(bound: Spec) -> str:
 def structure_hash(spec: Spec) -> str:
     """파라미터 **값**을 뺀 구조 해시 — 변수 칸({"param":..})은 그대로 두고 params 범위·이름·기간·검증 설정을 뺀다.
     홀드아웃을 몇 번 열었는지 세는 키(§3.8)."""
-    d = spec.model_dump(mode="json")
+    d = _strip_new_defaults(spec.model_dump(mode="json"))
     for k in ("name", "params", "validation", "period"):
         d.pop(k, None)
     return hashlib.sha256(_canon(d).encode()).hexdigest()[:16]
@@ -94,7 +124,7 @@ def family_hash(spec: Spec) -> str:
     structure_hash 는 손절 7% → 10% 처럼 **리터럴로 박은 값**을 바꾸면 다른 구조가 돼 홀드아웃 열람 횟수가 리셋된다.
     같은 전략을 손질하며 홀드아웃을 반복해 여는 것(엿보기)을 잡으려고 만들었고, **홀드아웃 열람 횟수는 이 해시로 센다**
     (lead 판정 2026-09-25). structure_hash 는 식별용으로 함께 기록한다."""
-    d = spec.model_dump(mode="json")
+    d = _strip_new_defaults(spec.model_dump(mode="json"))
     for k in ("name", "params", "validation", "period", "costs", "intraday", "tick"):
         d.pop(k, None)
     d["universe"].pop("codes", None)
@@ -150,17 +180,35 @@ def eligible_codes(spec: Spec, info: pd.DataFrame, mega_cap: frozenset[str], ava
 # --------------------------------------------------------------------------- Spec → 엔진 규칙
 
 
+def _holding_bars(spec: Spec) -> int | None:
+    """보유 상한(봉) — max_holding_bars 와 max_holding_minutes(봉 길이로 올림)) 중 빠른 쪽."""
+    e = spec.exits
+    bars = [int(e.max_holding_bars)] if e.max_holding_bars is not None else []
+    if e.max_holding_minutes is not None:
+        bm = spec.intraday.bar_minutes if spec.intraday is not None else 1
+        bars.append(-(-int(e.max_holding_minutes) // bm))
+    return min(bars) if bars else None
+
+
 def to_engine_rules(spec: Spec) -> tuple[CostModel, ExitRules, FillRules, PortfolioRules]:
     """Spec(변수가 채워진) → 엔진 규칙 — 이 변환은 여기 한 곳뿐이다."""
     c, e, f, p = spec.costs, spec.exits, spec.fills, spec.portfolio
     return (
         CostModel(c.commission_rate, c.tax_rate, c.slippage_mode, c.slippage_rate, float(c.slippage_ticks)),
-        ExitRules(e.stop_loss_pct, e.take_profit_pct, e.trailing_stop_pct,
-                  int(e.max_holding_bars) if e.max_holding_bars is not None else None),
+        ExitRules(e.stop_loss_pct, e.take_profit_pct, e.trailing_stop_pct, _holding_bars(spec),
+                  tuple((float(x.pct), float(x.fraction)) for x in e.take_profit_levels) if e.take_profit_levels else None,
+                  e.take_profit_mode, e.trail_activate_pct, e.breakeven_after_pct),
         FillRules(f.same_bar_policy, f.volume_cap_pct),
         PortfolioRules(p.initial_capital, int(p.max_positions), p.sizing, p.fixed_amount, p.risk_pct,
                        p.max_weight_pct, p.rank_by, p.random_seed),
     )
+
+
+def condition_warnings(spec: Spec) -> list[str]:
+    """쓰인 조건이 요구하는 경고 문구 — 테마·업종 지표는 **현재 구성 기준**(과거에도 오늘의 소속을 씀: 결과가 실제보다 좋게 나올 수 있음)."""
+    from studio.domain.conditions.ind_group import warnings_for
+    names = {op.name for _, g in spec._role_groups() for op in iter_operands(g) if isinstance(op, IndOperand)}
+    return warnings_for(names)
 
 
 def _uses_value(spec: Spec) -> bool:
@@ -381,7 +429,8 @@ def run_backtest(
         result = _compat_result(trades, candles, port.initial_capital, bound.costs.commission_rate)
         legacy_m = legacy_metrics(trades, candles.index.normalize().nunique(), port.initial_capital)
     else:
-        result = run_portfolio(sub, ent, ext, cost, exit_rules, fill_rules, port)
+        result = run_portfolio(sub, ent, ext, cost, exit_rules, fill_rules, port,
+                               pos_exit=ev.pos_exit.sliced(in_period) if ev.pos_exit is not None else None)
 
     # ---- 지표·경고·기록 (분봉·틱 모드와 공통)
     valid = sub.close.notna().to_numpy()  # 종목별 마지막 유효 봉이 기간 마지막 봉보다 앞인 종목 수
@@ -420,8 +469,12 @@ def assemble_record(*, spec: Spec, bound: Spec, result: BacktestResult, port: Po
 
     # ---- 경고
     n_closed = sum(1 for t in result.trades if t.net_pnl is not None)
-    if n_closed < MIN_TRADES:
-        warnings.append(f"거래 {n_closed}건 — {MIN_TRADES}건 미만이라 통계적으로 의미 있는 표본이 아니다")
+    n_entries = len({(t.entry_id if t.entry_id >= 0 else ("solo", k)) for k, t in enumerate(result.trades) if t.net_pnl is not None})
+    warnings += [w for w in condition_warnings(bound) if w not in warnings]
+    if n_entries < MIN_TRADES:  # 분할 청산 조각이 아니라 진입 건수로 센다
+        warnings.append(f"거래 {n_entries}건 — {MIN_TRADES}건 미만이라 통계적으로 의미 있는 표본이 아니다")
+    if n_entries != n_closed:
+        warnings.append(f"분할 청산으로 진입 {n_entries}건이 {n_closed}개 조각으로 나뉘었다 — 승률·기대값·손익비는 진입 기준(조각 합산)이다")
     warnings.append("생존 편향: 일봉 캐시는 현재 살아있는 종목 기준이라 상장폐지·거래정지 종목이 표본에서 빠져 있다")
     if _uses_value(bound) or extra_value_warning:
         warnings.append("거래대금은 KRX 일봉 종가×거래량 근사값이다(통합 AL 실거래대금이 아님)")
@@ -439,11 +492,12 @@ def assemble_record(*, spec: Spec, bound: Spec, result: BacktestResult, port: Po
         "slippage_cost": t.slippage_cost, "net_pnl": t.net_pnl, "net_pct": t.net_pct,
         "exit_reason": str(t.exit_reason) if t.exit_reason is not None else None,
         "bars_held": t.bars_held, "mfe_pct": t.mfe_pct, "mae_pct": t.mae_pct,
+        "entry_id": t.entry_id, "slice": t.slice,  # 분할 청산 조각 — 같은 entry_id 가 한 진입
     } for t in result.trades])
     elapsed = time.perf_counter() - t_start
     summary = _jsonable({
         "metrics": std, "legacy_metrics": legacy_m, "skipped": result.skipped,
-        "n_trades": len(result.trades), "n_closed": n_closed, "n_codes": n_codes, "n_bars": n_bars,
+        "n_trades": len(result.trades), "n_closed": n_closed, "n_entries": n_entries, "n_codes": n_codes, "n_bars": n_bars,
         "universe_excluded": ustats, "warnings": warnings,
         "robustness": robustness_report(trades_df, port.initial_capital, is_compat=compat) if len(trades_df) else None,
         # 사전 판정 기준(Spec.validation.criteria) — 실행 전에 spec 에 넣은 값 그대로, 이 전체 구간 지표로 판정

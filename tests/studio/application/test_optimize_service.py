@@ -1,5 +1,6 @@
 """optimize_service — 그리드·IS 선택·워크포워드·홀드아웃 (합성 일봉)."""
 import datetime as dt
+import json
 
 import numpy as np
 import pandas as pd
@@ -479,3 +480,21 @@ def test_holdout_ledger_entry_keeps_run_id_and_walkforward_trades_have_mfe_mae(m
     assert [e["run_id"] for es in ledger.all_entries().values() for e in es] == [rid]
     wf = run_walkforward(spec, md, WalkForwardConfig(120, 40, base=cfg(min_trades=1)))
     assert {"mfe_pct", "mae_pct"} <= set(wf.trades.columns) and wf.trades["mfe_pct"].notna().any()
+
+
+def test_hashes_ignore_new_condition_defaults_but_see_real_changes():
+    """c1 이 조건 AST 에 넣은 칸(tf·hold·within·right·negate)의 **기본값**은 해시에 안 들어간다 — 옛 명세의 해시가 그대로.
+    기본값이 아닌 값(hold=2, tf=daily_prev)은 다른 전략이라 해시가 달라진다."""
+    from studio.application.backtest_service import _strip_new_defaults
+    spec = Spec.model_validate(lit_dict())
+    dump = spec.model_dump(mode="json")
+    text = json.dumps(_strip_new_defaults(dump))
+    for k in ('"tf"', '"hold"', '"within"', '"negate"'):
+        assert k not in text  # 기본값이라 사라졌다
+    assert '"right"' in text  # 오른쪽 값이 있는 조건의 right 는 남는다
+    d2 = lit_dict()
+    d2["strategy"]["entry"]["items"][0]["hold"] = 2
+    assert structure_hash(Spec.model_validate(d2)) != structure_hash(spec)
+    d3 = lit_dict()
+    d3["strategy"]["entry"]["items"][0]["left"]["tf"] = "bar"  # 명시해도 기본값 = 같은 해시
+    assert structure_hash(Spec.model_validate(d3)) == structure_hash(spec)

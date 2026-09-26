@@ -46,6 +46,22 @@ def tamper_after(panel: SimpleNamespace, t: pd.Timestamp, factor: float = 10.0, 
     return SimpleNamespace(**d)
 
 
+def skew_after(panel: SimpleNamespace, t: pd.Timestamp) -> SimpleNamespace:
+    """t **이후** 행을 종목마다 다른 배수(짝수 열 ×10, 홀수 열 ×0.1)로 바꾼 사본 — 종목 간 순위·그룹 지표의 카나리아용
+    (전체를 같은 배수로 바꾸면 순위가 안 변해 카나리아가 죽는다). 분봉·일봉 공용."""
+    k = np.where(np.arange(panel.close.shape[1]) % 2 == 0, 10.0, 0.1)
+    d = {}
+    for f in ("open", "high", "low", "close", "volume", "value", "prev_close"):
+        x = getattr(panel, f).copy()
+        if f == "prev_close":  # 종가만 흔든다 — 같이 흔들면 등락률은 그대로라 등락 기반 지표의 카나리아가 죽는다
+            d[f] = x
+            continue
+        m = (x.index > t)
+        x.loc[m] = x.loc[m].to_numpy() * k
+        d[f] = x
+    return SimpleNamespace(**d)
+
+
 def field(name: str, offset: int = 0, mul=1.0) -> dict:
     return {"kind": "field", "name": name, "offset": offset, "mul": mul}
 

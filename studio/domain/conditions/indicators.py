@@ -16,7 +16,7 @@ from typing import Any, Callable
 import numpy as np
 import pandas as pd
 
-from .catalog import INDICATORS, resolve_params
+from .catalog import COMPUTE_REGISTRY, CROSS_SECTIONAL, INDICATORS, resolve_params
 from .intraday import INTRADAY_ONLY, compute_intraday, is_intraday
 
 Frame = pd.DataFrame
@@ -127,7 +127,10 @@ def value_rank(value: Frame, lookback: int = 1) -> Frame:
 
 
 def _wide(panel: Any, name: str, p: dict[str, Any]) -> Frame:
-    """빈칸 처리 없는 순수 벡터 계산(value_rank 제외)."""
+    """빈칸 처리 없는 순수 벡터 계산(value_rank 제외). 확장 지표(`ind_*.py`)는 카탈로그 COMPUTE_REGISTRY 에서 먼저 찾는다."""
+    ext = COMPUTE_REGISTRY.get(name)
+    if ext is not None:
+        return ext(panel, p)
     if name == "sma":
         return sma(getattr(panel, p["src"]), p["n"])
     if name == "ema":
@@ -190,7 +193,7 @@ def compute(panel: Any, name: str, params: dict[str, Any] | None = None, gaps: l
         if spec.kind == "int":
             p[spec.name] = int(p[spec.name])
     if name in INTRADAY_ONLY or (name == "gap_pct" and is_intraday(panel)):
-        return compute_intraday(panel, name)  # 행마다·날짜별 누적이라 빈 봉(NaN) 재계산 경로 불필요
+        return compute_intraday(panel, name, p)  # 행마다·날짜별 누적이라 빈 봉(NaN) 재계산 경로 불필요
     key = (name, tuple(sorted(p.items())))
     if memo is not None:
         _bind_memo(memo, panel)
@@ -201,6 +204,8 @@ def compute(panel: Any, name: str, params: dict[str, Any] | None = None, gaps: l
         lb = p["lookback"]  # 순위는 종목 간 비교라 열별 재계산 불가 — 평균만 자기 거래일로 낸 뒤 순위
         base = panel.value if lb == 1 else own_days(panel, lambda pn: pn.value.rolling(lb).mean(), gaps)
         out = value_rank(base, 1)
+    elif name in CROSS_SECTIONAL:  # 종목 간 비교(순위·테마·업종) — 전체 Panel 로 한 번
+        out = COMPUTE_REGISTRY[name](panel, p)
     else:
         out = own_days(panel, lambda pn: _wide(pn, name, p), gaps)
     if memo is not None:

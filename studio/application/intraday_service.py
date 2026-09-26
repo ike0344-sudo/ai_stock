@@ -21,7 +21,7 @@ import pandas as pd
 from studio.domain.conditions.evaluator import evaluate, evaluate_group
 from studio.domain.conditions.indicators import compute
 from studio.domain.conditions.prefilter import previous_day_flags
-from studio.domain.conditions.tick import detect_from_spec, is_gap_open_day
+from studio.domain.conditions.tick import detect_from_spec, is_gap_open_day, prior_n_high
 from studio.domain.engine.intraday import bar_sessions
 from studio.domain.engine.portfolio import run_portfolio
 from studio.domain.engine.tick import (
@@ -113,7 +113,8 @@ def run_intraday(spec: Spec, md: MarketData, progress: Progress | None = None, *
     # ---- 신호(분봉, t 까지) → 진입은 사전 필터와 AND
     tick("signals", 0.30)
     # 시장(지수) 피연산자는 평가기가 분봉 표에서 D−1 지수 값을 붙여 준다(strategy-agent 2026-09-26) — 당일 지수는 안 본다
-    ev = evaluate(strat.entry, strat.exit, mp, market=md.index_frames(), market_filter=bound.market_filter)
+    ev = evaluate(strat.entry, strat.exit, mp, market=md.index_frames(), market_filter=bound.market_filter,
+                  daily=daily, bar_minutes=cfg.bar_minutes)  # 시간 단위(mN·daily_prev·daily_live)용 일봉·봉 길이
     entry = ev.entry & pre
     bar_day = mp.close.index.normalize()
     in_period = np.asarray((bar_day >= start) & (bar_day <= end))
@@ -126,7 +127,8 @@ def run_intraday(spec: Spec, md: MarketData, progress: Progress | None = None, *
     tick("engine", 0.55)
     cost, exit_rules, fill_rules, port = to_engine_rules(bound)
     session = bar_sessions(sub.close.index, cfg.eod_time)
-    result = run_portfolio(sub, ent, ext, cost, exit_rules, fill_rules, port, session=session)
+    result = run_portfolio(sub, ent, ext, cost, exit_rules, fill_rules, port, session=session,
+                           pos_exit=ev.pos_exit.sliced(in_period) if ev.pos_exit is not None else None)
 
     # ---- 커버리지: 쓴 (날짜,종목) 쌍 / 기대 쌍 — 조용히 줄이지 않는다(기간의 모든 일봉 거래일 기준: 분봉이 통째로 없는 날도 센다)
     days_in = pd.DatetimeIndex(sorted(set(sub.close.index.normalize())))
@@ -283,7 +285,8 @@ def run_tick(spec: Spec, md: MarketData, progress: Progress | None = None, *, le
     tick_codes = md.tick_codes()
     if not tick_codes:
         raise BacktestError("체결(tick_al) 데이터가 없다")
-    daily, dcodes, ustats = _daily_frame(bound, md, info, 100)  # D−1 순위(lookback ≤ 60) 재료
+    db = getattr(tcfg.catalog, "daily_breakout", None)
+    daily, dcodes, ustats = _daily_frame(bound, md, info, max(100, (db.n + 5) if db is not None else 0))  # D−1 순위(lookback ≤ 60)·n일 고가 재료
     elig = [c for c in tick_codes if c in set(dcodes)] if bound.universe.type != "codes" else \
         [c for c in bound.universe.codes if c in set(tick_codes)]
     if not elig:
@@ -313,7 +316,10 @@ def run_tick(spec: Spec, md: MarketData, progress: Progress | None = None, *, le
             if tcfg.exclude_gap_open_pct is not None and is_gap_open_day(td, tcfg.exclude_gap_open_pct):
                 gap_skipped += 1
                 continue
-            ev = detect_from_spec(td, tcfg)
+            level = None
+            if db is not None:  # D−1 까지 n일 최고가 — 일봉 고가에서(당일 행은 안 봄: prior_n_high 가 day 미만만 센다)
+                level = prior_n_high(didx.date, daily.high[code].to_numpy(), d, db.n) if code in daily.high.columns else float("nan")
+            ev = detect_from_spec(td, tcfg, daily_high_level=level)
             n_no_entry += ev.n_no_entry
             for s, j in zip(ev.signal_sec, ev.entry_idx):
                 cands.setdefault(d, []).append(Candidate(code, d, td.sec, td.prc, td.prev_close, int(s), int(j)))
