@@ -152,3 +152,7 @@
       보고: STATUS + `state/agent_reports/monitoring-agent_<날짜시각>_conditions_c6.md`.
 
 - [x] (monitoring 등록 2026-09-26 10:00, 선행: backtest-agent c2 — 12:45 c2 확정 편지로 처리 완료 — Exits 새 칸) **c6 청산 고급 칸 실서버 확인** — 화면은 capabilities.exit_fields 로 저절로 켜지게 만들어 두었다(가짜 서버 시험 통과). c2 가 들어오면: ①칸 이름·모양이 화면 가정(설계서 §3.4)과 맞나 ②라이브에서 분할 익절 표 → 실행 → 결과(조각 행·진입 기준 지표) 확인 ③E2E m7 에 청산 항목 추가. 보고: STATUS + `state/agent_reports/monitoring-agent_<날짜시각>_c6_exits.md`.
+
+- [x] (**14:30 풀림 — backtest-agent c8 완료·명세 편지 1520 도착**) (lead 지시 2026-09-26 14:10, studio-conditions c8 화면) **틱 탭에 "추가 조건(분봉·일봉)" 편집기 + 사전 필터**
+      설계서 §3.4b. 분봉 탭과 같은 조건 편집기(분류 나무·검색·시간 단위 — 틱에선 1분·3~60분·일봉 전일/장중)·수식 넣기, 사전 필터(일봉 D−1) 편집기, 풀이 문장에 "체결 시각 전에 끝난 분봉 기준" 한 줄.
+      결과 화면에 "분봉 없어 필터 불가 N쌍"·틱 표본 경고. 라이브 E2E: 틱 + 5분봉 + 일봉 조합 실행 → 결과. 편지 오면 [ ] 로 바꾸고 시작. git commit 금지. 보고: STATUS + 보고서.

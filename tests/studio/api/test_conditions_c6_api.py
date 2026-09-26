@@ -19,7 +19,7 @@ def cclient(client, services):
 def test_indicators_carry_capabilities_and_ops_from_the_model(cclient):
     d = cclient.get("/api/meta/indicators").json()["data"]
     caps = d["capabilities"]
-    assert set(caps) == {"timeframes", "condition_fields", "group_fields", "operand_kinds", "pos_names", "exit_fields", "formulas"}
+    assert set(caps) == {"timeframes", "condition_fields", "group_fields", "operand_kinds", "pos_names", "exit_fields", "tick_fields", "formulas"}
     # 서버가 실제로 아는 것만 켜진다 — 이 값들은 모델·카탈로그에서 읽은 것(c1 이 들어와 시간 단위·hold·negate·pos 가 켜져 있다)
     assert caps["timeframes"] == list(cat.TIMEFRAMES) and caps["condition_fields"] == ["hold"] and caps["group_fields"] == ["negate"]
     assert "pos" in caps["operand_kinds"] and caps["pos_names"] == list(cat.POS_NAMES)

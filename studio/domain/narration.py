@@ -235,6 +235,9 @@ def narrate(spec: Spec) -> str:
         ps = ", ".join(f"{k}={_fmt(v)}" for k, v in s.params.items())
         lines.append(f"기존 전략 '{LEGACY_KO[s.name]}'({s.name}) 규칙을 그대로 쓴다" + (f": {ps}." if ps else "."))
     leaves = [o for g in (s.entry, s.exit) for o in iter_operands(g)] if isinstance(s, BuilderStrategy) else []
+    tick_filter = spec.tick.filter if spec.mode == "tick" and spec.tick is not None else None
+    if tick_filter is not None:
+        leaves += list(iter_operands(tick_filter))  # 틱 모드의 분봉 필터도 롤링 주의문 대상(bar = 1분봉)
     if intra and any(isinstance(o, IndOperand) and o.tf in ("bar", *MINUTE_TIMEFRAMES) and _is_rolling(o.name) for o in leaves):
         lines.append("※ 분봉 N봉 지표(이동평균·최고가 등)는 전날 봉을 포함해 계산하므로 장 시작 직후 신호는 전날 흐름의 영향을 받는다.")
     # (daily_prev 는 "오늘 장 시작 전에 알 수 있는 값" — 설계 §3.2 v0.3: highest/lowest(오늘 제외)도 D−N..D−1 이라 별도 주의문 없음)
@@ -250,6 +253,11 @@ def narrate(spec: Spec) -> str:
         if c.buy_ratio is not None:
             conds.append(f"매수 비중 {_fmt(c.buy_ratio.min)} 이상({c.buy_ratio.w}분 창)")
         lines.append(f"{c.time_from}~{c.time_to} 사이 " + " 그리고 ".join(conds) + " 이면 다음 체결에 산다.")
+        if spec.tick.prefilter is not None and spec.tick.prefilter.items:  # 일봉 사전 필터 — 전일(D−1) 확정값 기준
+            lines.append(f"전일 일봉 기준으로 {narrate_group(spec.tick.prefilter, '일')} 그 날만 틱을 본다.")
+        if tick_filter is not None and tick_filter.items:  # 분봉·일봉 필터 — 체결 시각까지 마감된 마지막 1분봉(bar = 1분봉)
+            lines.append(f"단, {narrate_group(tick_filter, unit)} 산다 — 체결 시각까지 마감된 마지막 1분봉 기준(진행 중인 봉은 안 본다).")
+            lines.append("※ 분봉이 없는 종목·날은 필터를 못 써서 진입하지 않는다.")
     if spec.market_filter is not None and spec.market_filter.items:
         lines.append(f"단, {narrate_group(spec.market_filter, unit)} 진입한다.")
     ex = _exits_text(spec)

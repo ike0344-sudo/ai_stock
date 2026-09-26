@@ -77,6 +77,10 @@ def _strip_new_defaults(o: Any) -> Any:
             o.pop("within", None)
         if o.get("right") is None:
             o.pop("right", None)
+    if "entry_source" in o and "catalog" in o:  # Tick — c8 이 추가한 칸(filter·prefilter)이 없으면 뺀다
+        for k in ("filter", "prefilter"):
+            if o.get(k) is None:
+                o.pop(k, None)
     if "stop_loss_pct" in o and "max_holding_bars" in o:  # Exits — c2 가 추가한 칸이 기본값이면 뺀다(옛 해시·홀드아웃 장부 보존)
         for k in ("take_profit_levels", "trail_activate_pct", "breakeven_after_pct", "max_holding_minutes"):
             if o.get(k) is None:

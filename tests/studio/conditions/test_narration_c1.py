@@ -91,6 +91,27 @@ def _spec(entry_extra: dict) -> Spec:
     return bind_params(Spec.model_validate(d))
 
 
+def _tick_spec(**tick_extra) -> Spec:
+    d = json.loads((ROOT / "presets" / "studio" / "tick_breakout_5m.json").read_text(encoding="utf-8"))
+    d["tick"].update(tick_extra)
+    return bind_params(Spec.model_validate(d))
+
+
+def test_tick_filter_and_prefilter_are_narrated_and_absent_specs_are_unchanged():
+    base = narrate(_tick_spec())
+    assert "1분봉" not in base and "그 날만 틱" not in base and "필터를 못 써서" not in base   # 옛 명세 풀이 그대로
+    flt = grp(cond(F(), "gt", I("sma", {"src": "close", "n": 20}, tf="m5")))
+    pre = grp(cond(F(), "gt", I("sma", {"src": "close", "n": 20})))
+    text = narrate(_tick_spec(filter=flt, prefilter=pre))
+    assert "전일 일봉 기준으로 종가가 종가 20일 이동평균을 넘으면 그 날만 틱을 본다." in text
+    assert ("단, 종가가 5분봉 종가 20봉 이동평균을 넘으면 산다 — 체결 시각까지 마감된 마지막 1분봉 기준"
+            "(진행 중인 봉은 안 본다).") in text
+    assert "※ 분봉이 없는 종목·날은 필터를 못 써서 진입하지 않는다." in text
+    assert "전날 봉을 포함" in text                                     # 필터의 분봉 롤링 지표도 주의문 대상
+    only_pre = narrate(_tick_spec(prefilter=pre))
+    assert "그 날만 틱을 본다" in only_pre and "필터를 못 써서" not in only_pre    # 분봉 필터가 없으면 그 주의문은 없다
+
+
 def _exit_line(preset: str, exits: dict) -> str:
     d = json.loads((ROOT / "presets" / "studio" / f"{preset}.json").read_text(encoding="utf-8"))
     d["exits"] = exits

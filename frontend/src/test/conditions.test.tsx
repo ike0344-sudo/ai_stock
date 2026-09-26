@@ -453,3 +453,81 @@ describe('분할 익절 결과 (c2)', () => {
     await waitFor(() => expect(within(table).getAllByTestId('slice-tag').map((e) => e.textContent)).toEqual(['1/2', '2/2', '1/1']))
   })
 })
+
+describe('틱 탭의 분봉·일봉 조건 묶음 (c8)', () => {
+  const tickCaps = { ...realCatalog.capabilities!, tick_fields: ['filter', 'prefilter'] }
+  const openTick = async (catalog: IndicatorCatalog = { ...realCatalog, capabilities: tickCaps }) => {
+    const r = mockApi(routes({}, catalog))
+    page()
+    await userEvent.click(await screen.findByRole('tab', { name: '체결(틱)' }))
+    await screen.findByTestId('panel-tick')
+    return r
+  }
+
+  it('서버가 알리지 않으면(tick_fields 없음) 필터 카드가 없다', async () => {
+    await openTick(realCatalog)
+    expect(screen.queryByTestId('tick-filter-card')).not.toBeInTheDocument()
+  })
+
+  it('서버가 알리면 카드가 나오고 표본 감소 경고가 보이며, 켜면 명세 tick.filter 에 기본 조건이 실린다', async () => {
+    const { calls } = await openTick()
+    const card = await screen.findByTestId('tick-filter-card')
+    expect(within(card).getByTestId('tick-filter-sample-warning')).toHaveTextContent('실측 16%')
+    expect(within(card).getByText(/마감된 마지막 1분봉/)).toBeInTheDocument()
+    await userEvent.click(within(card).getByTestId('tick-filter-switch'))
+    await waitFor(() => expect(lastSpec(calls).tick?.filter).toMatchObject({ logic: 'all', items: [{ left: { name: 'close' }, op: 'gt', right: { name: 'vwap' } }] }))
+    expect(await within(card).findByTestId('row-tick.filter.items.0')).toBeInTheDocument()
+    await userEvent.click(within(card).getByTestId('tick-prefilter-switch'))
+    await waitFor(() => expect(lastSpec(calls).tick?.prefilter?.items).toHaveLength(1))
+    expect(await within(card).findByTestId('row-tick.prefilter.items.0')).toBeInTheDocument()
+  })
+
+  it('분봉+틱 정밀화로 바꾸면 필터·사전 필터가 사라지고 카드도 없어진다(서버는 catalog 에서만 받는다)', async () => {
+    const { calls } = await openTick()
+    await userEvent.click(within(await screen.findByTestId('tick-filter-card')).getByTestId('tick-filter-switch'))
+    await waitFor(() => expect(lastSpec(calls).tick?.filter).toBeTruthy())
+    await userEvent.click(within(screen.getByTestId('tick-entry-source')).getByText('분봉 신호 + 틱 정밀화'))
+    await waitFor(() => expect(lastSpec(calls).tick).toMatchObject({ entry_source: 'minute_refine', filter: null, prefilter: null }))
+    expect(screen.queryByTestId('tick-filter-card')).not.toBeInTheDocument()
+  })
+
+  it('필터의 시간 단위는 1분봉 실행 기준이라 m1 은 못 고른다(3~60분·일봉만)', () => {
+    const o = timeframeOptions(realCatalog.capabilities, def('sma'), 'tick', 1, 'al')
+    expect(o.find((x) => x.value === 'm1')!.disabled).toBe(true)
+    expect(o.find((x) => x.value === 'bar')!.disabled).toBe(false)
+    expect(o.find((x) => x.value === 'm3')!.disabled).toBe(false)
+    expect(o.find((x) => x.value === 'daily_prev')!.disabled).toBe(false)
+  })
+
+  it('결과 카드: 분봉이 없어 빠진 쌍·사전 필터로 제외한 쌍을 보여 준다', async () => {
+    const { tickDetail } = await import('./fixtures/studioReal6')
+    const { ResultPage } = await import('@/pages/ResultPage')
+    const d = { ...tickDetail, summary: { ...tickDetail.summary, tick: { ...(tickDetail.summary.tick as object), expected_pairs: 1000, filter_pairs_without_minutes: 310, prefilter_pairs_skipped: 120 } } }
+    mockApi({ [`GET /api/runs/${d.run_id}`]: { data: d }, [`GET /api/runs/${d.run_id}/equity`]: { data: [] }, [`GET /api/runs/${d.run_id}/trades`]: { data: [] } })
+    renderApp(<Routes><Route path="/results/:runId" element={<ResultPage />} /></Routes>, `/results/${d.run_id}`)
+    const s = await screen.findByTestId('tick-summary')
+    expect(s).toHaveTextContent('310')
+    expect(s).toHaveTextContent('31%')
+    expect(s).toHaveTextContent('사전 필터로 제외한')
+    expect(s).toHaveTextContent('120')
+  })
+})
+
+describe('수식 → 틱 분봉·일봉 조건 (c8)', () => {
+  it('틱 조건 진입에서 검사를 통과한 수식을 필터로 넣는다(비어 있으면 그 그룹이 필터, 있으면 AND 항목)', async () => {
+    const ast = { logic: 'all', formula: 'M5.C > M5.MA(C,20)', items: [{ left: { kind: 'field', name: 'close', tf: 'm5' }, op: 'gt', right: { kind: 'ind', name: 'sma', params: { src: 'close', n: 20 }, tf: 'm5' } }] }
+    const catalog = { ...realCatalog, capabilities: { ...realCatalog.capabilities!, tick_fields: ['filter', 'prefilter'], formulas: true } }
+    const { calls } = mockApi(routes({ 'GET /api/formulas': { data: [] }, 'POST /api/formulas/check': { data: { ok: true, ast, narration: '5분봉 종가가 20선 위' } } }, catalog))
+    page()
+    await userEvent.click(await screen.findByRole('tab', { name: '체결(틱)' }))
+    await userEvent.type(await screen.findByTestId('formula-text'), 'M5.C > M5.MA(C,20)')
+    expect(screen.getByTestId('formula-insert-filter')).toBeDisabled() // 검사 전엔 못 넣는다
+    await userEvent.click(screen.getByTestId('formula-check'))
+    await screen.findByTestId('formula-ok')
+    expect((calls.find((c) => c.path === '/api/formulas/check')!.body as { mode: string }).mode).toBe('tick')
+    await userEvent.click(screen.getByTestId('formula-insert-filter'))
+    await waitFor(() => expect(lastSpec(calls).tick?.filter).toMatchObject({ logic: 'all', formula: 'M5.C > M5.MA(C,20)', items: [{ left: { tf: 'm5' } }] }))
+    await userEvent.click(screen.getByTestId('formula-insert-filter')) // 두 번째는 있는 필터에 AND 항목으로
+    await waitFor(() => expect((lastSpec(calls).tick?.filter as { items: unknown[] }).items).toHaveLength(2))
+  })
+})

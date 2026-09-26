@@ -65,6 +65,8 @@ export function TickSample({ t }: { t: TickSummary }) {
         <Col xs={12} md={6}><Stat title="신호 수" value={fmtNum(t.signals)} sub={`진입 체결이 없어 버린 신호 ${t.signals_without_entry_tick}건`} /></Col>
         <Col xs={12} md={6}><Stat title="갭 시작으로 거른 (날, 종목)" value={fmtNum(t.gap_open_days_skipped)} /></Col>
         <Col xs={12} md={6}><Stat title="장마감 청산" value={t.eod_time} sub="초 단위 시각" /></Col>
+        {t.filter_pairs_without_minutes !== undefined && <Col xs={12} md={6}><Stat title="분봉이 없어 진입 못 한 (날, 종목)" value={fmtNum(t.filter_pairs_without_minutes)} sub={`체결 쌍 ${fmtNum(t.expected_pairs)} 중 ${t.expected_pairs ? ((t.filter_pairs_without_minutes / t.expected_pairs) * 100).toFixed(0) : 0}% — 분봉·일봉 조건을 켜서 표본이 준 만큼`} /></Col>}
+        {t.prefilter_pairs_skipped !== undefined && <Col xs={12} md={6}><Stat title="사전 필터로 제외한 (날, 종목)" value={fmtNum(t.prefilter_pairs_skipped)} sub="전일 일봉 조건을 못 넘어 그날 틱을 안 봤다" /></Col>}
       </Row>
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>거래의 보유 기간은 초 단위다(분봉·일봉 결과의 "봉"과 단위가 다르다).</Typography.Text>
     </Space>

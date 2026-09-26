@@ -13,12 +13,14 @@ from __future__ import annotations
 from .ast import ExprOperand, FieldOperand, Group, IndOperand, PosOperand
 from .catalog import INDICATORS, MINUTE_TIMEFRAMES
 
-ROLES = ("entry", "exit", "market_filter", "prefilter")
-_ROLE_KO = {"entry": "진입", "exit": "청산", "market_filter": "시장 필터", "prefilter": "사전 필터"}
+ROLES = ("entry", "exit", "market_filter", "prefilter", "tick_filter", "tick_prefilter")
+_ROLE_KO = {"entry": "진입", "exit": "청산", "market_filter": "시장 필터", "prefilter": "사전 필터",
+            "tick_filter": "틱 분봉 필터", "tick_prefilter": "틱 사전 필터"}
 _DAILY_MODES = ("daily_single", "daily_portfolio")
 
 
-_ROLE_PATH = {"entry": "strategy.entry", "exit": "strategy.exit", "market_filter": "market_filter", "prefilter": "intraday.prefilter"}
+_ROLE_PATH = {"entry": "strategy.entry", "exit": "strategy.exit", "market_filter": "market_filter", "prefilter": "intraday.prefilter",
+              "tick_filter": "tick.filter", "tick_prefilter": "tick.prefilter"}
 
 
 def _walk(g: Group, path: str):
@@ -49,7 +51,7 @@ def validate_group(g: Group, role: str, *, mode: str, bar_minutes: int = 5, sour
     if role not in ROLES:
         raise ValueError(f"role: {role!r}")
     intraday_run = mode in ("intraday", "tick")
-    em = "daily_portfolio" if role == "prefilter" else ("intraday" if intraday_run else mode)
+    em = "daily_portfolio" if role in ("prefilter", "tick_prefilter") else ("intraday" if intraday_run else mode)
     for path, op in _walk(g, _ROLE_PATH[role]):
         try:
             _check_operand(op, role, em, intraday_run, bar_minutes, source)
@@ -68,7 +70,7 @@ def _check_operand(op, role: str, em: str, intraday_run: bool, bar_minutes: int,
     name = op.name
     label = f"지표 '{name}'" if isinstance(op, IndOperand) else f"가격 '{name}'"
     if tf != "bar":
-        if role == "prefilter":
+        if role in ("prefilter", "tick_prefilter"):
             raise ValueError(f"사전 필터는 일봉(D−1) 조건이라 시간 단위를 쓸 수 없다({label}: {tf})")
         if not intraday_run:
             raise ValueError(f"{label} 에 시간 단위 '{tf}' — 일봉 모드에서는 시간 단위를 쓸 수 없다(bar 만). 시간 단위는 분봉 모드에서 고를 수 있다")

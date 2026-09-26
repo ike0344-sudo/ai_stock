@@ -218,6 +218,16 @@ def time_mask(time_from: str, time_to: str) -> np.ndarray:
     return (sod >= _hms(time_from)) & (sod <= _hms(time_to))
 
 
+def align_filter(end_sec: np.ndarray, ok: np.ndarray) -> np.ndarray:
+    """분봉 조건 묶음(tick.filter)의 값을 틱 초 격자(길이 N)에 붙인다 — 초 s 의 값 = **끝 시각 ≤ s 인 마지막 분봉**의 값(마감된 봉만).
+    end_sec = 그 날 분봉 끝 시각(09:00:00 = 0, 시간순), ok = 그 봉에서 조건이 참인가. 첫 마감 봉 전(s < 첫 끝 시각)은 값 없음 = False.
+    분봉 값이 s 이후 봉·s 이후 체결에 의존하지 않는다는 것이 C8 이 검증하는 계약이다."""
+    e = np.asarray(end_sec)
+    k = np.searchsorted(e, np.arange(N), side="right") - 1
+    v = np.asarray(ok, dtype=bool)
+    return np.where(k >= 0, v[np.maximum(k, 0)], False) if len(e) else np.zeros(N, dtype=bool)
+
+
 def apply_cooldown(idx: np.ndarray, cooldown_sec: int) -> np.ndarray:
     """마지막으로 **채택된** 신호로부터 cooldown_sec 이상 떨어진 것만 남김 — detect_breakouts 와 같은 루프."""
     keep, last = [], -10**9
@@ -236,12 +246,14 @@ def detect_signals(
     day: TickDay, *, breakout_min: int | None = None, value_speed: Any = None, buy_ratio: Any = None,
     trade_strength: Any = None, block_trades: Any = None, daily_breakout: Any = None,
     time_from: str = "09:00:00", time_to: str = "15:30:00", cooldown_sec: int = 300,
+    extra_mask: np.ndarray | None = None,
 ) -> TickEvents:
     """켜진 조건을 전부 AND → 시간 범위 → 쿨다운 → 각 신호의 진입 체결(s 보다 엄격히 뒤 첫 체결).
 
     value_speed = (w분, ratio) 또는 `.w/.ratio` 를 가진 객체, buy_ratio = (w분, min) 또는 `.w/.min` 객체.
     trade_strength = (w초, min강도%) / `.w/.min`, block_trades = (w초, min_value[, min_count]) / `.w/.min_value/.min_count`,
     daily_breakout = (n, level) / `.n/.level` — level = D−1 까지 n일 최고가(`prior_n_high` 로 호출부가 계산).
+    extra_mask = 길이 N bool — 분봉·일봉 조건 묶음(`align_filter` 결과)을 틱 조건과 **AND**(쿨다운 전, 최종 신호에 대해 쿨다운).
     """
     if all(c is None for c in (breakout_min, value_speed, buy_ratio, trade_strength, block_trades, daily_breakout)):
         raise ValueError("틱 조건이 하나도 없음 (breakout_min·value_speed·buy_ratio·trade_strength·block_trades·daily_breakout 중 하나 필요)")
@@ -267,6 +279,8 @@ def detect_signals(
     if daily_breakout is not None:
         _, level = _pair(daily_breakout, "n", "level")
         hit &= daily_breakout_hits(grid, float(level))
+    if extra_mask is not None:
+        hit &= np.asarray(extra_mask, dtype=bool)
     sig = apply_cooldown(np.flatnonzero(hit), int(cooldown_sec))
     j = np.searchsorted(day.sec, sig, side="right")  # s 보다 엄격히 뒤 첫 체결
     has = j < len(day.sec)
@@ -278,7 +292,8 @@ def detect_signals(
     )
 
 
-def detect_from_spec(day: TickDay, tick_cfg: Any, daily_high_level: float | None = None) -> TickEvents:
+def detect_from_spec(day: TickDay, tick_cfg: Any, daily_high_level: float | None = None,
+                     extra_mask: np.ndarray | None = None) -> TickEvents:
     """`spec.tick`(entry_source='catalog') → 신호. tick_cfg 는 duck typing(`.catalog`, `.cooldown_sec`).
 
     새 조건(trade_strength·block_trades·daily_breakout)은 칸이 없는 옛 명세도 받도록 getattr 로 읽는다.
@@ -293,7 +308,7 @@ def detect_from_spec(day: TickDay, tick_cfg: Any, daily_high_level: float | None
     return detect_signals(
         day, breakout_min=c.breakout_min, value_speed=c.value_speed, buy_ratio=c.buy_ratio,
         trade_strength=getattr(c, "trade_strength", None), block_trades=getattr(c, "block_trades", None), daily_breakout=db,
-        time_from=c.time_from, time_to=c.time_to, cooldown_sec=tick_cfg.cooldown_sec,
+        time_from=c.time_from, time_to=c.time_to, cooldown_sec=tick_cfg.cooldown_sec, extra_mask=extra_mask,
     )
 
 

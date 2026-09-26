@@ -12,7 +12,9 @@ interface Props {
   barMinutes: number
   /** 빌더 전략일 때만 조건 행에 넣을 수 있다(기존 전략·틱 조건 진입엔 조건식이 없다) */
   canInsert: boolean
-  onInsert: (target: 'entry' | 'exit', node: Group | Condition) => void
+  onInsert: (target: 'entry' | 'exit' | 'filter', node: Group | Condition) => void
+  /** 틱 조건 진입이고 서버가 틱 필터(c8)를 알릴 때 — 수식을 "틱 분봉·일봉 조건"에 넣는 버튼을 보인다 */
+  canInsertFilter?: boolean
 }
 
 /** 오류 줄과 위치 표시(^) — 고정폭으로 찍는다 */
@@ -33,7 +35,7 @@ export function FormulaPanel({ enabled, ...rest }: Props & { enabled: boolean })
   return <FormulaEditor {...rest} />
 }
 
-function FormulaEditor({ mode, barMinutes, canInsert, onInsert }: Props) {
+function FormulaEditor({ mode, barMinutes, canInsert, canInsertFilter = false, onInsert }: Props) {
   const { message } = App.useApp()
   const qc = useQueryClient()
   const list = useFormulas()
@@ -84,7 +86,8 @@ function FormulaEditor({ mode, barMinutes, canInsert, onInsert }: Props) {
           <Button type="primary" onClick={check} loading={busy} disabled={!text.trim()} data-testid="formula-check">검사</Button>
           <Button disabled={!res?.ok || !canInsert} onClick={() => res?.ast && onInsert('entry', res.ast)} data-testid="formula-insert-entry">진입 조건에 넣기</Button>
           <Button disabled={!res?.ok || !canInsert} onClick={() => res?.ast && onInsert('exit', res.ast)} data-testid="formula-insert-exit">청산 조건에 넣기</Button>
-          {!canInsert && <Typography.Text type="secondary" style={{ fontSize: 12 }}>조건 조립기 전략(틱 조건 진입 제외)에서만 넣을 수 있다</Typography.Text>}
+          {canInsertFilter && <Button disabled={!res?.ok} onClick={() => res?.ast && onInsert('filter', res.ast)} data-testid="formula-insert-filter">틱 분봉·일봉 조건에 넣기</Button>}
+          {!canInsert && !canInsertFilter && <Typography.Text type="secondary" style={{ fontSize: 12 }}>조건 조립기 전략(틱 조건 진입 제외)에서만 넣을 수 있다</Typography.Text>}
         </Space>
         {res?.ok && <Alert type="success" showIcon data-testid="formula-ok" message="수식이 맞습니다" description={res.narration ?? undefined} />}
         {err && <Alert type="error" showIcon data-testid="formula-error" message={`수식 오류 — ${err.message}`} description={<ErrorCaret text={text} at={err} />} />}

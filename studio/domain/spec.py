@@ -188,6 +188,9 @@ class Tick(_M):
     exclude_gap_open_pct: float | None = Field(5.0, ge=0)
     time_stop_sec: int | None = Field(600, ge=1)
     eod_time: str = Field("15:19:59", pattern=_TIME)
+    # ---- studio-conditions c8 — 옛 명세엔 칸이 없다 = None(해시에서도 뺀다). entry_source='catalog' 에서만.
+    filter: Group | None = None  # 틱 조건과 AND 로 묶는 분봉·일봉 조건 묶음 — 체결 시각 s 의 값은 끝 시각 ≤ s 인 마지막 1분봉(마감 봉)에서 평가한 값
+    prefilter: Group | None = None  # 그 날 틱을 볼지 정하는 일봉 사전 필터(D−1 기준, intraday.prefilter 와 같은 규칙)
 
 
 class Compat(_M):
@@ -264,6 +267,10 @@ class Spec(_M):
             yield self.market_filter
         if self.intraday is not None and self.intraday.prefilter is not None:
             yield self.intraday.prefilter
+        if self.tick is not None:
+            for g in (self.tick.filter, self.tick.prefilter):
+                if g is not None:
+                    yield g
 
     def _role_groups(self) -> Iterator[tuple[str, Group]]:
         """(역할, 그룹) — 진입·청산·시장 필터·사전 필터. 역할별 규칙(pos 는 청산만 등)을 위해 _groups 와 따로 둔다."""
@@ -274,6 +281,11 @@ class Spec(_M):
             yield "market_filter", self.market_filter
         if self.intraday is not None and self.intraday.prefilter is not None:
             yield "prefilter", self.intraday.prefilter
+        if self.tick is not None:
+            if self.tick.filter is not None:
+                yield "tick_filter", self.tick.filter
+            if self.tick.prefilter is not None:
+                yield "tick_prefilter", self.tick.prefilter
 
     def _slots(self) -> Iterator[tuple[str, str, float | None, float | None, bool, bool]]:
         """(변수 이름, 칸 위치, 최소, 최대, 정수 여부, 최소 포함) — {"param":..} 가 쓰인 모든 칸."""
@@ -349,8 +361,10 @@ class Spec(_M):
         # 규칙(모드·시간 단위 tf·청산 전용 pos)은 conditions/validation.py — studio-conditions c1
         bm = self.intraday.bar_minutes if self.intraday is not None else 5
         src = self.intraday.source if self.intraday is not None else "al"
+        if self.tick is not None and (self.tick.filter is not None or self.tick.prefilter is not None) and self.tick.entry_source != "catalog":
+            raise ValueError("tick.filter·tick.prefilter 는 틱 조건 진입(entry_source='catalog')에서만 쓸 수 있음 — 분봉 신호 + 틱 정밀화는 전략 조건이 분봉·일봉을 이미 쓴다")
         for role, g in self._role_groups():
-            validate_group(g, role, mode=m, bar_minutes=bm, source=src)
+            validate_group(g, role, mode=m, bar_minutes=1 if role == "tick_filter" else bm, source=src)
         # 숫자 칸의 리터럴 범위
         for section, ranges in ((self.exits, _EXIT_RANGES), (self.portfolio, _PORT_RANGES)):
             for field, (lo, hi, integer, inclusive) in ranges.items():
@@ -418,6 +432,8 @@ def validate_against(spec: Spec, ranges: Mapping[str, tuple[dt.date, dt.date]]) 
     need: dict[str, str] = {main: "본 데이터"}
     if spec.mode in ("intraday", "tick"):
         need["daily"] = "일봉 지표·전일 순위(D−1)"
+    if spec.mode == "tick" and spec.tick is not None and spec.tick.filter is not None:
+        need[f"minute_{spec.intraday.source if spec.intraday is not None else 'al'}"] = "틱 분봉 필터"
     for g in spec._groups():
         for op in iter_operands(g):
             if isinstance(op, MarketOperand):

@@ -120,3 +120,7 @@
 
 - [x] c3 후속 ① `daily_live` 켜기 — backtest-agent c1 편지(1010)로 `timeframe.LiveBars` 서명 확정 → 구현 완료(2026-09-26, 실행은 lead 대기): 각 `ind_*.py` 에 `LIVE` 점화식 함수 46종(가격·이평·신고가 16 / 보조지표 15 / 캔들 15) 등록·`live=True`, 테스트 `tests/studio/conditions/test_ind_live.py`(재계산 대조 + 미래참조 카나리아). 상세: `state/agent_reports/strategy-agent_20260926-1130_conditions_c3.md` "후속" 절.
 - [>] c3 후속 ② `rel_strength`(상대강도, 지수 연결) — **선행: backtest-agent c1 의 market/지수 연결.** 편지가 오면 `[ ]` 로 되돌려 시작.
+
+- [x] (**14:30 풀림 — backtest-agent c8 완료·편지 1520 도착**) (lead 지시 2026-09-26 14:10, studio-conditions c8 풀이 문장) **틱 모드 풀이 문장에 추가 조건·사전 필터**
+      "틱 조건(…) 이면서, 체결 시각 전에 끝난 1분봉 기준으로 (필터 풀이) 일 때 산다", 사전 필터 문장. 테스트 작성 후 STATUS 에 "테스트 준비됨" — lead 가 돌린다. 편지 오면 [ ] 로.
+      **[2026-09-26 완료]** 편지 1520 처리와 같은 작업이라 앞 턴에 이미 구현(`narration.py` prefilter·filter 문장·주의문, 테스트 `tests/studio/conditions/test_narration_c1.py::test_tick_filter_and_prefilter_…`, 실행은 lead 대기). 상세: `state/agent_reports/strategy-agent_20260926-1400_narration_c1.md` "후속 2".

@@ -117,7 +117,7 @@ export function applyRecipe(spec: SpecJson, r: Recipe, dataRange?: [string, stri
 export function setTickEntrySource(spec: SpecJson, src: TickCfg['entry_source']): SpecJson {
   if (!spec.tick) return spec
   const s = clone(spec)
-  s.tick = { ...s.tick!, entry_source: src }
+  s.tick = { ...s.tick!, entry_source: src, ...(src === 'minute_refine' ? { filter: null, prefilter: null } : {}) } // 분봉·일봉 필터는 틱 조건 진입에서만(서버 규칙)
   if (src === 'catalog') s.strategy = null
   else {
     if (!s.strategy || s.strategy.source !== 'builder') s.strategy = { source: 'builder', entry: defaultEntry(), exit: defaultExit() }

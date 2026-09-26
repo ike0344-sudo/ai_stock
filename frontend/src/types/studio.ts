@@ -81,7 +81,7 @@ export interface CatalogParam { name: string; kind: 'int' | 'float' | 'bool' | '
 /** category(키)·category_ko·definition·example·live·volume_based 는 서버 카탈로그(c1 확정 칸)가 줄 때만 있다 — 없으면 화면이 자체 분류·"알려 주지 않음"으로 메운다 */
 export interface IndicatorDef { name: string; label: string; desc: string; params: CatalogParam[]; modes: Mode[]; timing: string; compute: boolean; category?: string; category_ko?: string; definition?: string; example?: string; live?: boolean; live_reason?: string; volume_based?: boolean }
 /** 서버가 지금 이해하는 것 — 모델을 들여다본 결과(studio/application/capabilities.py). 화면은 여기 있는 칸만 보낸다 */
-export interface Capabilities { timeframes: string[] | null; condition_fields: string[]; group_fields: string[]; operand_kinds: string[]; pos_names: string[]; exit_fields: string[]; formulas: boolean }
+export interface Capabilities { timeframes: string[] | null; condition_fields: string[]; group_fields: string[]; operand_kinds: string[]; pos_names: string[]; exit_fields: string[]; tick_fields?: string[]; formulas: boolean }
 export interface IndicatorCatalog {
   indicators: IndicatorDef[]
   fields: FieldName[]
@@ -327,7 +327,12 @@ export interface TickCatalogCfg {
   time_from: string
   time_to: string
 }
-export interface TickCfg { entry_source: 'catalog' | 'minute_refine'; catalog: TickCatalogCfg; cooldown_sec: number; exclude_gap_open_pct: number | null; time_stop_sec: number | null; eod_time: string }
+export interface TickCfg {
+  entry_source: 'catalog' | 'minute_refine'; catalog: TickCatalogCfg; cooldown_sec: number; exclude_gap_open_pct: number | null; time_stop_sec: number | null; eod_time: string
+  /** c8 — 틱 조건과 AND 로 묶는 분봉(1분봉 기준)·일봉 조건, 그리고 그 날 틱을 볼지 정하는 일봉 사전 필터(D−1). catalog 진입에서만. 서버가 capabilities.tick_fields 로 알릴 때만 보낸다 */
+  filter?: Group | null
+  prefilter?: Group | null
+}
 /** GET /api/meta/intraday-sources — 기간을 출처별로 몇 종목이 덮는가 */
 export interface IntradaySources {
   minute: Record<MinuteSource, { total: number; full: number; partial: number; range: [string, string] | null }>
@@ -343,6 +348,7 @@ export interface IntradaySummary {
 export interface TickSummary {
   expected_pairs: number; used_pairs: number; days: number; codes: number; signals: number
   gap_open_days_skipped: number; signals_without_entry_tick: number; eod_time: string
+  filter_pairs_without_minutes?: number; prefilter_pairs_skipped?: number
 }
 export interface DiffStats { mean: number | null; median: number | null; p5: number | null; p95: number | null; n: number }
 export interface TickRefineSummary {

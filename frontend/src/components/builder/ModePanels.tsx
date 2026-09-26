@@ -3,6 +3,7 @@
 import { Alert, Card, Input, InputNumber, Radio, Space, Switch, Table, Tag, Typography } from 'antd'
 import { Link } from 'react-router-dom'
 import { useIntradaySources } from '@/api/studio'
+import { ConditionContext } from '@/components/builder/ConditionContext'
 import { ConditionGroupEditor } from '@/components/builder/ConditionGroupEditor'
 import { fmtDate } from '@/lib/format'
 import { BAR_MINUTES, type Group, type IndicatorCatalog, type IntradayCfg, type IntradaySources, type MinuteSource, type SpecJson, type TickCfg, type ValidationIssue } from '@/types/studio'
@@ -42,7 +43,7 @@ export function SourceAvailability({ info, chosen, loading, error }: { info?: In
   )
 }
 
-const DEFAULT_PREFILTER: Group = { logic: 'all', items: [{ left: { kind: 'field', name: 'close' }, op: 'gt', right: { kind: 'ind', name: 'sma', params: { src: 'close', n: 20 } } }] }
+export const DEFAULT_PREFILTER: Group = { logic: 'all', items: [{ left: { kind: 'field', name: 'close' }, op: 'gt', right: { kind: 'ind', name: 'sma', params: { src: 'close', n: 20 } } }] }
 
 export function IntradayPanel({ value: v, onChange, spec, cat, errors, mode }: {
   value: IntradayCfg; onChange: (v: IntradayCfg) => void; spec: SpecJson; cat: IndicatorCatalog; errors: ValidationIssue[]; mode: SpecJson['mode']
@@ -79,8 +80,12 @@ export function IntradayPanel({ value: v, onChange, spec, cat, errors, mode }: {
   )
 }
 
-export function TickPanel({ value: v, onChange, spec }: { value: TickCfg; onChange: (v: TickCfg) => void; spec: SpecJson }) {
+// 틱 조건에 얹는 분봉 필터의 기본값: 종가가 그날 VWAP 위(분봉 지표 — 1분봉 기준)
+const DEFAULT_TICK_FILTER: Group = { logic: 'all', items: [{ left: { kind: 'field', name: 'close' }, op: 'gt', right: { kind: 'ind', name: 'vwap' } }] }
+
+export function TickPanel({ value: v, onChange, spec, cat, errors }: { value: TickCfg; onChange: (v: TickCfg) => void; spec: SpecJson; cat: IndicatorCatalog; errors: ValidationIssue[] }) {
   const info = useIntradaySources(spec.period.start, spec.period.end)
+  const canFilter = (cat.capabilities?.tick_fields ?? []).includes('filter') && v.entry_source === 'catalog'
   const set = (p: Partial<TickCfg>) => onChange({ ...v, ...p })
   const cset = (p: Partial<TickCfg['catalog']>) => onChange({ ...v, catalog: { ...v.catalog, ...p } })
   const c = v.catalog
@@ -128,6 +133,26 @@ export function TickPanel({ value: v, onChange, spec }: { value: TickCfg; onChan
             <Input type="time" style={{ width: 120 }} value={c.time_to} onChange={(e) => e.target.value && cset({ time_to: e.target.value })} data-testid="tick-time-to" />
           </Row>
         </div>
+      )}
+      {canFilter && (
+        <Card size="small" title="분봉·일봉 조건 (틱 조건과 함께 모두 만족해야 진입)" data-testid="tick-filter-card" style={{ margin: '8px 0' }}>
+          <Alert type="info" showIcon style={{ marginBottom: 8 }} message="신호 시각까지 마감된 마지막 1분봉 기준(진행 중인 봉은 안 본다). 일봉 조건은 전일까지의 값이다."
+            description="시간 단위: 이 봉 = 1분봉 · 3~60분봉 · 일봉(전일 확정) · 일봉(장중 실시간). 분봉이 없는 (종목, 날)은 진입이 없다." />
+          <Alert type="warning" showIcon data-testid="tick-filter-sample-warning" style={{ marginBottom: 8 }} message="필터를 켜면 표본이 줄어든다 — 통합 분봉 보관소가 종목마다 일찍 끝나 틱 (종목, 날) 쌍의 일부는 분봉이 없다(기간에 따라 다름 — 실측 16%: 2026-09-01~23, 31%: backtest-agent 측정)"
+            description="기간이 분봉 보관 범위에 걸려야 한다. 결과 화면에 분봉이 없어 빠진 쌍 수가 나온다." />
+          <Row label="분봉·일봉 조건" hint="예: 종가가 VWAP 위 · 5분봉 20선 위 · 일봉 20일선 위">
+            <Switch checked={!!v.filter} onChange={(on) => set({ filter: on ? structuredClone(DEFAULT_TICK_FILTER) : null })} data-testid="tick-filter-switch" />
+          </Row>
+          {v.filter && (
+            <ConditionContext.Provider value={{ barMinutes: 1, source: 'al' }}>
+              <ConditionGroupEditor title="분봉·일봉 조건 (틱 조건에 AND)" path="tick.filter" group={v.filter} cat={cat} mode="tick" errors={errors} required onChange={(g) => set({ filter: g })} />
+            </ConditionContext.Provider>
+          )}
+          <Row label="일봉 사전 필터" hint="전일(D−1) 일봉 조건 — 통과한 (종목, 날)만 그날 틱을 본다">
+            <Switch checked={!!v.prefilter} onChange={(on) => set({ prefilter: on ? structuredClone(DEFAULT_PREFILTER) : null })} data-testid="tick-prefilter-switch" />
+          </Row>
+          {v.prefilter && <ConditionGroupEditor title="사전 필터 (전일 일봉 기준)" path="tick.prefilter" group={v.prefilter} cat={cat} mode="daily_portfolio" errors={errors} required onChange={(g) => set({ prefilter: g })} />}
+        </Card>
       )}
       <Row label="쿨다운" hint="같은 종목에서 다시 신호를 내기까지 기다리는 시간(초)">
         <InputNumber size="small" min={0} addonAfter="초" value={v.cooldown_sec} onChange={(x) => x !== null && set({ cooldown_sec: Math.round(x) })} data-testid="tick-cooldown" />

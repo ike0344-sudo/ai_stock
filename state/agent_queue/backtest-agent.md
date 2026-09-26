@@ -658,3 +658,12 @@
       설계 §3.3 포지션 표·§3.4. 보유 종목별 봉 t 평가(나머지 피연산자는 미리 계산한 표), 분할 조각 기록(entry_id·slice)·**진입 기준 승률**, C7, SC-C7 손계산. c1 끝나면 [ ] 로 바꾸고 시작.
 
 - [x] (lead 지시 2026-09-26 10:05 — **c2 보다 먼저, 작게**) **c1 보정: `daily_prev` = "오늘 장 시작 전에 알 수 있는 값"** — 편지 `20260926-1005_lead_c1_판정.md` 1번 그대로. 끝나면 execution-agent 에 편지, c2 계속.
+
+- [x] (lead 지시 2026-09-26 14:10, **studio-conditions c8 — 사용자 "틱에서 일봉까지 같이 조합" → "넣어줘"**) **틱 조건 진입(모드 B)에 분봉·일봉 조건 묶음을 AND 로**
+      설계서 §3.4b(v0.4) 를 먼저 읽어라. 지금 `run_tick` 은 틱 카탈로그만 받는다(일봉은 daily_breakout·대금 순위뿐).
+      1. Spec `tick.filter: Group|None`(일반 조건·연산자·수식 그대로, tf: bar=1분봉·m3~m60·daily_prev·daily_live) · `tick.prefilter: Group|None`(D−1, intraday.prefilter 와 같은 규칙) + 검증 문구
+      2. `run_tick`: 틱 종목·날의 분봉(출처 규칙 같게) → 1분봉 패널에서 필터 평가(기존 평가기·시간 단위 층 재사용) → 체결 시각 s 에 **끝 시각 ≤ s 인 마지막 1분봉 값**(마감 봉만)으로 붙임 → 틱 신호 AND 필터 AND 사전 필터
+      3. 분봉 없는 (종목, 날)은 필터 없음 = 진입 없음 + 결과 경고 수. 모드 A(minute_refine)는 이미 분봉·일봉 조건을 쓰니 무변경
+      4. 카나리아 **C8**(s 이후 분봉·틱 변조 → s 이하 신호·진입 불변, 미마감 분봉 값 안 씀) + **SC-C8** 손계산("체결강도 ≥ 150 그리고 5분봉 20선 위 그리고 일봉 정배열(전일)") + 실데이터 실측(시간)
+      끝나면 monitoring-agent(틱 탭 조건 편집기)·strategy-agent(풀이 문장)에 명세 모양 편지.
+      미래참조 없음 최우선 · 분봉 기본 출처 통합 · git commit 금지. 보고: STATUS + `state/agent_reports/backtest-agent_<날짜시각>_conditions_c8.md`.

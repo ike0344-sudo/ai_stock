@@ -160,7 +160,14 @@ export function BacktestPage() {
     edit((s) => applyRecipe(s, r, ranges.data?.[rangeKeyOf(r.modes.includes(s.mode) ? s.mode : r.modes[0], s.intraday?.source ?? 'al')]))
     setLoadNote(`레시피 "${r.title}" 을 불러왔습니다 — 조건 행으로 풀렸으니 고쳐 쓰세요`)
   }
-  const insertFormula = (target: 'entry' | 'exit', node: Group | Condition) => setStrategy((s) => (s.source === 'builder' ? { ...s, [target]: addItem(s[target], node) } : s))
+  const insertFormula = (target: 'entry' | 'exit' | 'filter', node: Group | Condition) => {
+    if (target === 'filter') {
+      // 틱 분봉·일봉 조건: 비어 있으면 수식 그룹 자체가 필터가 되고, 있으면 그 그룹에 항목으로 더한다(AND)
+      edit((s) => (s.tick ? { ...s, tick: { ...s.tick, filter: s.tick.filter ? addItem(s.tick.filter, node) : 'logic' in node ? node : { logic: 'all', items: [node] } } } : s))
+      return
+    }
+    setStrategy((s) => (s.source === 'builder' ? { ...s, [target]: addItem(s[target], node) } : s))
+  }
   const presetBar = <PresetBar spec={pruned} onLoad={(s, name) => { periodEdited.current = true; edit(() => normalizeSpec(s)); setLoadNote(`프리셋 "${name}" 을 불러왔습니다`) }} />
   const recipeBar = <RecipePicker spec={spec} onApply={doRecipe} />
   const universe = <UniversePanel value={spec.universe} onChange={patch('universe')} mode={spec.mode} />
@@ -209,11 +216,11 @@ export function BacktestPage() {
   const showIntraday = (spec.mode === 'intraday' || (spec.mode === 'tick' && spec.tick?.entry_source === 'minute_refine')) && !!spec.intraday
   const modeBlock = fine ? (
     <Space direction="vertical" size="middle" style={{ width: '100%' }} data-testid="mode-block">
-      {spec.mode === 'tick' && spec.tick && <TickPanel value={spec.tick} spec={spec} onChange={(t) => edit((s) => (t.entry_source !== s.tick?.entry_source ? setTickEntrySource({ ...s, tick: t }, t.entry_source) : { ...s, tick: t }))} />}
+      {spec.mode === 'tick' && spec.tick && <TickPanel value={spec.tick} spec={spec} cat={catalog} errors={errors} onChange={(t) => edit((s) => (t.entry_source !== s.tick?.entry_source ? setTickEntrySource({ ...s, tick: t }, t.entry_source) : { ...s, tick: t }))} />}
       {showIntraday && spec.intraday && <IntradayPanel value={spec.intraday} spec={spec} mode={spec.mode} cat={catalog} errors={errors} onChange={(i) => edit((s) => ({ ...s, intraday: i }))} />}
     </Space>
   ) : null
-  const formulaBlock = <FormulaPanel enabled={!!catalog.capabilities?.formulas} mode={spec.mode} barMinutes={spec.intraday?.bar_minutes ?? 5} canInsert={strategy?.source === 'builder'} onInsert={insertFormula} />
+  const formulaBlock = <FormulaPanel enabled={!!catalog.capabilities?.formulas} mode={spec.mode} barMinutes={spec.intraday?.bar_minutes ?? 5} canInsert={strategy?.source === 'builder'} canInsertFilter={spec.mode === 'tick' && spec.tick?.entry_source === 'catalog' && !!catalog.capabilities?.tick_fields?.includes('filter')} onInsert={insertFormula} />
   const actions = (
     <Space wrap>
       <Button icon={<SearchOutlined />} onClick={doPreview} loading={preview.loading} disabled={!result?.ok || fine} title={fine ? '오늘 조건 맞는 종목은 일봉 모드에서만 볼 수 있다' : undefined} data-testid="preview-btn">오늘 조건 맞는 종목</Button>

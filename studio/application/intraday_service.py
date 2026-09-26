@@ -18,10 +18,12 @@ from typing import Mapping
 import numpy as np
 import pandas as pd
 
+from studio.domain.conditions.ast import iter_operands
+from studio.domain.conditions.catalog import MINUTE_TIMEFRAMES
 from studio.domain.conditions.evaluator import evaluate, evaluate_group
 from studio.domain.conditions.indicators import compute
 from studio.domain.conditions.prefilter import previous_day_flags
-from studio.domain.conditions.tick import detect_from_spec, is_gap_open_day, prior_n_high
+from studio.domain.conditions.tick import align_filter, detect_from_spec, is_gap_open_day, prior_n_high
 from studio.domain.engine.intraday import bar_sessions
 from studio.domain.engine.portfolio import run_portfolio
 from studio.domain.engine.tick import (
@@ -268,6 +270,33 @@ def _refine(bound: Spec, md: MarketData, result, cfg: Intraday, cost):
 # =========================================================================== 틱 모드 B
 
 
+class _MinuteFilter:
+    """분봉 필터 표(1분봉 끝 시각 × 종목, bool)를 (종목, 날) 별 틱 초 격자 마스크로 바꾼다 — `tick.align_filter`(끝 시각 ≤ s 인 마지막 봉)."""
+
+    def __init__(self, panel, ok: pd.DataFrame) -> None:
+        idx = ok.index
+        days = idx.normalize()
+        self._cols = {c: i for i, c in enumerate(ok.columns)}
+        self._ok = ok.to_numpy(dtype=bool)
+        self._has = panel.close.reindex(index=idx, columns=ok.columns).notna().to_numpy()
+        self._sec = ((idx - days).total_seconds() - 32400).to_numpy()  # 09:00:00 = 0
+        uniq, first = np.unique(days.to_numpy(), return_index=True)
+        last = np.append(first[1:], len(idx))
+        self._rows = {pd.Timestamp(u).date(): (int(a), int(b)) for u, a, b in zip(uniq, first, last)}
+
+    def mask(self, code: str, day: dt.date):
+        """그 날 그 종목의 초 격자 마스크. 분봉이 하나도 없으면 None.
+        체결이 없어 그 종목 봉이 비어 있는 분(다른 종목 때문에 표엔 행이 있다)은 건너뛰고 **그 종목의 마지막 마감 봉**의 값을 쓴다 —
+        조용한 1분 때문에 필터가 거짓이 되는 인위적 결과를 막는다(여전히 마감된 봉만)."""
+        r, ci = self._rows.get(day), self._cols.get(code)
+        if r is None or ci is None:
+            return None
+        has = self._has[r[0]:r[1], ci]
+        if not has.any():
+            return None
+        return align_filter(self._sec[r[0]:r[1]][has], self._ok[r[0]:r[1], ci][has])
+
+
 def run_tick(spec: Spec, md: MarketData, progress: Progress | None = None, *, legacy=None,
              overrides: Mapping[str, float] | None = None) -> RunRecord:
     t_start = time.perf_counter()
@@ -286,7 +315,11 @@ def run_tick(spec: Spec, md: MarketData, progress: Progress | None = None, *, le
     if not tick_codes:
         raise BacktestError("체결(tick_al) 데이터가 없다")
     db = getattr(tcfg.catalog, "daily_breakout", None)
-    daily, dcodes, ustats = _daily_frame(bound, md, info, max(100, (db.n + 5) if db is not None else 0))  # D−1 순위(lookback ≤ 60)·n일 고가 재료
+    use_filter, use_pre = tcfg.filter is not None, tcfg.prefilter is not None
+    warm = max(100, (db.n + 5) if db is not None else 0)
+    if use_filter or use_pre:
+        warm = max(warm, WARMUP_BARS)  # 일봉 조건(지표 기간 상한)이 첫날부터 채워지게
+    daily, dcodes, ustats = _daily_frame(bound, md, info, warm)  # D−1 순위(lookback ≤ 60)·n일 고가 재료
     elig = [c for c in tick_codes if c in set(dcodes)] if bound.universe.type != "codes" else \
         [c for c in bound.universe.codes if c in set(tick_codes)]
     if not elig:
@@ -297,9 +330,23 @@ def run_tick(spec: Spec, md: MarketData, progress: Progress | None = None, *, le
         rank = compute(daily, "value_rank", {"lookback": bound.universe.lookback_days})
         rank_ok = (rank <= bound.universe.n).fillna(False)
 
+    # ---- c8: 사전 필터(일봉 D−1) · 분봉 필터(끝 시각 ≤ s 인 마지막 1분봉 값) — 틱 조건과 AND
+    pflags = evaluate_group(tcfg.prefilter, daily, market=md.index_frames()).fillna(False) if use_pre else None
+    fmin = None
+    if use_filter:
+        tick("minute", 0.03)
+        src = bound.intraday.source if bound.intraday is not None else "al"
+        max_tf = max([MINUTE_TIMEFRAMES[o.tf] for o in iter_operands(tcfg.filter) if getattr(o, "tf", "bar") in MINUTE_TIMEFRAMES] + [1])
+        warm_days = int(np.ceil(MAX_WARM_BARS * max_tf / 390)) + 1
+        p_start = int(didx.searchsorted(pd.Timestamp(start), side="left"))
+        mp = md.minute_panel(elig, didx[max(0, p_start - warm_days)].date(), end, 1, src)
+        if mp.close.empty:
+            raise BacktestError("틱 분봉 필터: 분봉 보관소에 이 기간·종목의 분봉이 없다")
+        fmin = _MinuteFilter(mp, evaluate_group(tcfg.filter, mp, market=md.index_frames(), daily=daily, bar_minutes=1))
+
     cands: dict[dt.date, list[Candidate]] = {}
     all_days: set[dt.date] = set()
-    pairs_expected = pairs_used = gap_skipped = n_signals = n_no_entry = 0
+    pairs_expected = pairs_used = gap_skipped = n_signals = n_no_entry = n_filter_no_min = n_pre_skipped = 0
     for k, code in enumerate(elig):
         days = [d for d in md.tick_days(code) if start <= d <= end]
         for d in days:
@@ -307,6 +354,11 @@ def run_tick(spec: Spec, md: MarketData, progress: Progress | None = None, *, le
             if rank_ok is not None:  # D−1 순위
                 pos = int(didx.searchsorted(pd.Timestamp(d), side="left")) - 1
                 if pos < 0 or code not in rank_ok.columns or not rank_ok.iloc[pos][code]:
+                    continue
+            if pflags is not None:  # D−1 일봉 사전 필터 — 그 날 틱을 볼지
+                pp = int(didx.searchsorted(pd.Timestamp(d), side="left")) - 1
+                if pp < 0 or code not in pflags.columns or not pflags.iloc[pp][code]:
+                    n_pre_skipped += 1
                     continue
             pairs_expected += 1
             td = md.tick_day(code, d)
@@ -319,7 +371,13 @@ def run_tick(spec: Spec, md: MarketData, progress: Progress | None = None, *, le
             level = None
             if db is not None:  # D−1 까지 n일 최고가 — 일봉 고가에서(당일 행은 안 봄: prior_n_high 가 day 미만만 센다)
                 level = prior_n_high(didx.date, daily.high[code].to_numpy(), d, db.n) if code in daily.high.columns else float("nan")
-            ev = detect_from_spec(td, tcfg, daily_high_level=level)
+            mask = None
+            if fmin is not None:
+                mask = fmin.mask(code, d)
+                if mask is None:  # 그 (종목, 날)의 분봉이 없다 → 필터 값 없음 = 진입 없음
+                    n_filter_no_min += 1
+                    continue
+            ev = detect_from_spec(td, tcfg, daily_high_level=level, extra_mask=mask)
             n_no_entry += ev.n_no_entry
             for s, j in zip(ev.signal_sec, ev.entry_idx):
                 cands.setdefault(d, []).append(Candidate(code, d, td.sec, td.prc, td.prev_close, int(s), int(j)))
@@ -338,6 +396,12 @@ def run_tick(spec: Spec, md: MarketData, progress: Progress | None = None, *, le
     coverage = {"expected_pairs": pairs_expected, "used_pairs": pairs_used, "days": len(all_days), "codes": len(elig),
                 "signals": n_signals, "gap_open_days_skipped": gap_skipped, "signals_without_entry_tick": n_no_entry,
                 "eod_time": tcfg.eod_time}
+    if use_filter or use_pre:
+        coverage.update(filter_pairs_without_minutes=n_filter_no_min, prefilter_pairs_skipped=n_pre_skipped)
+        if n_filter_no_min:
+            warnings.append(f"분봉이 없어 분봉 필터를 못 쓴 (날짜,종목) {n_filter_no_min}쌍은 진입 없음으로 처리했다")
+        if use_filter:
+            warnings.append("틱 분봉 필터: 체결 시각 s 의 값은 끝 시각 ≤ s 인 마지막 1분봉(마감 봉)에서 평가한 값이다(진행 중인 봉은 안 씀)")
     if pairs_expected and pairs_used < pairs_expected:
         warnings.append(f"틱 커버리지: 기대 (날짜,종목) {pairs_expected}쌍 중 {pairs_used}쌍만 체결 파일이 있다")
     warnings.append(f"틱 표본: 체결 데이터가 있는 거래일 {len(all_days)}일 · 종목 {len(elig)}개 — 수집 조회창이 짧아 통계적 의미가 약하다")
