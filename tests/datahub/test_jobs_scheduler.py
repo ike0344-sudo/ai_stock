@@ -7,6 +7,7 @@ import time
 from datetime import date, datetime, timedelta
 
 import pandas as pd
+import psutil
 import pytest
 
 from datahub import alerts, catalog, collectors, jobs, ledger, scheduler, sophie, status
@@ -111,6 +112,9 @@ def test_collect_daily_handler_records_ledger_and_progress(world, monkeypatch):
     assert world.store.read_progress(j["job_id"])["pct"] == 100.0
 
 
+WAIT_SEEN_LIMIT = 300  # 상한일 뿐(통과는 보이는 즉시) — 부하 때 자식 기동이 수 분 밀린 실측(30개 CPU 점유 시 174초)
+
+
 def test_handler_reports_waiting_lock(world, monkeypatch):
     """다른 쓰기 작업이 잠금을 쥐고 있으면 작업 진행 기록에 waiting_lock(소유자)이 뜨고, 풀리면 끝난다."""
     from datahub import gate
@@ -118,18 +122,28 @@ def test_handler_reports_waiting_lock(world, monkeypatch):
     monkeypatch.setenv("DATAHUB_WAIT_NOTICE_SECONDS", "0.5")
     j = jobs.create_job(world.store, "collect_daily", {"mode": "stale"})
     world.store.transition(j["job_id"], {"queued"}, status="running")
-    seen = []
+    seen, timeline = [], []
+    t0 = time.monotonic()
     with gate.write("daily_minute", writer="blocker"):
         th = threading.Thread(target=run_job, args=(world.store, j["job_id"]))
         th.start()
-        end = time.time() + 30
-        while time.time() < end and not seen:
+        # 고정 30초 대기는 부하(전체 스위트·CPU 경합) 때 자식 프로세스 기동(pandas import)이 늦어 모자랐다 →
+        # "waiting_lock 이 보일 때까지" 기다리되 상한만 넉넉히(통과는 보이는 즉시). 자식이 죽었으면 기다릴 이유가 없으니 그때도 나온다.
+        while time.monotonic() - t0 < WAIT_SEEN_LIMIT and not seen and th.is_alive():
             p = world.store.read_progress(j["job_id"]) or {}
             if p.get("waiting_lock"):
                 seen.append(p["waiting_lock"])
+            if int((time.monotonic() - t0) * 5) % 25 == 0:  # 5초마다 한 컷 — 실패 때 어디서 멈췄는지 보이게
+                lp = world.store.log_path(j["job_id"])
+                timeline.append((round(time.monotonic() - t0, 1), p.get("stage"), p.get("message"), lp.stat().st_size if lp.exists() else None,
+                                 [(c.pid, c.cmdline()[-3:], round(sum(c.cpu_times()[:2]), 1)) for c in psutil.Process().children(recursive=True)]))
             time.sleep(0.2)
-    th.join(60)
-    assert seen and seen[0]["resource"] == "daily_minute" and "python" in (seen[0]["owner"] or "").lower()
+        elapsed = time.monotonic() - t0
+    th.join(WAIT_SEEN_LIMIT)
+    diag = (f"waiting_lock 이 {elapsed:.1f}초 안에 안 보임 — job={world.store.read(j['job_id'])['status']}, "
+            f"타임라인(초, 단계, 메시지, 로그크기)={timeline[-6:]}, log 끝: {world.store.log_path(j['job_id']).read_text(encoding='utf-8', errors='replace')[-600:]}")
+    assert seen, diag
+    assert seen[0]["resource"] == "daily_minute" and "python" in (seen[0]["owner"] or "").lower()
     assert world.store.read(j["job_id"])["status"] == "succeeded"
 
 
