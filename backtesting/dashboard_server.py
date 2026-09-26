@@ -54,6 +54,8 @@ from .regime_signal import get_regime_signal
 from .nasdaq_drop_monitor import DEFAULT_STATE_DIR as NASDAQ_DROP_MONITOR_STATE_DIR
 from .orderbook_collector import is_extended_market_open
 from .strategy_catalog import describe_strategy
+from .afterhours_ranking import load_ranking as load_afterhours_ranking
+from .afterhours_ranking import start_background_poller as start_afterhours_poller
 from .trading_value_ranking import get_ranking as get_trading_value_ranking
 from .trading_value_ranking import start_background_poller as start_ranking_background_poller
 
@@ -120,6 +122,7 @@ CONTENT_TYPES = {
     "app.js": "application/javascript; charset=utf-8",
     "style.css": "text/css; charset=utf-8",
     "ranking.html": "text/html; charset=utf-8",
+    "afterhours.html": "text/html; charset=utf-8",
 }
 
 DEFAULT_STRATEGY = "strategy_1"
@@ -279,6 +282,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "window는 regular 또는 extended만 허용됩니다"}, status=400)
             else:
                 self._send_json(get_trading_value_ranking(self.kiwoom_appkey, self.kiwoom_secretkey, self.kiwoom_is_mock, window))
+        elif parsed.path == "/api/afterhours-ranking":
+            # 수집 스레드가 써둔 상태 파일만 읽는다 — 이 요청은 키움 API를 안 친다
+            # (afterhours_ranking.py 모듈 docstring "대시보드와의 경계" 참고).
+            self._send_json(load_afterhours_ranking())
         elif parsed.path == "/api/strategies":
             strategies = list_strategies(self.state_root)
             self._send_json({
@@ -329,6 +336,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._send_static("style.css")
         elif parsed.path == "/ranking.html":
             self._send_static("ranking.html")
+        elif parsed.path == "/afterhours.html":
+            self._send_static("afterhours.html")
         else:
             self.send_response(404)
             self.end_headers()
@@ -478,28 +487,57 @@ def run_dashboard_server(
     띄울 땐 신뢰할 수 있는 사설망(가정용 와이파이, Tailscale 같은 개인 VPN)에서만
     접근 가능하게 방화벽/네트워크를 제한해야 한다 — 공인 IP에 그대로 노출하면 안 된다.
     """
-    server = build_dashboard_server(
-        state_root, results_dir,
-        kiwoom_appkey, kiwoom_secretkey, kiwoom_is_mock, port=port, host=host,
+    # host 는 쉼표 목록 허용("127.0.0.1,100.126.113.127"). 첫 주소는 반드시 바인딩돼야 하고(실패하면
+    # 예외로 죽는다 — 기존 단일 host 동작 그대로), 나머지는 실패해도 경고만 남기고 60초마다 재시도한다
+    # (테일스케일이 아직 안 떴을 때도 로컬은 계속 서비스).
+    hosts = [h.strip() for h in host.split(",") if h.strip()]
+    mk = lambda h: build_dashboard_server(
+        state_root, results_dir, kiwoom_appkey, kiwoom_secretkey, kiwoom_is_mock, port=port, host=h,
     )
+    server = mk(hosts[0])
+    servers = [server]
+    stop = threading.Event()
+
+    def _serve_extra(h: str) -> None:
+        srv = None
+        while srv is None and not stop.is_set():
+            try:
+                srv = mk(h)
+            except OSError as e:
+                print(f"[경고] {h}:{port} 바인딩 실패({e}) — 60초 뒤 재시도", flush=True)
+                stop.wait(60)
+        if srv is None:
+            return
+        servers.append(srv)
+        print(f"대시보드 서버 추가 바인딩: http://{h}:{port}", flush=True)
+        srv.serve_forever()
+
+    for h in hosts[1:]:
+        threading.Thread(target=_serve_extra, args=(h,), daemon=True).start()
     if kiwoom_appkey and kiwoom_secretkey:
         # 브라우저 탭 없이도 08:00~09:00 사이 "extended" 조회가 자연히 한 번은 일어나게
         # 해서, 거래대금 랭킹의 "장중"(regular) 베이스라인이 사람이 그 시간에 대시보드를
         # 열어봤는지에 의존하지 않게 한다(trading_value_ranking.py 모듈 docstring 참고).
         start_ranking_background_poller(kiwoom_appkey, kiwoom_secretkey, kiwoom_is_mock)
+        # 애프터장 순위 — 15:33~15:39 에 베이스라인을 찍고 15:30~20:00 에 60초마다 갱신해
+        # 상태 파일에 쓴다. 이것도 브라우저 탭 유무와 무관해야 한다(베이스라인은 하루에
+        # 그 6분뿐이고 소급 조회가 불가능하다 — 놓치면 그날은 끝).
+        start_afterhours_poller(kiwoom_appkey, kiwoom_secretkey, kiwoom_is_mock)
         # 매일 장 마감 후(기본 15:40) top35 업데이트를 스스로 트리거 — cli.py의
         # update-top35 docstring이 안내하는 "OS 스케줄러 등록"이 이 PC에선 UAC로
         # 막혀 있어(top35_job.start_daily_scheduler 참고), 대신 이미 상시 실행 중인
         # 대시보드 서버 프로세스 안에서 자체 스케줄링한다.
         top35_job.start_daily_scheduler(kiwoom_appkey, kiwoom_secretkey, kiwoom_is_mock,
                                         bot_token=telegram_bot_token, chat_id=telegram_chat_id)
-    display_host = "127.0.0.1" if host == "0.0.0.0" else host
+    display_host = "127.0.0.1" if hosts[0] == "0.0.0.0" else hosts[0]
     print(f"대시보드 서버 시작: http://{display_host}:{port} (Ctrl+C로 중단)", flush=True)
-    if host == "0.0.0.0":
+    if "0.0.0.0" in hosts:
         print("0.0.0.0에 바인딩됨 — 신뢰할 수 있는 네트워크(가정용 와이파이/개인 VPN)에서만 접근하세요.", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        server.server_close()
+        stop.set()
+        for srv in servers:  # 추가 서버 스레드는 daemon 이라 프로세스와 함께 끝난다(shutdown() 대기 불필요)
+            srv.server_close()

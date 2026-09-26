@@ -68,10 +68,17 @@ def top_by_trading_value(
     exclude_etf: bool = True,
     max_pages: int = 5,
     exclude_spac: bool = True,
+    exchange: str = STEX_TP_COMBINED,
+    page: int | None = None,
 ) -> pd.DataFrame:
     """거래대금 상위 종목을 top_n개 반환.
 
     market: "000"=코스피+코스닥 통합, "001"=코스피, "101"=코스닥.
+    exchange: stex_tp — "1"=KRX, "2"=NXT, "3"=통합(기본값, 위 STEX_TP_COMBINED 주석 참고).
+    기본값이 통합이라 기존 호출부는 그대로다. KRX만 따로 받아야 하는 경우에만 넘긴다 —
+    예: 애프터장 순위의 기준가(afterhours_ranking.py)는 15:30 KRX 종가여야 하는데,
+    통합 응답의 cur_prc는 NXT가 20:00까지 도는 탓에 15:30 이후엔 NXT 가격을 따라간다
+    (실측 2026-09-21 19:58 삼성전자: KRX 274,500 vs 통합 275,000).
     ETF/ETN/스팩·관리종목을 걸러내며 페이지를 이어받아(cont-yn/next-key) top_n개를 채운다.
     exclude_spac=False면 스팩은 남긴다 — 스팩 급등도 "돈이 들어오는" 사건이라 순위에서
     보고 싶을 때가 있다. 그 경우 **베이스라인도 같은 설정으로 받아야** 스팩만 장전
@@ -85,12 +92,20 @@ def top_by_trading_value(
     body = {
         "mrkt_tp": market,
         "mang_stk_incls": "0" if exclude_managed else "1",
-        "stex_tp": STEX_TP_COMBINED,
+        "stex_tp": exchange,
     }
 
+    # page 를 주면 **그 페이지 하나만** 받는다(1-based). ka10032 의 next_key 는 불투명
+    # 커서가 아니라 단순 페이지 번호다(실측 2026-09-22: 1페이지 응답이 "00000001",
+    # 2페이지가 "00000002"...). 그래서 앞 페이지를 거치지 않고 바로 열 수 있고, 직접
+    # 만든 next_key 로 받은 5페이지가 순차로 걸어간 5페이지와 **완전히 일치**함을 확인했다.
+    # 애프터장 순위가 "1페이지는 매번, 깊은 페이지는 순환"으로 받는 데 쓴다.
     rows = []
-    cont_yn, next_key = "N", ""
-    for _ in range(max_pages):
+    if page and page > 1:
+        cont_yn, next_key = "Y", f"{page - 1:08d}"
+    else:
+        cont_yn, next_key = "N", ""
+    for _ in range(1 if page else max_pages):
         payload = client.request_tr("ka10032", body, path=RANKING_PATH, cont_yn=cont_yn, next_key=next_key)
         # HTTP 200이어도 API 자체 오류는 return_code!=0으로 응답에 실려 온다(kiwoom_client.py의
         # place_order 등과 동일한 관례) — 이 체크 없이 진행하면 trde_prica_upper가 없어
@@ -132,4 +147,5 @@ def top_by_trading_value(
             break
         cont_yn, next_key = "Y", client.last_next_key
 
-    return pd.DataFrame(rows[:top_n])
+    # page 지정 시엔 그 페이지의 내용이 전부다 — top_n 으로 자르지 않는다.
+    return pd.DataFrame(rows if page else rows[:top_n])

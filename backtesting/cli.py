@@ -1056,7 +1056,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--host", default="127.0.0.1",
         help="바인딩할 인터페이스. 기본 127.0.0.1(이 PC에서만 접속 가능). 휴대폰 등 다른 기기에서 "
         "접속하려면 0.0.0.0으로 지정 — 인증이 없는 서버라 신뢰할 수 있는 사설망(가정용 와이파이, "
-        "Tailscale 등 개인 VPN)에서만 쓸 것, 공인 IP에 노출하지 말 것",
+        "Tailscale 등 개인 VPN)에서만 쓸 것, 공인 IP에 노출하지 말 것. 쉼표로 여러 개 지정 가능"
+        "(예: 127.0.0.1,100.126.113.127 — 첫 주소는 필수, 나머지는 실패 시 60초마다 재시도)",
     )
     dashboard_parser.add_argument("--state-root", default="state", help="run-trading --strategy가 기록하는 전략별 상태 폴더(state/{strategy}/)의 상위 경로 — 서브폴더를 스캔해 대시보드 전략 선택지로 노출한다")
     dashboard_parser.add_argument("--results-dir", default="results", help="rule/ml/compare가 자동 저장하는 백테스트 결과 위치")

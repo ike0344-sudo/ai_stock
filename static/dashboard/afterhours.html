@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>애프터장 거래대금 상위 35</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    /* ranking.html 과 같은 밝은 테마 — 검은 배경에서 빨간 등락률이 안 읽힌다는 피드백. */
+    :root {
+      --bg: #ffffff; --surface: #f7f7f5; --surface-2: #f0efec; --surface-hover: #e8e6e1;
+      --inset: #ffffff; --border: #c9c4b8; --border-soft: #e2ded4;
+      --text: #14120e; --text-dim: #5c584e; --text-faint: #8d887c;
+      --accent: #b35c00; --accent-soft: #fdefdc;
+      --up: #c62828; --up-soft: #fbe3e3; --down: #0b63a8; --down-soft: #e0eefa;
+      --ok: #1b7a3f; --ok-soft: #e2f3e8; --danger: #c62828; --danger-soft: #fbe3e3;
+      --warn: #8a6100; --warn-soft: #fbf0d2;
+    }
+    body { padding: 18px; }
+    header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+    header h1 { font-size: 1rem; margin: 0; }
+    header a { color: var(--text-dim); font-size: 0.8rem; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 5px 10px; text-align: right; white-space: nowrap; }
+    th:nth-child(2), td:nth-child(2) { text-align: left; }   /* 종목명만 왼쪽, 숫자는 전부 오른쪽 */
+    thead th { position: sticky; top: 0; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+    tbody tr:hover { background: var(--surface-hover); }
+    .up { color: var(--up); } .down { color: var(--down); } .flat { color: var(--text-faint); }
+    .note { font-size: .78rem; color: var(--text-dim); margin: 2px 0 10px; }
+    /* ranking.html 의 칩과 같은 모양 — 두 화면이 따로 놀지 않게 */
+    #filters { margin: .2rem 0 .7rem; }
+    .chip {
+      font: inherit; font-size: .78em; cursor: pointer; border-radius: 999px;
+      border: 1px solid var(--surface-2); background: var(--surface); color: inherit;
+      padding: .25em .7em;
+    }
+    .chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+    .err { color: var(--danger); font-size: .82rem; margin: 6px 0; }
+    .warn { color: var(--warn); font-size: .78rem; margin: 4px 0; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>애프터장 거래대금 상위 35 <span style="font-weight:normal;font-size:.8rem;color:var(--text-dim)">(15:30 이후, KRX 시간외 + NXT 통합)</span></h1>
+    <div>
+      <span id="as-of">-</span>
+      &nbsp;·&nbsp;
+      <a href="/">← 메인 대시보드</a>
+    </div>
+  </header>
+
+  <p class="note">
+    순위 기준은 <strong>15:30 이후 발생한 거래대금</strong>이고, 등락률은
+    <strong>KRX 15:30 종가 대비</strong>입니다. 정규장 누적이 아닙니다.
+  </p>
+
+  <div id="filters">
+    <button id="sort-by-rate" class="chip" aria-pressed="false">등락률순</button>
+  </div>
+
+  <p id="error-box" class="err hidden"></p>
+  <p id="warn-box" class="warn hidden"></p>
+
+  <table id="tbl">
+    <thead>
+      <tr>
+        <th>순위</th><th>종목명</th>
+        <th>시간외 거래대금</th><th>15:30 대비</th>
+        <th>현재가</th><th>15:30 종가</th><th>시간외 거래량</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <p id="empty" class="note hidden"></p>
+
+  <script>
+    // 수집은 서버 안 폴러가 60초마다 한다. 화면은 그 결과 파일을 읽을 뿐이라
+    // 자주 당겨도 API 부담이 없다.
+    // 1초. 이 폴링은 **상태 파일만 읽는다**(키움 API 를 안 친다) — 수집은 서버 안
+    // 폴러가 따로 하므로 여기를 당겨도 429 예산과 무관하다. 백엔드 실효 주기(약 6초)
+    // 보다 촘촘하기만 하면 되므로 1초면 화면이 서버 뒤에서 기다리는 시간이 사실상 없다.
+    const POLL_INTERVAL_MS = 1000;
+
+    function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
+
+    function eok(v) {
+      if (v === null || v === undefined) return "-";
+      return Math.round(v / 100000000).toLocaleString("ko-KR") + "억";
+    }
+    function num(v) {
+      if (v === null || v === undefined) return "-";
+      return Math.round(v).toLocaleString("ko-KR");
+    }
+    // 기준가가 없으면 0%가 아니라 '-' — 진짜 보합과 구분되어야 한다.
+    function pct(v) {
+      if (v === null || v === undefined) return { text: "-", cls: "flat" };
+      const sign = v > 0 ? "+" : "";
+      return { text: `${sign}${v.toFixed(2)}%`, cls: v > 0 ? "up" : (v < 0 ? "down" : "flat") };
+    }
+
+    function cell(row, text, cls) {
+      const td = document.createElement("td");
+      td.textContent = text;
+      if (cls) td.className = cls;
+      row.appendChild(td);
+    }
+
+    let lastRows = [];
+    let sortByRate = false;      // 끄면 시간외 거래대금순(원래 순위), 켜면 등락률 높은 순
+
+    function renderTable() {
+      const tbody = document.getElementById("tbody");
+      clear(tbody);
+      const shown = [...lastRows];
+      // 정렬을 바꿔도 '순위' 칸은 **거래대금 기준 원래 등수**를 그대로 보여준다 —
+      // 이 표가 무엇으로 뽑힌 목록인지(대금 상위 35)를 잃지 않게. ranking.html 과 같은 규칙.
+      // 기준가가 없어 등락률이 null 인 종목은 0%로 치지 않고 맨 뒤로 보낸다.
+      if (sortByRate) {
+        shown.sort((a, b) => (b.change_vs_close_pct ?? -Infinity) - (a.change_vs_close_pct ?? -Infinity));
+      }
+      for (const r of shown) {
+        const tr = document.createElement("tr");
+        const p = pct(r.change_vs_close_pct);
+        cell(tr, r.rank);
+        cell(tr, r.name || "-");
+        cell(tr, eok(r.after_trading_value));
+        cell(tr, p.text, p.cls);
+        cell(tr, num(r.current_price));
+        cell(tr, num(r.close_price));
+        cell(tr, num(r.after_volume));
+        tbody.appendChild(tr);
+      }
+    }
+
+    function render(data) {
+      const rows = data.rows || [];
+      lastRows = rows;
+      renderTable();
+
+      // 장이 끝나면 "멈춘 화면"이 아니라 "그날 최종 집계"라고 분명히 말해준다.
+      const when = data.as_of
+        ? (data.session_closed ? `${data.as_of} 최종 (장 종료)` : `${data.as_of} 기준`)
+          + (data.baseline_at ? ` · 베이스라인 ${data.baseline_at}` : "")
+        : "-";
+      document.getElementById("as-of").textContent = when;
+
+      // 실패 사유는 접지 말고 그대로 — 왜 비었는지 모르는 게 제일 나쁘다.
+      const errBox = document.getElementById("error-box");
+      errBox.textContent = data.error ? "⚠ " + data.error : "";
+      errBox.classList.toggle("hidden", !data.error);
+
+      const warns = [];
+      if (data.stale_date) warns.push(`표시 중인 값은 ${data.stale_date} 자료입니다(오늘 수집 전).`);
+      const s = data.stats || {};
+      if (s.excluded_no_baseline) {
+        const codes = s.excluded_no_baseline_codes || [];
+        const tail = codes.length ? ` (${codes.join(", ")})` : "";
+        warns.push(`베이스라인에 없어 순위에서 제외된 종목 ${s.excluded_no_baseline}개${tail}`);
+      }
+      if (s.missing_close_price) warns.push(`기준가(15:30 종가)를 못 구한 종목 ${s.missing_close_price}개 — 등락률 '-'`);
+      // 장 초반엔 시간외 물량이 작아 하위권이 후보군(누적 상위) 밖 종목에 밀릴 수 있다.
+      // 상위권은 항상 맞지만 꼴찌 근처는 바뀔 수 있다는 걸 숨기지 않는다.
+      if (s.tail_guaranteed === false && s.pool_floor) {
+        warns.push(`하위권 미확정 — 시간외 ${Math.round(s.pool_floor / 100000000).toLocaleString("ko-KR")}억 미만 구간은 `
+          + `후보군 밖 종목이 더 클 수 있습니다(상위권은 확정)`);
+      }
+      // 순환 수집이라 행마다 신선도가 다르다 — 표에서 가장 낡은 값이 몇 초 전 것인지 그대로 보여준다.
+      // (낡으면 과소평가 방향이라 없는 종목이 끼어들진 않고, 늦게 올라올 뿐이다.)
+      if (s.oldest_row_age_sec != null) warns.push(`표에서 가장 낡은 값 ${Math.round(s.oldest_row_age_sec)}초 전`);
+      if (data.baseline_count) warns.push(`베이스라인 ${data.baseline_count}종목 · 후보 ${s.candidates || 0}종목 중 ${s.ranked || 0}종목이 시간외 거래 있음`);
+      const warnBox = document.getElementById("warn-box");
+      warnBox.textContent = warns.join(" / ");
+      warnBox.classList.toggle("hidden", warns.length === 0);
+
+      const empty = document.getElementById("empty");
+      const showEmpty = rows.length === 0;
+      // 표가 비는 건 '아직 없을 때'뿐이다 — 한 번 만들어진 결과는 장이 끝나도 계속 남는다.
+      empty.textContent = data.active
+        ? "아직 시간외 거래가 집계되지 않았습니다."
+        : "아직 집계된 애프터장 순위가 없습니다. 15:30 이후 거래가 쌓이면 표시됩니다.";
+      empty.classList.toggle("hidden", !showEmpty);
+      document.getElementById("tbl").classList.toggle("hidden", showEmpty);
+    }
+
+    async function poll() {
+      try {
+        const res = await fetch("/api/afterhours-ranking");
+        if (!res.ok) return;
+        render(await res.json());
+      } catch (e) {
+        // 다음 폴링에서 자연히 재시도
+      }
+    }
+
+    document.getElementById("sort-by-rate").addEventListener("click", (e) => {
+      sortByRate = !sortByRate;
+      e.currentTarget.setAttribute("aria-pressed", String(sortByRate));
+      renderTable();          // 다시 받지 않고 있는 값만 다시 그린다
+    });
+
+    poll();
+    setInterval(poll, POLL_INTERVAL_MS);
+  </script>
+</body>
+</html>

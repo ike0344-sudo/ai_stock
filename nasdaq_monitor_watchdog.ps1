@@ -15,10 +15,30 @@
 #   대신 monitor-dashboard와 같은 방식(정적 라우트 "/"에 GET)으로 응답 여부를 직접 확인한다.
 $repoRoot = "C:\Users\ike03\Desktop\code\ai_stock"
 
+# 8765 대시보드는 인증이 전혀 없고 일괄매도/개별매도 버튼이 실주문을 낸다. 그래서
+# 127.0.0.1(이 PC 전용)도 0.0.0.0(집 와이파이까지 개방)도 아닌 **Tailscale 주소에만**
+# 바인딩한다 — 휴대폰에서는 보이고, 같은 와이파이의 다른 기기나 공인 IP 로는 소켓이
+# 아예 안 열려 있어 방화벽 규칙이 틀려도 닿을 수 없다(fail-closed).
+# 0.0.0.0 이 특히 위험한 이유(실측): 이 PC 방화벽에 python.exe 인바운드 Allow 규칙이
+# Public 프로필(=Wi-Fi)에 이미 있어서, 0.0.0.0 으로 열면 그 순간 집 와이파이의 모든
+# 기기에서 계좌 화면이 열린다. 반대로 Tailscale 어댑터는 Private 이고 Tailscale 이
+# 깔면서 넣은 "Tailscale-In"(LocalAddress=100.126.113.127, 모든 포트 Allow) 규칙이
+# 이미 있어 이 바인딩엔 새 방화벽 규칙이 필요 없다.
+# 아래 두 대상(대시보드 서버 자신, 그리고 그걸 감시하는 monitor-dashboard)이 같은
+# 주소를 써야 한다 — 감시 쪽만 127.0.0.1 로 남으면 멀쩡한 대시보드를 죽은 것으로 보고
+# 텔레그램에 거짓 "다운" 알림을 계속 보낸다.
+$dashboardHost = "100.126.113.127"
+# 대시보드 서버는 이 PC 용 127.0.0.1 과 휴대폰용 테일스케일 두 주소에서 받는다(쉼표 목록). 여전히 0.0.0.0 은 아니다.
+# 서버 프로세스 생존 확인·순위 API 호출은 항상 붙는 127.0.0.1 로 하고, monitor-dashboard(텔레그램 다운 알림)만
+# 테일스케일 주소를 본다 — 휴대폰 접속이 끊긴 걸 알리는 용도라서.
+$dashboardLocal = "127.0.0.1"
+$dashboardBind = "$dashboardLocal,$dashboardHost"
+
 $targets = @(
     @{ Type = "Heartbeat"; Match = "monitor-nasdaq-drop"; Args = @("-m", "backtesting.cli", "monitor-nasdaq-drop"); LogName = "nasdaq_monitor"; HeartbeatPath = "state\nasdaq_drop_monitor\heartbeat.json" },
-    @{ Type = "Heartbeat"; Match = "monitor-dashboard"; Args = @("-m", "backtesting.cli", "monitor-dashboard"); LogName = "dashboard_monitor"; HeartbeatPath = "state\dashboard_monitor\heartbeat.json" },
-    @{ Type = "Http"; Match = "cli dashboard(\s|$)"; Args = @("-m", "backtesting.cli", "dashboard", "--port", "8765"); LogName = "dashboard_server"; Url = "http://127.0.0.1:8765/" },
+    @{ Type = "Heartbeat"; Match = "monitor-dashboard"; Args = @("-m", "backtesting.cli", "monitor-dashboard", "--host", $dashboardHost); LogName = "dashboard_monitor"; HeartbeatPath = "state\dashboard_monitor\heartbeat.json" },
+    @{ Type = "Http"; Match = "cli dashboard(\s|$)"; Args = @("-m", "backtesting.cli", "dashboard", "--port", "8765", "--host", $dashboardBind); LogName = "dashboard_server"; Url = "http://${dashboardLocal}:8765/" },
+    @{ Type = "Heartbeat"; Match = "-m studio(\s|$)"; Args = @("-m", "studio"); LogName = "studio_server"; HeartbeatPath = "state\studio\heartbeat.json" },
     # 소피증권 모바일 화면(8770)을 외부에 여는 Cloudflare 터널. 무료 quick tunnel 은
     # 띄울 때마다 주소가 바뀌므로, tunnel_job.py 가 바뀐 주소를 텔레그램으로 보낸다.
     @{ Type = "Heartbeat"; Match = "tunnel_job"; Args = @("tunnel_job.py"); LogName = "tunnel"; HeartbeatPath = "state\tunnel\heartbeat.json" },
@@ -52,23 +72,48 @@ $targets = @(
 $staleThresholdSeconds = 120
 $httpTimeoutSeconds = 5
 
+# 재기동 사유 기록용(2026-09-25 18:44 8765 재기동 원인을 못 찾았다). 판정(반환값)은 바꾸지 않고, 왜 그렇게 판정했는지만
+# 남긴다 — 기록 코드가 실패해도 판정이 뒤집히지 않게 전부 try/catch 안에서, 반환값을 먼저 정한 뒤 적는다.
+$script:lastProbeDetail = ""
+$restartLogPath = Join-Path $repoRoot "state\watchdog\restarts.log"
+
+function Write-RestartLog([string]$Line) {
+    try {
+        New-Item -ItemType Directory -Force -Path (Split-Path $restartLogPath) | Out-Null
+        Add-Content -Path $restartLogPath -Value $Line -Encoding UTF8
+    } catch {}
+}
+
 function Test-HeartbeatFresh([string]$HeartbeatPath) {
     $fullPath = Join-Path $repoRoot $HeartbeatPath
-    if (-not (Test-Path $fullPath)) { return $false }
+    if (-not (Test-Path $fullPath)) {
+        $script:lastProbeDetail = "하트비트 파일 없음: $HeartbeatPath"
+        return $false
+    }
     try {
         $data = Get-Content $fullPath -Raw | ConvertFrom-Json
         $ageSeconds = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [double]$data.updated_at
-        return $ageSeconds -lt $staleThresholdSeconds
+        $ok = $ageSeconds -lt $staleThresholdSeconds
+        try {
+            $last = [DateTimeOffset]::FromUnixTimeSeconds([long]$data.updated_at).ToLocalTime().ToString("s")
+            $script:lastProbeDetail = "하트비트 마지막 갱신 $last ($([int]$ageSeconds)초 전, 기준 ${staleThresholdSeconds}초)"
+        } catch {}
+        return $ok
     } catch {
+        $script:lastProbeDetail = "하트비트 읽기 실패: $($_.Exception.Message)"
         return $false  # 손상됐거나 읽을 수 없는 하트비트 = 생존 확인 불가로 취급
     }
 }
 
 function Test-HttpHealthy([string]$Url) {
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
     try {
         $res = Invoke-WebRequest -Uri $Url -TimeoutSec $httpTimeoutSeconds -UseBasicParsing
-        return $res.StatusCode -lt 500
+        $ok = $res.StatusCode -lt 500
+        try { $script:lastProbeDetail = "HTTP $($res.StatusCode) $([math]::Round($sw.Elapsed.TotalSeconds, 2))초" } catch {}
+        return $ok
     } catch {
+        try { $script:lastProbeDetail = "프로브 예외: $($_.Exception.Message) ($([math]::Round($sw.Elapsed.TotalSeconds, 2))초 걸림, 제한 ${httpTimeoutSeconds}초)" } catch {}
         return $false
     }
 }
@@ -176,8 +221,11 @@ function Invoke-BaselineVerifyOnce {
     }
 
     try {
-        $regular = Invoke-RestMethod -Uri "http://127.0.0.1:8765/api/trading-value-ranking?window=regular" -TimeoutSec 10
-        $extended = Invoke-RestMethod -Uri "http://127.0.0.1:8765/api/trading-value-ranking?window=extended" -TimeoutSec 10
+        # 이 블록은 마커 파일이 있어 더는 안 돈다(2026-08-07 확인 완료). 그래도 주소를
+        # 같이 고쳐둔다 — 마커를 지우는 순간 127.0.0.1 로는 안 열려서 멀쩡한 서버를
+        # FAIL 로 보고하게 된다.
+        $regular = Invoke-RestMethod -Uri "http://${dashboardLocal}:8765/api/trading-value-ranking?window=regular" -TimeoutSec 10
+        $extended = Invoke-RestMethod -Uri "http://${dashboardLocal}:8765/api/trading-value-ranking?window=extended" -TimeoutSec 10
         $regTop = $regular.rows[0].trading_value
         $extTop = $extended.rows[0].trading_value
         if ($regTop -lt $extTop) {
@@ -362,13 +410,38 @@ while ($true) {
         $candidateProcesses = Get-CimInstance Win32_Process -Filter "Name='python.exe' or Name='powershell.exe'"
         foreach ($target in $targets) {
             if (Test-TargetAlive $target) { continue }
+            $probeDetail = $script:lastProbeDetail
 
             # 죽었거나 멈췄으면 같은 커맨드라인의 기존 프로세스가 남아있을 수 있으니
             # 먼저 정리한다 — 안 그러면 멈춘 프로세스와 새로 띄운 프로세스가 동시에 돌면서
             # (대시보드는 포트 충돌, 감시는 텔레그램 알림 중복 발송) 문제가 생긴다.
             $stuck = $candidateProcesses | Where-Object { $_.CommandLine -match $target.Match }
+
+            # 재기동 사유 기록(죽이기 직전) — 판정·동작은 그대로, 증거만 남긴다.
+            # Http 대상은 "죽었나(포트 리스닝 없음) vs 멈췄나(리스닝은 하는데 응답 없음)"를 가르도록 리스닝 PID 도 적는다.
+            try {
+                $killed = if ($stuck) { ($stuck | ForEach-Object { $_.ProcessId }) -join "," } else { "없음(살아있는 프로세스 없음)" }
+                $listen = ""
+                if ($target.Type -eq "Http") {
+                    $port = ([uri]$target.Url).Port
+                    $lp = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | ForEach-Object { $_.OwningProcess })
+                    $listen = " | 포트 $port 리스닝 PID=" + $(if ($lp.Count) { $lp -join "," } else { "없음" })
+                }
+                Write-RestartLog ("{0} | {1} | 죽임 PID={2} | 사유: {3}{4}" -f (Get-Date -Format "s"), $target.LogName, $killed, $probeDetail, $listen)
+            } catch {}
+
             foreach ($proc in $stuck) {
                 try { Stop-Process -Id $proc.ProcessId -Force } catch {}
+            }
+
+            # 다음 재기동이 로그를 덮어쓰기 전에 한 세대 보존 (<LogName>.prev.log / .prev.err.log)
+            foreach ($suffix in @(".log", ".err.log")) {
+                $cur = Join-Path $repoRoot "$($target.LogName)$suffix"
+                $prev = Join-Path $repoRoot "$($target.LogName).prev$suffix"
+                if (Test-Path -LiteralPath $cur) {
+                    try { Move-Item -LiteralPath $cur -Destination $prev -Force -ErrorAction Stop }
+                    catch { Write-RestartLog ("{0} | {1} | 로그 보존 실패({2}): {3}" -f (Get-Date -Format "s"), $target.LogName, $suffix, $_.Exception.Message) }
+                }
             }
 
             $exe = if ($target.FilePath) { $target.FilePath } else { "python" }

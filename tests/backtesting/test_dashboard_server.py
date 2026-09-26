@@ -955,3 +955,38 @@ def test_post_api_strategy_stop_writes_stop_flag_file(running_server):
     assert response.status == 200
     assert json.loads(body) == {"stopped": True}
     assert os.path.exists(stop_flag_path)
+
+
+def test_origin_trust_follows_host_header_for_each_bound_address():
+    # 쉼표 다중 바인딩: 어느 주소로 들어와도 자기 Host 와 같은 Origin 만 통과, 위조는 거부(네트워크·주문 없음)
+    from types import SimpleNamespace
+    from backtesting.dashboard_server import DashboardRequestHandler
+
+    def trusted(host, origin):
+        h = SimpleNamespace(headers={"Host": host, "Origin": origin})
+        return DashboardRequestHandler._origin_is_trusted(h)
+
+    for host in ("127.0.0.1:8765", "100.126.113.127:8765"):
+        assert trusted(host, f"http://{host}")
+        assert not trusted(host, "http://evil.example")
+
+
+def test_run_dashboard_server_extra_host_failure_keeps_primary_serving(monkeypatch, capsys):
+    # 첫 주소(127.0.0.1)는 뜨고, 못 잡는 두 번째 주소는 경고만 남기고 죽지 않는다
+    import time
+    from backtesting import dashboard_server as ds
+
+    real = ds.build_dashboard_server
+    built = []
+
+    def fake(*a, host="", **k):
+        if host == "203.0.113.9":  # 이 PC 에 없는 주소 → OSError
+            built.append(host)
+            raise OSError("cannot assign")
+        return real(*a, host=host, **k)
+
+    monkeypatch.setattr(ds, "build_dashboard_server", fake)
+    monkeypatch.setattr(ds.threading.Event, "wait", lambda self, t=None: self.set())  # 60초 대기 생략
+    monkeypatch.setattr(ds.ThreadingHTTPServer, "serve_forever", lambda self, *a: time.sleep(0.3))  # 추가 스레드가 돌 시간
+    ds.run_dashboard_server(port=0, host="127.0.0.1,203.0.113.9")
+    assert built and "바인딩 실패" in capsys.readouterr().out
