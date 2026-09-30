@@ -26,7 +26,8 @@ from .calendar import Calendar
 POLL_SECONDS = 5.0
 clock = datetime.now            # 테스트가 가짜 시계로 바꾼다(처리기 안의 "지금")
 FAKE_ENV = "STUDIO_FAKE_COLLECTORS"
-ALLOWED_SCRIPTS = ("backfill_universe.py", "tick_collect_804_828_al.py", "tick_compact_daemon.py")
+ALLOWED_SCRIPTS = ("backfill_universe.py", "tick_collect_804_828_al.py", "tick_compact_daemon.py",
+                   "scripts/collect_program_al.py")
 
 # kind -> (handler, 작업 그룹, 잠금 자원). 수집은 같은 그룹 `collect` 라 동시에 1개(REST 한도가 계정 단위라서).
 KINDS = {
@@ -37,6 +38,7 @@ KINDS = {
     # 스케줄러가 만드는 작업은 화면이 종류 이름으로 구분한다(같은 처리기, 다른 kind)
     "tick_nightly": ("datahub.jobs:collect_ticks", "collect", "tick_al"),
     "daily_catchup": ("datahub.jobs:collect_daily", "collect", "daily_minute"),
+    "program_nightly": ("datahub.jobs:collect_program_al", "collect", "program_al"),
 }
 
 
@@ -187,6 +189,15 @@ def collect_minute_al(ctx):
     cmd = collectors.collect_minute_al(p.get("mode", "codes"), p.get("codes"), p.get("days"))
     ctx.progress(0, "수집", cmd.label)
     _ok(_Run(ctx, "minute_al", "수집").run(cmd), "통합 분봉 수집")
+    ctx.progress(100, "완료")
+    return {"message": cmd.label}
+
+
+def collect_program_al(ctx):
+    """종목별 프로그램 매매 수집. 수집기가 이미 받은 종목은 건너뛰어 다시 돌려도 안전하다."""
+    cmd = collectors.collect_program_al()
+    ctx.progress(0, "수집", cmd.label)
+    _ok(_Run(ctx, "program_al", "수집").run(cmd), "프로그램 매매 수집")
     ctx.progress(100, "완료")
     return {"message": cmd.label}
 

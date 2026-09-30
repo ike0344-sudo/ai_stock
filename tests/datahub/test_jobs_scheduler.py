@@ -182,9 +182,9 @@ def test_ticks_range_outside_window_is_refused(world):
 def test_h13_restart_runs_todays_pending_once_and_respects_switch(world):
     acts = world.tick()
     kinds = sorted(j["kind"] for j in world.jobs())
-    assert kinds == ["archive_minute_al", "tick_nightly"]                       # 21:00 이후 — 오늘 밤 체결 + 보관소
+    assert kinds == ["archive_minute_al", "program_nightly", "tick_nightly"]    # 21:00 이후 — 오늘 밤 체결 + 보관소 + 프로그램(09-30)
     assert any("freshness_check" in a for a in acts)                              # 10분 점검도 첫 tick 에
-    assert world.tick() == [] and len(world.jobs()) == 2                          # 두 번째 tick — 다시 만들지 않는다(active 작업 대기)
+    assert world.tick() == [] and len(world.jobs()) == 3                          # 두 번째 tick — 다시 만들지 않는다(active 작업 대기)
     world.clock["now"] += timedelta(minutes=5)
     assert world.tick() == []                                                     # 점검은 10분 뒤에
     with pytest.raises(scheduler.NotHubOwned):
@@ -410,3 +410,21 @@ def test_scheduler_thread_start_and_stop(world):
     time.sleep(0.5)
     th.stop(); th.join(5)
     assert not th.is_alive()
+
+
+def test_program_nightly_거래일_20시10분에_한_번_실패하면_30분_뒤_재시도(world):
+    """종목별 프로그램 매매는 당일분만 받을 수 있다 — 허브가 매일 돌리고, 실패하면 같은 밤 다시."""
+    world.clock["now"] = datetime(2026, 9, 3, 20, 0)
+    world.tick()
+    assert world.jobs("program_nightly") == [], "20:10 전"
+    world.clock["now"] = datetime(2026, 9, 3, 20, 11)
+    world.tick(); world.tick()
+    js = world.jobs("program_nightly")
+    assert len(js) == 1, "하루 한 번"
+    world.store.update(js[0]["job_id"], status="failed")
+    world.clock["now"] = datetime(2026, 9, 3, 20, 30)
+    world.tick()
+    assert len(world.jobs("program_nightly")) == 1, "30분 안엔 다시 안 한다"
+    world.clock["now"] = datetime(2026, 9, 3, 20, 45)
+    world.tick()
+    assert len(world.jobs("program_nightly")) == 2, "실패하면 30분 뒤 다시"

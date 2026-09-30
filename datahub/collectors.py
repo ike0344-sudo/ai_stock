@@ -114,6 +114,11 @@ def collect_minute_al(mode: str, codes: list[str] | None = None, days: int | Non
     raise ValueError(f"통합 분봉 모드: {mode}")
 
 
+def collect_program_al() -> Command:
+    """종목별 프로그램 매매(ka90008) — 그날 거래대금 상위 50. 당일분만 받을 수 있다."""
+    return Command([sys.executable, "scripts/collect_program_al.py"], _root(), label="프로그램 매매 수집")
+
+
 def archive_minute_al(codes: list[str] | None = None) -> Command:
     argv = [sys.executable, "-X", "utf8", "-m", "datahub", "archive-minute-al"] + (["--codes", *codes] if codes else ["--all"])
     return Command(argv, _root(), label="보관소 병합")

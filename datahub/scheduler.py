@@ -22,11 +22,12 @@ log = logging.getLogger("datahub.scheduler")
 NIGHT_START = "20:15"
 CATCHUP_FROM = "05:30"
 ARCHIVE_AT = "21:00"
+PROGRAM_AT = "20:10"          # 종목별 프로그램 매매 — 20:00 NXT 마감 뒤, **당일분만** 받을 수 있다
 RETRY_MINUTES = 60
 MAX_NIGHT_ATTEMPTS = 3
 PREREQ_MAX_WAIT = timedelta(hours=2)
 CHECK_EVERY = timedelta(minutes=10)
-HUB_SCHEDULES = ("tick_nightly", "daily_catchup", "minute_archive", "freshness_check")
+HUB_SCHEDULES = ("tick_nightly", "daily_catchup", "minute_archive", "freshness_check", "program_nightly")
 ACTIVE = {"scheduled", "queued", "running"}
 
 
@@ -120,7 +121,8 @@ class Scheduler:
         now = now or self.clock()
         acts: list[str] = []
         for name, fn in (("tick_nightly", self._tick_nightly), ("daily_catchup", self._daily_catchup),
-                         ("minute_archive", self._minute_archive), ("freshness_check", self._freshness_check)):
+                         ("minute_archive", self._minute_archive), ("freshness_check", self._freshness_check),
+                         ("program_nightly", self._program_nightly)):
             try:
                 acts += fn(now)
             except Exception:                              # 한 일정의 오류가 다른 일정을 막지 않는다
@@ -262,6 +264,28 @@ class Scheduler:
         self._save(allst)
         return [f"{sid}:작업 생성 {job['job_id']}"]
 
+    # ---- program_nightly ----
+    def _program_nightly(self, now: datetime) -> list[str]:
+        """거래일 20:10 에 한 번. 실패하면 같은 밤 30분 뒤 다시(최대 3번) — 자정이 지나면 영영 못 받는다."""
+        sid = "program_nightly"
+        if not schedule_enabled(sid) or now.time() < dtime.fromisoformat(schedule_time(sid, PROGRAM_AT)):
+            return []
+        if not Calendar().is_trading_day(now.date()):
+            return []
+        allst = self._state()
+        st = allst.get(sid) or {}
+        today = now.date().isoformat()
+        if st.get("date") == today:
+            job = self._job(st.get("job"))
+            failed = job is not None and job.get("status") in ("failed", "error", "cancelled")
+            if not failed or st.get("tries", 1) >= 3 or                     now - datetime.fromisoformat(st["at"]) < timedelta(minutes=30):
+                return []
+        tries = st.get("tries", 0) + 1 if st.get("date") == today else 1
+        job = jobs.create_job(self.store, "program_nightly", {}, trigger="hub")
+        allst[sid] = {"date": today, "job": job["job_id"], "tries": tries, "at": now.isoformat()}
+        self._save(allst)
+        return [f"{sid}:작업 생성 {job['job_id']} ({tries}번째)"]
+
     # ---- freshness_check ----
     def _freshness_check(self, now: datetime) -> list[str]:
         sid = "freshness_check"
@@ -280,8 +304,9 @@ class Scheduler:
 
 # ---------- 일정 목록 (`GET /api/data/schedules`, 계약: frontend/src/types/data.ts ScheduleRow) ----------
 
-DEFAULT_TIMES = {"tick_nightly": NIGHT_START, "minute_archive": ARCHIVE_AT}     # 시각을 바꿀 수 있는 허브 일정
-JOB_KIND = {"tick_nightly": "tick_nightly", "daily_catchup": "daily_catchup", "minute_archive": "archive_minute_al"}
+DEFAULT_TIMES = {"tick_nightly": NIGHT_START, "minute_archive": ARCHIVE_AT, "program_nightly": PROGRAM_AT}     # 시각을 바꿀 수 있는 허브 일정
+JOB_KIND = {"tick_nightly": "tick_nightly", "daily_catchup": "daily_catchup", "minute_archive": "archive_minute_al",
+            "program_nightly": "program_nightly"}
 
 
 def _marker_times(name: str):

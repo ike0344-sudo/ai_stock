@@ -108,9 +108,9 @@ datasets:
     path: data/stocks/program_al/{code}/{date}.parquet
     lock: program_al
     writers:
-      - {id: program_collect, cmd: scripts/collect_program_al.py, triggers: [manual]}
+      - {id: program_collect, cmd: scripts/collect_program_al.py, triggers: [hub, manual]}
     readers: [프로그램 신호 검증, studio, 연구]
-    # 기대 종목 = 그날 거래대금 상위 50. 허브 야간 일정(program_nightly)·신선도 규칙은 아직 없다 — 다음 작업.
+    # 기대 종목 = 그날 거래대금 상위 50. 허브 일정 program_nightly(거래일 20:10) 가 돌린다.
     freshness: {}
     retention: forever_unrecoverable
     notes: ka90008 은 날짜를 무시하고 **당일분만** 준다(09-30 실측) — 그날 밤에 못 받으면 영영 없다. 장전·장중·장후 전부
@@ -247,6 +247,7 @@ schedules:
   - {id: sophie_rebuild, label: "소피증권 재빌드",  owner: sophie,   when: "평일 15:35",                       does: "exe 재빌드·재기동(rebuild_after_close.ps1)", default: observe}
   - {id: tick_nightly, label: "체결 야간 수집",    owner: hub,      when: "매일 20:15",                       does: "조회창 안 빠진 (종목, 날짜) 전부 수집 → 압축", default: "on"}
   - {id: daily_catchup, label: "일봉 아침 따라잡기",   owner: hub,      when: "거래일 05:30~08:10",               does: "일봉이 밀렸을 때만 밀린 종목 따라잡기",       default: "on"}
+  - {id: program_nightly, label: "프로그램 야간 수집", owner: hub, when: "거래일 20:10",                    does: "종목별 프로그램 매매 상위 50(당일분만 받을 수 있음) · 실패 시 30분 뒤 재시도 3번", default: "on"}
   - {id: minute_archive, label: "분봉 보관소 병합",  owner: hub,      when: "매일 21:00",                       does: "캐시 중 보관소보다 새 파일 병합(안전망)",     default: "on"}
   - {id: freshness_check, label: "신선도 점검·알림", owner: hub,      when: "10분마다",                         does: "상태 계산 + 알림",                            default: "on"}
 
