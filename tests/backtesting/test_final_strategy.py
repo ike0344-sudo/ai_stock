@@ -51,23 +51,41 @@ def test_describe_strategy_1_returns_entry_exit_operation_sections():
 def test_detect_final_entries_true_once_all_conditions_align():
     daily = _daily(["2026-01-01", "2026-01-02"], [100, 999])  # 전일종가 100
     # 단조 증가하는 상승 -> 3분수익률/거래대금/당일신고가/무하락 조건이 자연스럽게 맞음
-    minute = _rising_minute("2026-01-02", [100.5, 102, 105, 108, 111, 115, 120])
+    minute = _rising_minute("2026-01-02", [101, 104, 106, 108, 110, 112, 114])
     daily_top35 = {pd.Timestamp("2026-01-02"): {"000001"}}
     regime_by_day = {pd.Timestamp("2026-01-02"): True}
 
     # day_return_ceiling을 0.22로 명시 - 이 테스트는 등락률 상한 자체를 검증하는
     # 게 아니라 다른 조건들을 검증하는 것이므로, 모듈 기본값(2026-08-30 0.15로
-    # 변경됨)이 바뀌어도 이 픽스처(8/11/15/20%)가 영향받지 않게 원래 캘리브레이션
+    # 변경됨)이 바뀌어도 이 픽스처가 영향받지 않게 원래 캘리브레이션
     # 값(0.22)으로 고정한다.
     entries = detect_final_entries(minute, daily, "000001", daily_top35, regime_by_day, day_return_ceiling=0.22)
 
-    # idx0~2는 당일상승률(7%) 미달(각 0.5/2/5%), idx3~6(8/11/15/20%)은 모든 조건 충족
+    # idx0~2는 당일상승률(7%) 미달(각 1/4/6%), idx3~6(8/10/12/14%)은 모든 조건 충족
+    # (3분 수익률 3.6~3.9% — MAX_RETURN_PCT 4% 이하가 되도록 완만하게 올린 픽스처)
     assert list(entries) == [False, False, False, True, True, True, True]
+
+
+def test_detect_final_entries_blocks_3min_return_above_ceiling():
+    """MAX_RETURN_PCT(4%) 초과 3분 급등은 다른 조건이 다 맞아도 진입하지 않는다(추격매수 차단)."""
+    daily = _daily(["2026-01-01", "2026-01-02"], [100, 999])
+    # idx3: 3분수익률 108/104=3.8%(통과), idx4: 113/106=6.6%(상한 초과로 차단)
+    minute = _rising_minute("2026-01-02", [101, 104, 106, 108, 113])
+    daily_top35 = {pd.Timestamp("2026-01-02"): {"000001"}}
+    regime_by_day = {pd.Timestamp("2026-01-02"): True}
+
+    entries = detect_final_entries(minute, daily, "000001", daily_top35, regime_by_day)
+    assert list(entries) == [False, False, False, True, False]
+
+    off = detect_final_entries(
+        minute, daily, "000001", daily_top35, regime_by_day, disabled_conditions=frozenset({"return_ceiling"})
+    )
+    assert list(off) == [False, False, False, True, True]
 
 
 def test_detect_final_entries_false_when_not_in_top35():
     daily = _daily(["2026-01-01", "2026-01-02"], [100, 999])
-    minute = _rising_minute("2026-01-02", [100.5, 102, 105, 108, 111, 115, 120])
+    minute = _rising_minute("2026-01-02", [101, 104, 106, 108, 110, 112, 114])
     daily_top35 = {pd.Timestamp("2026-01-02"): {"다른종목"}}  # 000001은 top35에 없음
     regime_by_day = {pd.Timestamp("2026-01-02"): True}
 
@@ -78,7 +96,7 @@ def test_detect_final_entries_false_when_not_in_top35():
 
 def test_detect_final_entries_false_when_regime_is_down():
     daily = _daily(["2026-01-01", "2026-01-02"], [100, 999])
-    minute = _rising_minute("2026-01-02", [100.5, 102, 105, 108, 111, 115, 120])
+    minute = _rising_minute("2026-01-02", [101, 104, 106, 108, 110, 112, 114])
     daily_top35 = {pd.Timestamp("2026-01-02"): {"000001"}}
     regime_by_day = {pd.Timestamp("2026-01-02"): False}  # 코스피 지수 60이평선 아래
 
@@ -92,7 +110,7 @@ def test_detect_final_entries_top25_rank1_auto_suppresses_top35():
     끄지 않아도 자동으로 꺼져야 한다(대체관계 강제) — 안 그러면 오늘 실제로 벌어졌던
     "top35를 같이 안 꺼서 나온 가짜 숫자" 사고가 반복된다."""
     daily = _daily(["2026-01-01", "2026-01-02"], [100, 999])
-    minute = _rising_minute("2026-01-02", [100.5, 102, 105, 108, 111, 115, 120])
+    minute = _rising_minute("2026-01-02", [101, 104, 106, 108, 110, 112, 114])
     daily_top35 = {pd.Timestamp("2026-01-02"): {"다른종목"}}  # 000001은 top35에 없음
     regime_by_day = {pd.Timestamp("2026-01-02"): True}
     rank1_by_minute = {ts: "000001" for ts in minute.index}  # 매 순간 000001이 1등
@@ -127,7 +145,7 @@ def test_detect_final_entries_precomputed_conditions_match_default_path():
     from backtesting.final_strategy import DRAWDOWN_THRESHOLD, MIN_RETURN_PCT, MIN_TRADE_VALUE, WINDOW_MINUTES
 
     daily = _daily(["2026-01-01", "2026-01-02"], [100, 999])
-    minute = _rising_minute("2026-01-02", [100.5, 102, 105, 108, 111, 115, 120])
+    minute = _rising_minute("2026-01-02", [101, 104, 106, 108, 110, 112, 114])
     daily_top35 = {pd.Timestamp("2026-01-02"): {"000001"}}
     regime_by_day = {pd.Timestamp("2026-01-02"): True}
 
@@ -151,7 +169,7 @@ def test_detect_final_entries_precomputed_missing_code_defaults_to_all_false():
     """딕셔너리에 그 종목 코드가 없으면(배치 함수가 그 종목을 못 만든 극단 케이스)
     에러 대신 전부 False로 안전하게 처리돼야 한다."""
     daily = _daily(["2026-01-01", "2026-01-02"], [100, 999])
-    minute = _rising_minute("2026-01-02", [100.5, 102, 105, 108, 111, 115, 120])
+    minute = _rising_minute("2026-01-02", [101, 104, 106, 108, 110, 112, 114])
     daily_top35 = {pd.Timestamp("2026-01-02"): {"000001"}}
     regime_by_day = {pd.Timestamp("2026-01-02"): True}
 
@@ -169,7 +187,7 @@ def test_detect_final_entries_precomputed_missing_code_defaults_to_all_false():
 
 def test_generate_signals_maps_detect_final_entries_to_signal_column():
     daily = _daily(["2026-01-01", "2026-01-02"], [100, 999])
-    minute = _rising_minute("2026-01-02", [100.5, 102, 105, 108, 111, 115, 120])
+    minute = _rising_minute("2026-01-02", [101, 104, 106, 108, 110, 112, 114])
     daily_top35 = {pd.Timestamp("2026-01-02"): {"000001"}}
     regime_by_day = {pd.Timestamp("2026-01-02"): True}
 
@@ -220,7 +238,7 @@ def test_build_training_dataset_produces_one_row_per_qualifying_entry(tmp_path, 
     minute_dir.mkdir(parents=True)
 
     _daily(["2026-01-01", "2026-01-02"], [100, 999]).to_csv(daily_dir / "000001.csv")
-    _rising_minute("2026-01-02", [100.5, 102, 105, 108, 111, 115, 120]).to_csv(minute_dir / "000001.csv")
+    _rising_minute("2026-01-02", [101, 104, 106, 108, 110, 112, 114]).to_csv(minute_dir / "000001.csv")
     # 코스피 지수 로컬 데이터가 tmp_path에 없으므로, 레짐 판단은 고정값으로 대체
     monkeypatch.setattr(
         final_strategy, "load_kospi_regime_by_day", lambda data_dir: {pd.Timestamp("2026-01-02"): True}
@@ -230,12 +248,11 @@ def test_build_training_dataset_produces_one_row_per_qualifying_entry(tmp_path, 
 
     assert list(features_df.columns) == FEATURE_COLUMNS
     # build_training_dataset은 day_return_ceiling을 인자로 안 받는다(항상 모듈
-    # 기본값 사용, 지금은 0.15) - idx5(15%)/idx6(20%)이 이제 상한에 걸려 빠지고
-    # idx3(8%)/idx4(11%)만 남는다. top25_return_rank1이 기본 ON으로 top35를 자동
+    # 기본값 사용, 지금은 0.15) - 픽스처 idx3~6(8/10/12/14%)이 전부 상한 아래라 4건. top25_return_rank1이 기본 ON으로 top35를 자동
     # 대체하지만(2026-08-30 strategy-agent 변경) 이 fixture는 종목이 000001
     # 하나뿐이라 매 순간 자동으로 1등이라 결과 건수엔 영향 없음을 확인함.
-    assert len(features_df) == 2
-    assert len(labels_s) == 2
+    assert len(features_df) == 4
+    assert len(labels_s) == 4
     assert labels_s.isin([0, 1]).all()
 
 

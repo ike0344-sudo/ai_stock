@@ -249,7 +249,7 @@ def test_process_entries_once_skips_when_no_free_slot(monkeypatch):
 def test_process_entries_once_sends_capture_notification_when_regime_bullish(tmp_path, monkeypatch):
     """scan_watchlist_once를 목으로 대체하지 않고 실제 check_candidate/detect_final_entries
     경로를 그대로 태워, "레짐이 상승으로 바뀌면 포착 알림이 오는지"를 end-to-end로 검증."""
-    rising = _rising_minute(TODAY_STR, [100.5, 102, 105, 108, 111])
+    rising = _rising_minute(TODAY_STR, [101, 104, 106, 108, 110])
     monkeypatch.setattr(live_monitor, "load_history", lambda *a, **k: rising)
     data_dir = _write_daily_csv(tmp_path, "000001", [PREV_STR, TODAY_STR], [100, 999])
     trained = TrainedEntryFilterModel(model=_StubProbaModel(0.9))
@@ -272,7 +272,7 @@ def test_process_entries_once_sends_capture_notification_when_regime_bullish(tmp
 def test_process_entries_once_sends_no_capture_notification_when_regime_bearish(tmp_path, monkeypatch):
     """지금 실서비스 상황(코스피 레짐=하락)과 동일한 조건 재현 — 다른 진입조건은 전부
     충족해도 레짐 필터 하나 때문에 포착 알림이 아예 안 오는 게 맞는 동작임을 확인."""
-    rising = _rising_minute(TODAY_STR, [100.5, 102, 105, 108, 111])
+    rising = _rising_minute(TODAY_STR, [101, 104, 106, 108, 110])
     monkeypatch.setattr(live_monitor, "load_history", lambda *a, **k: rising)
     data_dir = _write_daily_csv(tmp_path, "000001", [PREV_STR, TODAY_STR], [100, 999])
     trained = TrainedEntryFilterModel(model=_StubProbaModel(0.9))

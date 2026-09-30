@@ -54,6 +54,12 @@ WINDOW_MINUTES = 3
 # 경계다 — 다시 볼 사람은 120억이 최적화된 값이라고 읽으면 안 된다.
 MIN_TRADE_VALUE = 12_000_000_000
 MIN_RETURN_PCT = 0.015
+# 2026-09-30 3분 수익률 상한 추가. 통합 테이프 원신호 1261건에서 3분 수익률 4% 초과
+# 160건의 기대값이 -0.6%(승률 36%)로, 4% 이하(+0.09%)와 부호가 갈린다 — 급하게 치솟은
+# 분봉 끝을 따라 사는 추격매수다. 상한 3.5/4/4.5/5/6%에서 남는 표본 PF가 1.08/1.06/
+# 1.03/1.02/1.01로 단조, 분기 5개 중 4개에서 초과 구간이 더 나쁘다. 4%는 최적점이
+# 아니라 부호가 갈리는 경계다(3.5%는 거래수가 20% 가까이 깎인다).
+MAX_RETURN_PCT = 0.04
 DAY_RETURN_FLOOR = 0.07
 # 2026-08-30 사용자 결정으로 0.22 -> 0.15. 정직하게 적어둔다: 원래 0.22가 어디서
 # 왔는지 아무도 모른다 — 오늘 자유파라미터 점검에서 전략1 자유파라미터 8개 중
@@ -122,7 +128,7 @@ def describe_strategy_1() -> dict:
             f"거래대금 상위 {TOP_N}위 이내",
             f"당일상승률 {DAY_RETURN_FLOOR:.0%} 이상 {DAY_RETURN_CEILING:.0%} 미만",
             f"{WINDOW_MINUTES}분 거래대금 {MIN_TRADE_VALUE / 1e8:.0f}억원 이상",
-            f"{WINDOW_MINUTES}분 수익률 {MIN_RETURN_PCT:.1%} 이상",
+            f"{WINDOW_MINUTES}분 수익률 {MIN_RETURN_PCT:.1%} 이상 {MAX_RETURN_PCT:.1%} 이하",
             "당일 장중 신고가",
             f"장중고점 대비 -{DRAWDOWN_THRESHOLD:.1%} 하락 이력 없음",
             f"코스피지수 {REGIME_RESAMPLE_MINUTES}분봉 {REGIME_MA_PERIOD}기간 이평선 위(그날 09시 기준)",
@@ -209,6 +215,9 @@ def detect_final_entries(
     else:
         no_drawdown_ok = no_prior_drawdown_filter(minute_df, DRAWDOWN_THRESHOLD)
     regime_ok = market_regime_filter(minute_df, regime_by_day)
+    # detect_entries의 수익률과 같은 정의(일자별 리셋, pct_change(WINDOW_MINUTES-1)) — 거래일 경계를 넘지 않는다.
+    window_ret = minute_df["close"].groupby(minute_df.index.normalize()).pct_change(WINDOW_MINUTES - 1)
+    return_ceiling_ok = (window_ret <= MAX_RETURN_PCT).fillna(False)
     # market_regime_filter와 같은 이유로 분봉 전체가 아니라 고유 날짜만 파이썬 루프를 돈다.
     minute_dates = minute_df.index.normalize()
     day_codes, unique_days = pd.factorize(minute_dates)
@@ -225,7 +234,7 @@ def detect_final_entries(
     # 동일성을 보장받는다. 전부 이 방식으로 통일(2026-08-30, leave-one-out 요청 계기) —
     # 기존엔 regime/top35만 토글 가능했고 나머지 5개는 항상 강제 포함이었다.
     cond_by_name = {
-        "base": base_entries, "day_floor": day_floor_ok, "day_ceiling": day_ceiling_ok,
+        "base": base_entries, "return_ceiling": return_ceiling_ok, "day_floor": day_floor_ok, "day_ceiling": day_ceiling_ok,
         "new_high": new_high_ok, "no_drawdown": no_drawdown_ok, "regime": regime_ok, "top35": top35_ok,
     }
     # top25_return_rank1이 실제로 켜져 있으면(데이터가 있고 "top25_return_rank1" 이름으로

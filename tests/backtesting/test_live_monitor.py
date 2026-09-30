@@ -77,7 +77,7 @@ def test_check_candidate_returns_none_when_no_entry_signal(tmp_path, monkeypatch
 
 
 def test_check_candidate_uses_feed_data_without_calling_rest(tmp_path, monkeypatch):
-    rising = _rising_minute(TODAY_STR, [100.5, 102, 105, 108, 111])
+    rising = _rising_minute(TODAY_STR, [101, 104, 106, 108, 110])
     rest_calls = []
     monkeypatch.setattr(live_monitor, "load_history", lambda *a, **k: rest_calls.append(1) or rising)
     data_dir = _write_daily_csv(tmp_path, "000001", [PREV_STR, TODAY_STR], [100, 999])
@@ -91,7 +91,7 @@ def test_check_candidate_uses_feed_data_without_calling_rest(tmp_path, monkeypat
 
 
 def test_check_candidate_falls_back_to_rest_when_feed_empty(tmp_path, monkeypatch):
-    rising = _rising_minute(TODAY_STR, [100.5, 102, 105, 108, 111])
+    rising = _rising_minute(TODAY_STR, [101, 104, 106, 108, 110])
     rest_calls = []
     monkeypatch.setattr(live_monitor, "load_history", lambda *a, **k: rest_calls.append(1) or rising)
     data_dir = _write_daily_csv(tmp_path, "000001", [PREV_STR, TODAY_STR], [100, 999])
@@ -105,7 +105,7 @@ def test_check_candidate_falls_back_to_rest_when_feed_empty(tmp_path, monkeypatc
 
 
 def test_check_candidate_returns_none_when_daily_data_missing(tmp_path, monkeypatch):
-    rising = _rising_minute(TODAY_STR, [100.5, 102, 105, 108, 111])
+    rising = _rising_minute(TODAY_STR, [101, 104, 106, 108, 110])
     monkeypatch.setattr(live_monitor, "load_history", lambda *a, **k: rising)
     trained = TrainedEntryFilterModel(model=_StubProbaModel(0.9))
 
@@ -115,8 +115,8 @@ def test_check_candidate_returns_none_when_daily_data_missing(tmp_path, monkeypa
 
 
 def test_check_candidate_returns_signal_when_all_conditions_and_proba_pass(tmp_path, monkeypatch):
-    # idx4(마지막 캔들)에서 당일상승률 11%(밴드[7~22%) 내) + 3분수익률/거래대금/당일신고가/무하락 전부 만족
-    rising = _rising_minute(TODAY_STR, [100.5, 102, 105, 108, 111])
+    # idx4(마지막 캔들)에서 당일상승률 10%(밴드[7~15%) 내) + 3분수익률 3.8%(상한 4% 이하)/거래대금/당일신고가/무하락 전부 만족
+    rising = _rising_minute(TODAY_STR, [101, 104, 106, 108, 110])
     monkeypatch.setattr(live_monitor, "load_history", lambda *a, **k: rising)
     data_dir = _write_daily_csv(tmp_path, "000001", [PREV_STR, TODAY_STR], [100, 999])
     trained = TrainedEntryFilterModel(model=_StubProbaModel(0.9))
@@ -126,11 +126,11 @@ def test_check_candidate_returns_signal_when_all_conditions_and_proba_pass(tmp_p
     assert result is not None
     assert result["stock_code"] == "000001"
     assert result["proba"] == pytest.approx(0.9)
-    assert result["price"] == 111
+    assert result["price"] == 110
 
 
 def test_check_candidate_returns_none_when_proba_below_threshold(tmp_path, monkeypatch):
-    rising = _rising_minute(TODAY_STR, [100.5, 102, 105, 108, 111])
+    rising = _rising_minute(TODAY_STR, [101, 104, 106, 108, 110])
     monkeypatch.setattr(live_monitor, "load_history", lambda *a, **k: rising)
     data_dir = _write_daily_csv(tmp_path, "000001", [PREV_STR, TODAY_STR], [100, 999])
     trained = TrainedEntryFilterModel(model=_StubProbaModel(0.4))  # 임계값(0.6) 미달
@@ -141,7 +141,7 @@ def test_check_candidate_returns_none_when_proba_below_threshold(tmp_path, monke
 
 
 def test_check_candidate_returns_none_when_regime_is_down(tmp_path, monkeypatch):
-    rising = _rising_minute(TODAY_STR, [100.5, 102, 105, 108, 111])
+    rising = _rising_minute(TODAY_STR, [101, 104, 106, 108, 110])
     monkeypatch.setattr(live_monitor, "load_history", lambda *a, **k: rising)
     data_dir = _write_daily_csv(tmp_path, "000001", [PREV_STR, TODAY_STR], [100, 999])
     trained = TrainedEntryFilterModel(model=_StubProbaModel(0.9))
@@ -152,7 +152,7 @@ def test_check_candidate_returns_none_when_regime_is_down(tmp_path, monkeypatch)
 
 
 def test_check_candidate_returns_none_when_not_in_todays_top35(tmp_path, monkeypatch):
-    rising = _rising_minute(TODAY_STR, [100.5, 102, 105, 108, 111])
+    rising = _rising_minute(TODAY_STR, [101, 104, 106, 108, 110])
     monkeypatch.setattr(live_monitor, "load_history", lambda *a, **k: rising)
     data_dir = _write_daily_csv(tmp_path, "000001", [PREV_STR, TODAY_STR], [100, 999])
     trained = TrainedEntryFilterModel(model=_StubProbaModel(0.9))
@@ -163,7 +163,7 @@ def test_check_candidate_returns_none_when_not_in_todays_top35(tmp_path, monkeyp
 
 
 def test_scan_watchlist_once_dedupes_repeated_signal_via_seen_signals(tmp_path, monkeypatch):
-    rising = _rising_minute(TODAY_STR, [100.5, 102, 105, 108, 111])
+    rising = _rising_minute(TODAY_STR, [101, 104, 106, 108, 110])
     monkeypatch.setattr(live_monitor, "load_history", lambda *a, **k: rising)
     data_dir = _write_daily_csv(tmp_path, "000001", [PREV_STR, TODAY_STR], [100, 999])
     trained = TrainedEntryFilterModel(model=_StubProbaModel(0.9))
@@ -177,7 +177,7 @@ def test_scan_watchlist_once_dedupes_repeated_signal_via_seen_signals(tmp_path, 
 
 
 def test_scan_watchlist_once_passes_feed_through_to_check_candidate(tmp_path, monkeypatch):
-    rising = _rising_minute(TODAY_STR, [100.5, 102, 105, 108, 111])
+    rising = _rising_minute(TODAY_STR, [101, 104, 106, 108, 110])
     rest_calls = []
     monkeypatch.setattr(live_monitor, "load_history", lambda *a, **k: rest_calls.append(1) or rising)
     data_dir = _write_daily_csv(tmp_path, "000001", [PREV_STR, TODAY_STR], [100, 999])
@@ -194,7 +194,7 @@ def test_scan_watchlist_once_continues_after_per_stock_error(tmp_path, monkeypat
     def flaky_load_history(client, code, start, end, interval, use_cache, exchange=None):
         if code == "000001":
             raise RuntimeError("API error")
-        return _rising_minute(TODAY_STR, [100.5, 102, 105, 108, 111])
+        return _rising_minute(TODAY_STR, [101, 104, 106, 108, 110])
 
     monkeypatch.setattr(live_monitor, "load_history", flaky_load_history)
     data_dir = _write_daily_csv(tmp_path, "000660", [PREV_STR, TODAY_STR], [100, 999])
