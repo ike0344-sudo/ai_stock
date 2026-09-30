@@ -19,6 +19,8 @@ locks:
   daily_minute: {path: state/locks/data_daily_minute, covers: [daily, minute_krx, index]}
   minute_al:    {path: state/locks/data_minute_al,    covers: [minute_al, minute_al_archive]}
   tick_al:      {path: state/locks/data_tick_al,      covers: [tick_al]}
+  program_al:   {path: state/locks/data_program_al,   covers: [program_al]}
+  rs_rating:    {path: state/locks/data_rs_rating,    covers: [rs_rating, rs_raw, rs_period, rs_shares]}
 
 datasets:
   - id: daily
@@ -100,6 +102,19 @@ datasets:
     retention: forever_unrecoverable
     notes: 조회창 20거래일 — 놓치면 재수집 불가. 압축 전에는 같은 자리에 .csv
 
+  - id: program_al
+    label: 통합 종목 프로그램 매매(체결 변화마다)
+    basis: AL
+    path: data/stocks/program_al/{code}/{date}.parquet
+    lock: program_al
+    writers:
+      - {id: program_collect, cmd: scripts/collect_program_al.py, triggers: [manual]}
+    readers: [프로그램 신호 검증, studio, 연구]
+    # 기대 종목 = 그날 거래대금 상위 50. 허브 야간 일정(program_nightly)·신선도 규칙은 아직 없다 — 다음 작업.
+    freshness: {}
+    retention: forever_unrecoverable
+    notes: ka90008 은 날짜를 무시하고 **당일분만** 준다(09-30 실측) — 그날 밤에 못 받으면 영영 없다. 장전·장중·장후 전부
+
   - id: sophie_reference
     label: 소피증권 기준 데이터
     basis: derived
@@ -141,6 +156,17 @@ datasets:
     freshness: {rule: none}
     retention: keep
 
+  - id: sectors_stockeasy
+    label: 섹터(스탁이지 분류)
+    basis: reference
+    path: data/sectors_stockeasy.csv
+    lock: null
+    writers:
+      - {id: manual, cmd: "스탁이지 rs/dashboard-data 의 대분류·중분류(2026-09-28 받음)", triggers: [manual]}
+    readers: [rs.html, newhigh.html, 연구]
+    freshness: {rule: none}
+    retention: keep
+    notes: "RS·신고가 화면 전용. 소피증권 테마(themes/theme_group_map)와 섞지 않는다 — 사용자 09-28"
   - id: high120
     label: 120일 신고가
     basis: derived
@@ -162,6 +188,55 @@ datasets:
     readers: [studio, 연구]
     freshness: {rule: newer_than_source}
     retention: regenerable
+
+  - id: rs_rating
+    label: RS 점수(오닐식, 1~99)
+    basis: derived
+    path: data/cache/rs_rating.parquet
+    lock: rs_rating
+    writers:
+      - {id: rs_rating, cmd: "backtesting/rs_rating.py", triggers: ["watchdog:daily_report", manual]}
+    readers: [studio, 연구]
+    freshness: {rule: newer_than_source}
+    retention: regenerable
+    notes: index=date, columns=code, 값 1~99(Int8, NaN=그날 점수 없음). 원점수는 rs_raw. 시총 2,000억 미만은 모집단에서 빠짐(rs_shares.json).
+      매일 순위표는 results/rs_rank/YYYY-MM-DD.csv(카탈로그 밖, 파생 산출물)
+
+  - id: rs_raw
+    label: RS 원점수(가중 수익률)
+    basis: derived
+    path: data/cache/rs_raw.parquet
+    lock: rs_rating
+    writers:
+      - {id: rs_rating, cmd: "backtesting/rs_rating.py", triggers: ["watchdog:daily_report", manual]}
+    readers: [연구]
+    freshness: {rule: newer_than_source}
+    retention: regenerable
+
+  - id: rs_period
+    label: RS 점수(기간별 1m/3m/6m/12m)
+    basis: derived
+    path: data/cache/rs_1m.parquet
+    also: [data/cache/rs_3m.parquet, data/cache/rs_6m.parquet, data/cache/rs_12m.parquet]
+    lock: rs_rating
+    writers:
+      - {id: rs_rating, cmd: "backtesting/rs_rating.py", triggers: ["watchdog:daily_report", manual]}
+    readers: [studio, 연구]
+    freshness: {rule: newer_than_source}
+    retention: regenerable
+    notes: rs_rating 과 같은 모양·모집단, 원점수만 R21/63/126/252 단독(가중 없음). 09-28 17:35 편지(스탁이지 기간별 RS) 보완
+
+  - id: rs_shares
+    label: RS 시가총액 모집단용 상장주식수
+    basis: reference
+    path: data/cache/rs_shares.json
+    lock: rs_rating
+    writers:
+      - {id: rs_shares, cmd: "backtesting/rs_shares.py", triggers: [manual]}
+    readers: [rs_rating]
+    freshness: {rule: none}
+    retention: keep
+    notes: 코드→상장주식수(현재 값, 키움 ka10099 한 번 + universe.csv). rs_rating 매일 갱신에 자동으로 안 물려 있다 — 사람이 가끔 다시 받을 것
 
 # 일정·알림은 값만 적는다. 실행은 module-2 (scheduler.py / alerts.py).
 schedules:
