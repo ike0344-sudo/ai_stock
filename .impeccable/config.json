@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "flat-type-hierarchy",
+        "value": "*",
+        "files": [
+          "static/dashboard/ledger.html"
+        ],
+        "createdAt": "2026-09-29T10:03:27.629Z",
+        "reason": "user asked ledger to match rs.html/newhigh.html (market.css) type scale; sibling pages use the same h1 1.15rem / body .88rem"
+      }
+    ]
+  }
+}
