@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>52주 신고가 · 신고가 후보</title>
+<link rel="stylesheet" href="/market.css">
+<style>
+  .tab-panel { display: none; } .tab-panel.active { display: block; }
+
+    /* 마우스 오버 52주 일봉 */
+    #hover-chart { position: fixed; z-index: 50; width: 640px; background: var(--card-bg); border: 1px solid var(--card-border);
+      border-radius: 12px; box-shadow: 0 8px 28px rgba(20,20,30,.18); padding: 10px 12px 8px; pointer-events: none; }
+    #hover-chart .hc-title { display: flex; justify-content: space-between; align-items: baseline; font-size: .86rem; margin-bottom: 4px; }
+    #hover-chart .hc-title b { font-size: .95rem; }
+    #hover-chart .hc-sub { color: var(--text-dim); font-size: .76rem; }
+    #hover-chart svg { display: block; width: 100%; height: auto; }
+    #hover-chart .hc-legend { display: flex; gap: 12px; font-size: .72rem; color: var(--text-dim); margin-top: 2px; }
+    #hover-chart .hc-legend i { display: inline-block; width: 14px; height: 0; border-top: 2px solid; vertical-align: middle; margin-right: 4px; }
+    #cand-body tr { cursor: default; }
+    .fair-strong { font-weight: 700; }
+    .fair-cell { line-height: 1.2; }
+  </style>
+</head>
+<body>
+
+  <div class="page-tabs">
+    <a href="/rs.html">RS 상위</a>
+    <a href="#new" id="tab-link-new">52주 신고가</a>
+    <a href="#candidates" id="tab-link-cand">신고가 후보</a>
+    <a href="/ledger.html">신고가 장부</a>
+  </div>
+
+  <div class="card">
+    <header class="top">
+      <div><h1><span id="page-title">신고가 후보</span><span class="sub" id="as-of">-</span></h1></div>
+      <nav>
+        <span class="seg">
+          <button id="font-smaller-button" type="button">A-</button>
+          <button id="font-bigger-button" type="button">A+</button>
+        </span>
+        &nbsp;·&nbsp;
+        <a href="/">← 메인</a>
+        &nbsp;<a href="/rs.html">RS 상위 2%</a>
+      </nav>
+    </header>
+    <p id="error-box" class="err hidden"></p>
+  </div>
+
+  <!-- ============================== 탭 1: 신고가 후보 ============================== -->
+  <div class="tab-panel" id="panel-cand">
+    <div class="card">
+      <div class="stat-cards" id="stat-cards"></div>
+    </div>
+
+    <div class="card">
+      <details class="legend" open>
+        <summary>읽는 법 — 상태 정의</summary>
+        <table>
+          <tr><th>상태</th><th>뜻</th></tr>
+          <tr><td><span class="st-badge st-임박">임박</span></td><td>52주 최고가까지 3% 이내</td></tr>
+          <tr><td><span class="st-badge st-근접">근접</span></td><td>52주 최고가까지 3% 초과 ~ 7% 이내</td></tr>
+          <tr><td><span class="st-badge st-관찰">관찰</span></td><td>52주 최고가까지 7% 초과 ~ 20% 이내</td></tr>
+          <tr><td><span class="st-badge st-돌파중">돌파중</span></td><td>오늘 처음 종가가 52주 최고가 이상(첫날)</td></tr>
+          <tr><td><span class="st-badge st-돌파중">돌파성공</span></td><td>어제도 종가가 52주 최고가 이상이었다(버텨냄)</td></tr>
+          <tr><td><span class="st-badge st-터치">터치 후 밀림</span></td><td>오늘 고가는 52주 최고가를 찍었는데 종가는 못 지켰다</td></tr>
+          <tr><td>신선 후보</td><td>최근 60거래일 돌파 이력 1일 이하 · 거래대금 20일 평균 배수 1.0 이상 · RS종합 80 이상 · 상태가 근접·임박</td></tr>
+        </table>
+      </details>
+    </div>
+
+    <div class="card">
+      <div class="filters">
+        <div class="grp"><span class="seg" id="status-seg"></span></div>
+        <div class="grp">시가총액
+          <select id="c-cap-select">
+            <option value="0">전체</option>
+            <option value="100000000000">1,000억+</option>
+            <option value="200000000000" selected>2,000억+</option>
+            <option value="500000000000">5,000억+</option>
+          </select>
+        </div>
+        <div class="grp">RS종합
+          <select id="c-rs-select">
+            <option value="0">전체</option>
+            <option value="70">70+</option>
+            <option value="80" selected>80+</option>
+            <option value="90">90+</option>
+          </select>
+        </div>
+        <div class="grp">거래대금
+          <select id="c-value-select">
+            <option value="0">전체</option>
+            <option value="10000000000" selected>100억+</option>
+            <option value="50000000000">500억+</option>
+            <option value="100000000000">1,000억+</option>
+          </select>
+        </div>
+        <div class="grp">평균대금20
+          <select id="c-avg-select">
+            <option value="0">전체</option>
+            <option value="5000000000">50억+</option>
+            <option value="10000000000">100억+</option>
+            <option value="30000000000">300억+</option>
+            <option value="50000000000">500억+</option>
+            <option value="100000000000">1,000억+</option>
+            <option value="200000000000">2,000억+</option>
+            <option value="custom">직접입력…</option>
+          </select>
+          <input type="number" id="c-avg-custom" class="hidden" placeholder="억 이상" min="0" step="10" style="width:6.5em">
+        </div>
+        <div class="grp"><input type="text" id="c-search" placeholder="종목명·코드 검색"></div>
+        <span class="count-badge"><b id="c-row-count">0</b>개 종목 <span id="c-live-asof" class="market-tag"></span></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="table-wrap">
+        <table id="cand-table">
+          <thead>
+            <tr>
+              <th data-key="_rank">순위</th>
+              <th class="col-sector">섹터</th>
+              <th class="col-name">종목</th>
+              <th data-key="상태">상태</th>
+              <th data-key="고가까지">고가까지</th>
+              <th data-key="atr_pct">ATR%</th>
+              <th data-key="현재가">현재가/52주고가</th>
+              <th data-key="등락률">등락률</th>
+              <th data-key="거래대금">거래대금(억, ×20일)</th>
+              <th data-key="mcap">시가총액</th>
+              <th data-key="fair_mcap" title="2027E 예상 순이익 × 같은 업종 예상 PER 중앙값">적정시총(27E)</th>
+              <th data-key="rs_comp">RS(1M)</th>
+            </tr>
+          </thead>
+          <tbody id="cand-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================== 탭 2: 52주 신고가 주요종목 ============================== -->
+  <div class="tab-panel" id="panel-new">
+    <div class="card">
+      <div class="filters">
+        <div class="grp">시가총액
+          <select id="n-cap-select">
+            <option value="0">전체</option>
+            <option value="100000000000">1,000억+</option>
+            <option value="200000000000" selected>2,000억+</option>
+            <option value="500000000000">5,000억+</option>
+          </select>
+        </div>
+        <div class="grp">RS종합
+          <select id="n-rs-select">
+            <option value="0">전체</option>
+            <option value="70">70+</option>
+            <option value="80" selected>80+</option>
+            <option value="90">90+</option>
+          </select>
+        </div>
+        <div class="grp">거래대금
+          <select id="n-value-select">
+            <option value="0">전체</option>
+            <option value="10000000000" selected>100억+</option>
+            <option value="50000000000">500억+</option>
+            <option value="100000000000">1,000억+</option>
+          </select>
+        </div>
+        <div class="grp"><input type="text" id="n-search" placeholder="종목명·코드 검색"></div>
+        <span class="count-badge"><b id="n-row-count">0</b>개 종목 <span id="n-live-asof" class="market-tag"></span></span>
+      </div>
+    </div>
+    <div class="card" id="new-groups"></div>
+  </div>
+
+  <script>
+    const POLL_INTERVAL_MS = 30000;
+    function lsGet(key, dflt) { try { const v = localStorage.getItem(key); return v === null ? dflt : v; } catch (e) { return dflt; } }
+    function lsSet(key, v) { try { localStorage.setItem(key, v); } catch (e) {} }
+    const LS = { font: "ranking-root-font-px", tab: "newhigh-tab" };
+
+    let DATA = { candidates: [], new_highs: [], cards: {}, sector_avg_chg: {} };
+    const cState = { status: "전체", cap: "200000000000", rs: "80", value: "10000000000", avg: "0", search: "", sortKey: "고가까지", sortDir: "asc" };
+    const nState = { cap: "200000000000", rs: "80", value: "10000000000", search: "" };
+
+    // 섹터(스탁이지 대분류) 점 색 — 강함(RS 중앙값 높음) 주황 ~ 약함(낮음) 파랑, 09-28 22:45 편지. sector_rs 는 newhigh.json 이 준다.
+    let SECTOR_RS = {};
+    function colorOf(sector) {
+      const rs = sector ? SECTOR_RS[sector] : undefined;
+      if (rs === undefined || rs === null) return "#c6cad2";
+      const t = Math.max(0, Math.min(1, (rs - 30) / 50));
+      const from = [20, 98, 201], to = [217, 113, 26];
+      const mix = from.map((c, i) => Math.round(c + (to[i] - c) * t));
+      return `rgb(${mix.join(",")})`;
+    }
+    // 시총은 스탁이지처럼 1조 이상이면 "1.1조", 아래면 "6,134억"
+    function capText(v) { if (v === null || v === undefined) return "-"; const e = v / 1e8; return e >= 10000 ? (e / 10000).toFixed(1) + "조" : Math.round(e).toLocaleString("ko-KR") + "억"; }
+    // 적정시총(2027E) = 예상 순이익 × 같은 업종 예상 PER 중앙값 — 여력 % 를 같이, 근거는 마우스 올리면 보인다
+    function fairCell(r, cur) {
+      if (!r.fair_mcap) return `<td class="fair-cell"><span class="market-tag" title="예상 이익 추정치 없음(적자이거나 증권사 추정이 없는 종목)">-</span></td>`;
+      const up = cur ? (r.fair_mcap / cur - 1) * 100 : null;
+      const cls = up === null ? "flat" : up >= 30 ? "up fair-strong" : up > 0 ? "up" : "down";
+      const tip = `2027E 예상 PER ${r.per_fwd}배 · 업종(${r.peer_group}) 중앙값 ${r.peer_per}배 → 업종 평균만큼 평가받으면 이 시총`;
+      return `<td class="fair-cell" title="${tip}">${capText(r.fair_mcap)}<span class="name-code ${cls}" style="display:block">${up === null ? "" : (Math.round(up) > 0 ? "+" : "") + Math.round(up) + "%"}</span></td>`;
+    }
+    function eok(v) { return (v === null || v === undefined) ? "-" : Math.round(v / 100000000).toLocaleString("ko-KR"); }
+    function num(v) { return (v === null || v === undefined) ? "-" : Math.round(v).toLocaleString("ko-KR"); }
+    function pctText(v) {
+      if (v === null || v === undefined) return { text: "-", cls: "flat" };
+      const sign = v > 0 ? "+" : "";
+      return { text: `${sign}${v.toFixed(2)}%`, cls: v > 0 ? "up" : (v < 0 ? "down" : "flat") };
+    }
+    function rsCell(v) {
+      if (v === null || v === undefined) return `<span class="rs-lo">-</span>`;
+      const n = Math.round(v);
+      let cls = "rs-lo";
+      if (n >= 90) cls = "rs-chip rs-90"; else if (n >= 80) cls = "rs-chip rs-80"; else if (n >= 70) cls = "rs-chip rs-70";
+      return `<span class="${cls}">${n}</span>`;
+    }
+    function statusClass(s) { return "st-badge st-" + (s || "").replace(/ /g, "."); }
+
+    // 미니차트 SVG — 60일 종가 선 + 52주 최고가 점선 + 마지막 점(돌파면 빨강)
+    function sparkSvg(spark, high52, breakout) {
+      const w = 90, h = 28, pad = 2;
+      const vals = (spark || []).filter((v) => v !== null && v !== undefined);
+      if (!vals.length) return `<svg width="${w}" height="${h}"></svg>`;
+      let lo = Math.min(...vals), hi = Math.max(...vals);
+      if (high52 !== null && high52 !== undefined) hi = Math.max(hi, high52);
+      if (hi === lo) hi = lo + 1;
+      const n = spark.length;
+      const x = (i) => pad + (i / Math.max(n - 1, 1)) * (w - 2 * pad);
+      const y = (v) => h - pad - ((v - lo) / (hi - lo)) * (h - 2 * pad);
+      let d = "", started = false;
+      spark.forEach((v, i) => { if (v === null || v === undefined) return; d += (started ? "L" : "M") + x(i).toFixed(1) + "," + y(v).toFixed(1) + " "; started = true; });
+      const last = [...spark].reverse().find((v) => v !== null && v !== undefined);
+      const lastIdx = spark.lastIndexOf(last);
+      const dotColor = breakout ? "var(--up)" : "var(--accent)";
+      const hy = (high52 !== null && high52 !== undefined) ? y(high52).toFixed(1) : null;
+      return `<svg width="${w}" height="${h}" class="spark-wrap">` +
+        (hy !== null ? `<line x1="${pad}" y1="${hy}" x2="${w - pad}" y2="${hy}" stroke="var(--text-faint)" stroke-width="1" stroke-dasharray="2,2"/>` : "") +
+        `<path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.4"/>` +
+        (started ? `<circle cx="${x(lastIdx).toFixed(1)}" cy="${y(last).toFixed(1)}" r="2.2" fill="${dotColor}"/>` : "") +
+        `</svg>`;
+    }
+    function distBar(pctToHigh, isBreak) {
+      const capped = Math.max(0, Math.min(12, pctToHigh === null || pctToHigh === undefined ? 12 : pctToHigh));
+      const frac = isBreak ? 1 : (1 - capped / 12);
+      const text = isBreak ? "돌파" : (pctToHigh === null || pctToHigh === undefined ? "-" : pctToHigh.toFixed(1) + "%");
+      return `<div class="dist-cell"><div class="dist-bar${isBreak ? " break" : ""}"><i style="width:${Math.round(frac * 100)}%"></i></div><span class="dist-text">${text}</span></div>`;
+    }
+
+    // ---- 탭 전환
+    function showTab(tab) {
+      document.getElementById("panel-cand").classList.toggle("active", tab === "cand");
+      document.getElementById("panel-new").classList.toggle("active", tab === "new");
+      // 위쪽 탭 줄이 곧 페이지 전환이다 — 안쪽에 버튼 줄을 또 두지 않는다(사용자 09-28 "신고가 후보가 52주 신고가에 들어가 있다")
+      document.getElementById("tab-link-new").classList.toggle("active", tab === "new");
+      document.getElementById("tab-link-cand").classList.toggle("active", tab === "cand");
+      document.getElementById("page-title").textContent = tab === "new" ? "52주 신고가 주요종목" : "신고가 후보";
+      document.title = tab === "new" ? "52주 신고가" : "신고가 후보";
+      lsSet(LS.tab, tab);
+      renderCandidates(); renderNewHighs();
+    }
+    const tabFromHash = () => (location.hash === "#new" ? "new" : location.hash === "#candidates" ? "cand" : null);
+    window.addEventListener("hashchange", () => showTab(tabFromHash() || "cand"));
+
+    // ---- 신고가 후보 탭
+    const STATUS_LIST = ["전체", "돌파", "임박", "터치", "근접", "관찰"];
+    function statusMatch(row, key) {
+      if (key === "전체") return true;
+      if (key === "돌파") return row["상태"] === "돌파중" || row["상태"] === "돌파성공";
+      if (key === "터치") return row["상태"] === "터치 후 밀림";
+      return row["상태"] === key;
+    }
+    function renderStatusSeg() {
+      const box = document.getElementById("status-seg");
+      box.innerHTML = "";
+      for (const key of STATUS_LIST) {
+        const n = DATA.candidates.filter((r) => statusMatch(r, key)).length;
+        const b = document.createElement("button");
+        b.type = "button"; b.textContent = `${key} ${n}`;
+        b.setAttribute("aria-pressed", String(cState.status === key));
+        b.addEventListener("click", () => { cState.status = key; renderCandidates(); });
+        box.appendChild(b);
+      }
+    }
+    function renderStatCards() {
+      const box = document.getElementById("stat-cards");
+      const defs = [
+        ["신선 후보", DATA.cards["신선 후보"] || 0, DATA.candidates.filter((r) => r.fresh)],
+        ["돌파권(임박)", DATA.cards["돌파권"] || 0, DATA.candidates.filter((r) => r["상태"] === "임박")],
+        ["돌파 중", DATA.cards["돌파 중"] || 0, DATA.candidates.filter((r) => r["상태"] === "돌파중" || r["상태"] === "돌파성공")],
+        ["터치 후 밀림", DATA.cards["터치 후 밀림"] || 0, DATA.candidates.filter((r) => r["상태"] === "터치 후 밀림")],
+      ];
+      box.innerHTML = "";
+      for (const [title, n, rows] of defs) {
+        const div = document.createElement("div");
+        div.className = "stat-card";
+        const chips = rows.slice(0, 6).map((r) => `<span class="mini-chip">${r["이름"]}</span>`).join("") || `<span class="mini-chip">해당 없음</span>`;
+        div.innerHTML = `<div class="stat-title">${title}</div><div class="stat-num">${n}</div><div class="stat-chips">${chips}</div>`;
+        box.appendChild(div);
+      }
+    }
+    function candPasses(r) {
+      if (!statusMatch(r, cState.status)) return false;
+      if ((r.mcap || 0) < parseFloat(cState.cap)) return false;
+      if ((r.rs_comp || 0) < parseFloat(cState.rs)) return false;
+      if ((r["거래대금"] || 0) < parseFloat(cState.value)) return false;
+      const avgMin = cState.avg === "custom" ? (parseFloat(cState.avgCustom) || 0) * 1e8 : parseFloat(cState.avg);
+      if ((r.avg_value_20 || 0) < avgMin) return false;
+      if (cState.search) {
+        const q = cState.search.toLowerCase();
+        if (!(r["이름"] || "").toLowerCase().includes(q) && !(r["코드"] || "").includes(q)) return false;
+      }
+      return true;
+    }
+
+    // ---- 마우스 오버 52주 일봉 (사용자 09-28 "마우스 오버하면 52주 일봉 나오게")
+    // 데이터는 /newhigh_ohlc.json(약 1MB)을 **처음 오버할 때 한 번만** 받는다 — 30초 폴링에 싣지 않는다.
+    let OHLC = null, ohlcLoading = null;
+    function loadOhlc() {
+      if (OHLC || ohlcLoading) return ohlcLoading;
+      ohlcLoading = fetch("/newhigh_ohlc.json").then((r) => r.ok ? r.json() : {}).then((j) => { OHLC = j; return j; }).catch(() => { OHLC = {}; return OHLC; });
+      return ohlcLoading;
+    }
+    const hc = document.createElement("div"); hc.id = "hover-chart"; hc.hidden = true; document.body.appendChild(hc);
+    function ma(arr, n) { const out = []; let s = 0; arr.forEach((v, i) => { s += v; if (i >= n) s -= arr[i - n]; out.push(i >= n - 1 ? s / n : null); }); return out; }
+    function candleSvg(rows, high52) {
+      const W = 616, H = 300, PH = 228, VH = 52, padR = 52, n = rows.length, cw = (W - padR) / n;
+      const hi = Math.max(...rows.map((r) => r[2]), high52 || 0), lo = Math.min(...rows.map((r) => r[3]));
+      const pad = (hi - lo) * 0.04, top = hi + pad, bot = lo - pad;
+      const y = (v) => ((top - v) / (top - bot)) * PH;
+      const vmax = Math.max(...rows.map((r) => r[5])) || 1;
+      const closes = rows.map((r) => r[4]);
+      const line = (vals, color) => `<polyline fill="none" stroke="${color}" stroke-width="1.2" points="${vals.map((v, i) => v === null ? "" : `${(i + 0.5) * cw},${y(v).toFixed(1)}`).filter(Boolean).join(" ")}"/>`;
+      let g = "";
+      // 가격 눈금 4칸
+      for (let k = 0; k <= 4; k++) {
+        const v = bot + (top - bot) * k / 4, yy = y(v).toFixed(1);
+        g += `<line x1="0" x2="${W - padR}" y1="${yy}" y2="${yy}" stroke="var(--card-border)" stroke-width="1"/>`;
+        g += `<text x="${W - padR + 4}" y="${yy}" dy="3" font-size="10" fill="var(--text-faint)">${Math.round(v).toLocaleString("ko-KR")}</text>`;
+      }
+      rows.forEach((r, i) => {
+        const [_, o, h, l, c, v] = r, x = i * cw, cx = x + cw / 2, up = c >= o;
+        const col = up ? "var(--up)" : "var(--down)";
+        const bt = y(Math.max(o, c)), bh = Math.max(1, Math.abs(y(o) - y(c)));
+        g += `<line x1="${cx.toFixed(1)}" x2="${cx.toFixed(1)}" y1="${y(h).toFixed(1)}" y2="${y(l).toFixed(1)}" stroke="${col}" stroke-width="1"/>`;
+        g += `<rect x="${(x + cw * 0.15).toFixed(1)}" y="${bt.toFixed(1)}" width="${Math.max(1, cw * 0.7).toFixed(1)}" height="${bh.toFixed(1)}" fill="${col}"/>`;
+        const vh = (v / vmax) * (VH - 4);
+        g += `<rect x="${(x + cw * 0.15).toFixed(1)}" y="${(H - vh).toFixed(1)}" width="${Math.max(1, cw * 0.7).toFixed(1)}" height="${vh.toFixed(1)}" fill="${col}" opacity=".35"/>`;
+      });
+      g += line(ma(closes, 20), "#e0a500") + line(ma(closes, 60), "#7c5cff");
+      if (high52) {
+        const yy = y(high52).toFixed(1);
+        g += `<line x1="0" x2="${W - padR}" y1="${yy}" y2="${yy}" stroke="var(--up)" stroke-dasharray="4 3" stroke-width="1.2"/>`;
+        g += `<text x="${W - padR + 4}" y="${yy}" dy="3" font-size="10" font-weight="700" fill="var(--up)">${Math.round(high52).toLocaleString("ko-KR")}</text>`;
+      }
+      const d = (s) => `${String(s).slice(2, 4)}.${String(s).slice(4, 6)}`;
+      [0, Math.floor(n / 4), Math.floor(n / 2), Math.floor(3 * n / 4), n - 1].forEach((i) => {
+        g += `<text x="${((i + 0.5) * cw).toFixed(1)}" y="${PH + 13}" font-size="10" text-anchor="middle" fill="var(--text-faint)">${d(rows[i][0])}</text>`;
+      });
+      return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="52주 일봉">${g}</svg>`;
+    }
+    function placeHc(ev) {
+      const pad = 16, w = hc.offsetWidth, h = hc.offsetHeight;
+      let x = ev.clientX + pad, yy = ev.clientY + pad;
+      if (x + w > window.innerWidth - 8) x = ev.clientX - w - pad;
+      if (yy + h > window.innerHeight - 8) yy = Math.max(8, window.innerHeight - h - 8);
+      hc.style.left = Math.max(8, x) + "px"; hc.style.top = yy + "px";
+    }
+    async function showHc(r, ev) {
+      hc.hidden = false;
+      hc.innerHTML = `<div class="hc-title"><b>${r["이름"] || r["코드"]}</b><span class="hc-sub">불러오는 중…</span></div>`;
+      placeHc(ev);
+      await loadOhlc();
+      if (hc.dataset.code !== r["코드"]) return;
+      const rows = (OHLC || {})[r["코드"]];
+      if (!rows || rows.length < 5) { hc.innerHTML = `<div class="hc-title"><b>${r["이름"]}</b><span class="hc-sub">일봉 없음</span></div>`; return; }
+      const last = rows[rows.length - 1];
+      hc.innerHTML = `<div class="hc-title"><span><b>${r["이름"]}</b> <span class="hc-sub">${r["코드"]} · ${r["섹터"] || ""} · 최근 ${rows.length}거래일</span></span>`
+        + `<span class="hc-sub">종가 ${Math.round(last[4]).toLocaleString("ko-KR")} · 52주 최고가 ${r.high52 ? Math.round(r.high52).toLocaleString("ko-KR") : "-"}</span></div>`
+        + candleSvg(rows, r.high52)
+        + `<div class="hc-legend"><span><i style="border-color:#e0a500"></i>20일선</span><span><i style="border-color:#7c5cff"></i>60일선</span><span><i style="border-color:var(--up);border-top-style:dashed"></i>52주 최고가</span><span>아래 막대 = 거래량</span></div>`;
+      placeHc(ev);
+    }
+    function bindHover(tr, r) {
+      tr.addEventListener("mouseenter", (ev) => { hc.dataset.code = r["코드"]; showHc(r, ev); });
+      tr.addEventListener("mousemove", placeHc);
+      tr.addEventListener("mouseleave", () => { hc.hidden = true; hc.dataset.code = ""; });
+    }
+    function renderCandidates() {
+      if (!document.getElementById("panel-cand").classList.contains("active")) return;
+      renderStatusSeg(); renderStatCards();
+      let rows = DATA.candidates.filter(candPasses);
+      const dir = cState.sortDir === "asc" ? 1 : -1;
+      rows = rows.slice().sort((a, b) => {
+        const av = a[cState.sortKey], bv = b[cState.sortKey];
+        if (av === null || av === undefined) return 1; if (bv === null || bv === undefined) return -1;
+        return dir * (av - bv);
+      });
+      document.getElementById("c-row-count").textContent = rows.length;
+      document.getElementById("c-live-asof").textContent = LIVE.quotes_as_of ? `· 장중 시세 ${LIVE.quotes_as_of}${LIVE.active ? "" : "(장 마감)"}` : "";
+      const tbody = document.getElementById("cand-body");
+      tbody.innerHTML = "";
+      if (!rows.length) { tbody.innerHTML = `<tr class="empty-row"><td colspan="12">조건에 맞는 종목이 없습니다</td></tr>`; return; }
+      rows.forEach((r, i) => {
+        const tr = document.createElement("tr");
+        const p = pctText(r["등락률"]);
+        const isBreak = r["상태"] === "돌파중" || r["상태"] === "돌파성공";
+        const mult = r.value_mult20;
+        const multCls = (mult !== null && mult !== undefined && mult >= 2.0) ? "value-mult hi" : "value-mult";
+        tr.innerHTML = `
+          <td>${i + 1}</td>
+          <td class="col-sector">${r["섹터"] ? `<span class="sector-dot" style="background:${colorOf(r["섹터"])}"></span>${r["섹터"]}` : `<span class="market-tag">-</span>`}</td>
+          <td class="col-name"><span class="name-main">${r["이름"] || "-"}</span><span class="name-code">${r["코드"]} · ${r["시장"] || "-"}</span></td>
+          <td><span class="${statusClass(r["상태"])}">${r["상태"] || "-"}</span></td>
+          <td>${distBar(r["고가까지"], isBreak)}${sparkSvg(r.spark, r.high52, isBreak)}</td>
+          <td>${r.atr_pct === null || r.atr_pct === undefined ? "-" : r.atr_pct.toFixed(2) + "%"}</td>
+          <td>${num(r["현재가"])} / ${num(r.high52)}</td>
+          <td class="${p.cls}">${p.text}</td>
+          <td>${eok(r["거래대금"])} <span class="${multCls}">(×${mult === null || mult === undefined ? "-" : mult.toFixed(2)})</span></td>
+          <td>${capText(r.mcap)}</td>
+          ${fairCell(r, r.mcap)}
+          <td>${rsCell(r.rs_comp)} <span class="name-code" style="display:inline">${r.rs_1m === null || r.rs_1m === undefined ? "" : "1M " + Math.round(r.rs_1m)}</span></td>`;
+        bindHover(tr, r);
+        tbody.appendChild(tr);
+      });
+    }
+    document.querySelectorAll("#cand-table thead th[data-key]").forEach((th) => {
+      th.addEventListener("click", () => {
+        const key = th.dataset.key;
+        if (cState.sortKey === key) cState.sortDir = cState.sortDir === "asc" ? "desc" : "asc";
+        else { cState.sortKey = key; cState.sortDir = "asc"; }
+        document.querySelectorAll("#cand-table thead th").forEach((h) => h.classList.remove("sorted"));
+        th.classList.add("sorted");
+        renderCandidates();
+      });
+    });
+    document.getElementById("c-cap-select").addEventListener("change", (e) => { cState.cap = e.target.value; renderCandidates(); });
+    document.getElementById("c-rs-select").addEventListener("change", (e) => { cState.rs = e.target.value; renderCandidates(); });
+    document.getElementById("c-value-select").addEventListener("change", (e) => { cState.value = e.target.value; renderCandidates(); });
+    // 평균대금 하한 — 고른 값·직접입력(억)을 기억한다(사용자 09-28 "100억밖에 없다, 직접입력도")
+    const AVG_KEY = "newhigh-cand-avg", AVG_CUSTOM_KEY = "newhigh-cand-avg-custom";
+    const avgSelect = document.getElementById("c-avg-select"), avgCustom = document.getElementById("c-avg-custom");
+    cState.avg = lsGet(AVG_KEY, cState.avg); cState.avgCustom = lsGet(AVG_CUSTOM_KEY, "");
+    if (![...avgSelect.options].some((o) => o.value === cState.avg)) cState.avg = "0";
+    avgSelect.value = cState.avg; avgCustom.value = cState.avgCustom;
+    avgCustom.classList.toggle("hidden", cState.avg !== "custom");
+    avgSelect.addEventListener("change", (e) => {
+      cState.avg = e.target.value; lsSet(AVG_KEY, cState.avg);
+      avgCustom.classList.toggle("hidden", cState.avg !== "custom");
+      if (cState.avg === "custom") avgCustom.focus();
+      renderCandidates();
+    });
+    avgCustom.addEventListener("input", (e) => { cState.avgCustom = e.target.value; lsSet(AVG_CUSTOM_KEY, cState.avgCustom); renderCandidates(); });
+    document.getElementById("c-search").addEventListener("input", (e) => { cState.search = e.target.value; renderCandidates(); });
+
+    // ---- 장중 신고가(키움 ka10016, 서버가 60초마다 받는다) — 야간 자료(섹터·RS·시총)를 코드로 붙여 같은 표에 섞는다
+    let LIVE = { rows: [], as_of: null, active: false };
+    async function pollLive() {
+      try {
+        const res = await fetch("/api/newhigh-live", { cache: "no-store" });
+        if (res.ok) { LIVE = await res.json(); applyLive(); renderCandidates(); renderNewHighs(); }
+      } catch (e) { /* 서버가 아직 옛 버전이면 조용히 야간 자료만 보인다 */ }
+    }
+    // 후보 탭 장중 반영: 감시 종목 시세(ka10095)로 현재가·고가까지·상태를 다시 매긴다(52주 고가는 어제 자료 그대로 — 미래 정보 없음)
+    let BASE = null;
+    function liveState(r, q) {
+      const h = r.high52;
+      if (!h) return r["상태"];
+      if (q.high >= h) return q.price >= h ? ((r["상태"] === "돌파중" || r["상태"] === "돌파성공") ? "돌파성공" : "돌파중") : "터치 후 밀림";
+      const d = h / q.price - 1;
+      return d <= 0.03 ? "임박" : d <= 0.07 ? "근접" : d <= 0.20 ? "관찰" : "밖";
+    }
+    function applyLive() {
+      if (!BASE) return;
+      const q = LIVE.quotes || {};
+      const cands = BASE.candidates.map((r) => {
+        const x = q[r["코드"]];
+        if (!x) return r;
+        return { ...r, 현재가: x.price, 등락률: x.chg, 거래대금: x.value ?? r["거래대금"],
+                 고가까지: r.high52 ? Math.round((r.high52 / x.price - 1) * 10000) / 100 : r["고가까지"], 상태: liveState(r, x), live: true };
+      }).filter((r) => r["상태"] !== "밖");
+      const has = new Set(cands.map((r) => r["코드"]));
+      for (const lv of LIVE.rows || []) {                 // 어제는 후보 밖이었는데 오늘 신고가를 찍은 종목
+        const x = q[lv["코드"]];
+        if (has.has(lv["코드"]) || !x || !x.h52) continue;
+        cands.push({ 코드: lv["코드"], 이름: lv["이름"], 섹터: null, 상태: liveState({ high52: x.h52, 상태: "" }, x), high52: x.h52,
+                     고가까지: Math.round((x.h52 / x.price - 1) * 10000) / 100, 현재가: x.price, 등락률: x.chg, 거래대금: x.value, live: true });
+      }
+      const cnt = (f) => cands.filter(f).length;
+      DATA = { ...BASE, candidates: cands, cards: {
+        "신선 후보": cnt((r) => r.fresh), "돌파권": cnt((r) => r["상태"] === "임박"),
+        "돌파 중": cnt((r) => r["상태"] === "돌파중" || r["상태"] === "돌파성공"), "터치 후 밀림": cnt((r) => r["상태"] === "터치 후 밀림") } };
+    }
+
+    function mergedNewHighs() {
+      const byCode = new Map(DATA.new_highs.map((r) => [r["코드"], { ...r }]));
+      const ref = new Map(DATA.candidates.map((r) => [r["코드"], r]));
+      for (const lv of LIVE.rows || []) {
+        const old = byCode.get(lv["코드"]);
+        if (old) { Object.assign(old, { 현재가: lv["현재가"], 등락률: lv["등락률"], 당일고가: lv["당일고가"], 당일저가: lv["당일저가"], live: true }); continue; }
+        const c = ref.get(lv["코드"]) || {};
+        const sh = c.mcap && c["현재가"] ? c.mcap / c["현재가"] : null;     // 주식수 = 어제 시총 ÷ 어제 종가
+        byCode.set(lv["코드"], {
+          코드: lv["코드"], 이름: lv["이름"] || c["이름"], 섹터: c["섹터"] || "미분류", 세부섹터: c["세부섹터"] || "-",
+          현재가: lv["현재가"], 등락률: lv["등락률"], 당일고가: lv["당일고가"], 당일저가: lv["당일저가"],
+          시총: sh ? Math.round(sh * lv["현재가"]) : null, 거래대금: lv["거래량"] && lv["현재가"] ? lv["거래량"] * lv["현재가"] : null,
+          rs_comp: c.rs_comp ?? null, live: true,
+        });
+      }
+      return Array.from(byCode.values()).sort((a, b) => (b.live ? 1 : 0) - (a.live ? 1 : 0));
+    }
+
+    // ---- 52주 신고가 주요종목 탭
+    function newPasses(r) {
+      if ((r["시총"] || 0) < parseFloat(nState.cap)) return false;
+      if ((r.rs_comp || 0) < parseFloat(nState.rs)) return false;
+      if ((r["거래대금"] || 0) < parseFloat(nState.value)) return false;
+      if (nState.search) {
+        const q = nState.search.toLowerCase();
+        if (!(r["이름"] || "").toLowerCase().includes(q) && !(r["코드"] || "").includes(q)) return false;
+      }
+      return true;
+    }
+    function renderNewHighs() {
+      if (!document.getElementById("panel-new").classList.contains("active")) return;
+      const rows = mergedNewHighs().filter(newPasses);
+      document.getElementById("n-row-count").textContent = rows.length;
+      document.getElementById("n-live-asof").textContent = LIVE.as_of ? `· 장중 ${LIVE.as_of}${LIVE.active ? "" : "(장 마감)"}` : "";
+      const box = document.getElementById("new-groups");
+      box.innerHTML = "";
+      if (!rows.length) { box.innerHTML = `<p class="empty-row" style="padding:20px">조건에 맞는 종목이 없습니다</p>`; return; }
+      const bySector = new Map();
+      for (const r of rows) { const s = r["섹터"] || "(미분류)"; if (!bySector.has(s)) bySector.set(s, []); bySector.get(s).push(r); }
+      const sectors = Array.from(bySector.keys()).sort((a, b) => bySector.get(b).length - bySector.get(a).length);
+      for (const s of sectors) {
+        const list = bySector.get(s);
+        const avgChg = DATA.sector_avg_chg[s];
+        const head = document.createElement("div");
+        head.className = "sector-group-header";
+        head.innerHTML = `<span class="sector-dot" style="background:${colorOf(s === "(미분류)" ? "" : s)}"></span><span class="sname">${s}</span><span class="scount">${list.length}종목</span>` +
+          (avgChg !== undefined ? `<span class="badge ${avgChg > 0 ? "" : ""}" style="color:${avgChg > 0 ? "var(--up)" : (avgChg < 0 ? "var(--down)" : "var(--flat)")}">평균 ${avgChg > 0 ? "+" : ""}${avgChg}%</span>` : "");
+        box.appendChild(head);
+        const table = document.createElement("table");
+        table.innerHTML = `<thead><tr><th class="col-sector">세부섹터</th><th class="col-name">종목</th><th>현재가</th><th>등락률</th><th>당일 고저</th><th>시총</th><th title="2027E 예상 순이익 × 같은 업종 예상 PER 중앙값">적정시총(27E)</th><th>거래대금(억)</th><th>RS</th></tr></thead>`;
+        const tbody = document.createElement("tbody");
+        for (const r of list) {
+          const p = pctText(r["등락률"]);
+          const tr = document.createElement("tr");
+          const lo = r["당일저가"], hi = r["당일고가"], cur = r["현재가"];
+          const range = (lo !== null && hi !== null && hi > lo) ? Math.max(0, Math.min(100, ((cur - lo) / (hi - lo)) * 100)) : 50;
+          tr.innerHTML = `
+            <td class="col-sector">${r["세부섹터"] || "-"}</td>
+            <td class="col-name"><span class="name-main">${r["이름"]}</span>${r.live ? ` <span class="badge" style="color:var(--up);border-color:var(--up)" title="키움 신고저가요청(장중 고가 기준) ${LIVE.as_of || ""}">장중 신고가</span>` : ""}${!r.live && r["오늘돌파"] === false ? ` <span class="badge" title="최근 5거래일 안 종가 돌파 — 오늘은 종가가 52주 고가 아래">${r["최근돌파일"].slice(5).replace("-", "/")} 돌파</span>` : ""}${r["역사적_신고가"] ? ` <span class="badge" style="color:var(--up);border-color:var(--up)">데이터 기간 최고</span>` : ""}<span class="name-code">${r["코드"]}</span></td>
+            <td>${num(cur)}</td>
+            <td class="${p.cls}">${p.text}</td>
+            <td><div class="dist-bar" style="width:56px"><i style="width:${Math.round(range)}%;background:var(--accent)"></i></div></td>
+            <td>${capText(r["시총"])}</td>
+            ${fairCell(r, r["시총"])}
+            <td>${eok(r["거래대금"])}</td>
+            <td>${rsCell(r.rs_comp)}</td>`;
+          tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+        box.appendChild(table);
+      }
+    }
+    document.getElementById("n-cap-select").addEventListener("change", (e) => { nState.cap = e.target.value; renderNewHighs(); });
+    document.getElementById("n-rs-select").addEventListener("change", (e) => { nState.rs = e.target.value; renderNewHighs(); });
+    document.getElementById("n-value-select").addEventListener("change", (e) => { nState.value = e.target.value; renderNewHighs(); });
+    document.getElementById("n-search").addEventListener("input", (e) => { nState.search = e.target.value; renderNewHighs(); });
+
+    // ---- 로딩
+    async function poll() {
+      try {
+        const res = await fetch("/newhigh.json", { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        BASE = await res.json(); DATA = BASE; applyLive();
+        SECTOR_RS = DATA.sector_rs || {};
+        document.getElementById("as-of").textContent = DATA.date ? ` ${DATA.date} 기준` : "";
+        renderCandidates(); renderNewHighs();
+        document.getElementById("error-box").classList.add("hidden");
+      } catch (e) {
+        document.getElementById("error-box").textContent = "⚠ 신고가 자료를 못 불러왔습니다 — 아직 안 만들어졌을 수 있습니다.";
+        document.getElementById("error-box").classList.remove("hidden");
+      }
+    }
+
+    // ---- 글씨 크기
+    const MIN_FONT_PX = 14, MAX_FONT_PX = 26, DEFAULT_FONT_PX = 18;
+    function savedFont() { const v = parseInt(lsGet(LS.font, DEFAULT_FONT_PX), 10); return isFinite(v) ? v : DEFAULT_FONT_PX; }
+    function applyFontSize(px) { document.documentElement.style.fontSize = px + "px"; lsSet(LS.font, px); }
+    document.getElementById("font-smaller-button").addEventListener("click", () => applyFontSize(Math.max(MIN_FONT_PX, savedFont() - 2)));
+    document.getElementById("font-bigger-button").addEventListener("click", () => applyFontSize(Math.min(MAX_FONT_PX, savedFont() + 2)));
+    applyFontSize(savedFont());
+
+    const initialTab = tabFromHash() || lsGet(LS.tab, "cand");
+    showTab(initialTab);
+    poll();
+    setInterval(poll, POLL_INTERVAL_MS);
+    pollLive();
+    setInterval(pollLive, 60000);
+  </script>
+</body>
+</html>

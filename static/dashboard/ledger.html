@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>신고가 장부</title>
+<link rel="stylesheet" href="/market.css">
+<style>
+  /* 신고가 장부 — 종가 52주 신고가 + 그날 거래대금 1,500억 이상(new_high.build_ledger). 월 칸은 한 해 = 한 줄 12칸. */
+  .year-row { display: grid; grid-template-columns: 3.4rem 1fr; gap: 8px; align-items: start; margin-bottom: 6px; }
+  .year-label { font-weight: 700; color: var(--text-dim); font-size: .86rem; padding-top: 10px; }
+  .month-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 5px; }
+  .mcell { appearance: none; font: inherit; text-align: left; cursor: pointer; background: var(--card-bg); color: var(--text);
+    border: 1px solid var(--card-border); border-radius: 9px; padding: 6px 8px 7px; min-width: 0; }
+  .mcell:hover { border-color: var(--accent); }
+  .mcell[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+  .mcell.zero { background: transparent; border-style: dashed; cursor: default; color: var(--text-faint); }
+  .mcell .ml { font-size: .72rem; color: var(--text-dim); }
+  .mcell .mn { font-size: 1.1rem; font-weight: 700; line-height: 1.25; font-variant-numeric: tabular-nums; }
+  .mcell .mm { font-size: .72rem; color: var(--up); font-variant-numeric: tabular-nums; min-height: 1em; }
+  .mcell .mh { height: 3px; margin-top: 5px; background: var(--chip-bg); border-radius: 2px; overflow: hidden; }
+  .mcell .mh > i { display: block; height: 100%; background: var(--accent); }
+  .mpad { min-height: 1px; }
+  .sel-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; margin-bottom: 10px; }
+  .sel-head h2 { margin: 0; font-size: 1.05rem; }
+  .sel-stats { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: .84rem; color: var(--text-dim); }
+  .sel-stats b { color: var(--text); font-variant-numeric: tabular-nums; }
+  #ledger-table td, #ledger-table th { font-variant-numeric: tabular-nums; }
+  .gain-cell { position: relative; }
+  .gain-cell::before { content: ""; position: absolute; right: 0; top: 5px; bottom: 5px; width: var(--w, 0); background: var(--up-soft); border-radius: 3px; }
+  .gain-cell > span { position: relative; }
+  .limit-flag { font-size: .7rem; color: var(--text-faint); margin-left: 4px; }
+  .ipo-tag { color: var(--accent); font-weight: 600; }
+  .more-row td { text-align: center; color: var(--text-faint); padding: 16px; }
+  @media (max-width: 900px) { .month-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+  @media (max-width: 560px) { .year-row { grid-template-columns: 1fr; } .year-label { padding-top: 0; } .month-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+</style>
+</head>
+<body>
+
+  <div class="page-tabs">
+    <a href="/rs.html">RS 상위</a>
+    <a href="/newhigh.html#new">52주 신고가</a>
+    <a href="/newhigh.html#candidates">신고가 후보</a>
+    <a href="/ledger.html" class="active">신고가 장부</a>
+  </div>
+
+  <div class="card">
+    <header class="top">
+      <div><h1>신고가 장부<span class="sub" id="as-of">-</span></h1></div>
+      <nav>
+        <span class="seg">
+          <button id="font-smaller-button" type="button">A-</button>
+          <button id="font-bigger-button" type="button">A+</button>
+        </span>
+        &nbsp;·&nbsp;
+        <a href="/">← 메인</a>
+        &nbsp;<a href="/rs.html">RS 상위 2%</a>
+      </nav>
+    </header>
+    <p class="note" id="summary-line">-</p>
+    <p class="note">
+      <b>당일 고가가 기준 고가를 넘은 날</b>(장중 신고가 — 종가가 못 지킨 날도 포함) 중 그날 거래대금이 <b id="min-value">1,500억</b> 이상인 건입니다.
+      기준 고가는 당일 제외 직전 <b>52주(250거래일)</b> 또는 <b>120거래일</b> 고가 — 위 버튼으로 바꿉니다. 그 기간이 안 찬 <b>신규상장주는 상장 이후 최고가</b>를 기준으로 쓰고 종목명 아래 <span class="ipo-tag">상장 N일</span>로 표시합니다(상장 첫날은 제외).
+      고점→고가 = 당일 고가 ÷ 기준 고가 − 1, 고점→종가 = 종가 ÷ 기준 고가 − 1 (음수면 뚫고 밀려 기준 아래서 끝난 날, 둘의 차이가 그날 반납한 폭). 5일뒤·20일뒤는 그날 종가 매수 기준, RS는 그날의 RS 종합.
+      대금은 종가×거래량 근사, 상장폐지 종목은 빠져 있어 성과가 실제보다 좋게 나옵니다. 30% 초과는 상장 직후·거래 재개처럼 가격제한폭 밖의 날입니다.
+    </p>
+    <p id="error-box" class="err hidden"></p>
+  </div>
+
+  <div class="card">
+    <div class="filters" style="margin-bottom:10px">
+      <div class="grp">기준
+        <span class="seg" id="window-seg">
+          <button type="button" data-window="52">52주 신고가</button>
+          <button type="button" data-window="120">120일 신고가</button>
+        </span>
+      </div>
+    </div>
+    <div id="month-grid-wrap"></div>
+  </div>
+
+  <div class="card">
+    <div class="sel-head">
+      <h2 id="sel-title">-</h2>
+      <div class="sel-stats" id="sel-stats"></div>
+    </div>
+    <div class="filters" style="margin-bottom:10px">
+      <div class="grp">
+        <span class="seg" id="scope-seg">
+          <button type="button" data-scope="month">고른 달</button>
+          <button type="button" data-scope="all">전 기간</button>
+        </span>
+      </div>
+      <div class="grp">RS 종합
+        <select id="rs-select">
+          <option value="0">전체</option>
+          <option value="70">70+</option>
+          <option value="80">80+</option>
+          <option value="90">90+</option>
+        </select>
+      </div>
+      <div class="grp"><input type="text" id="search-input" placeholder="종목명·코드 검색 (전 기간)"></div>
+      <span class="count-badge"><b id="row-count">0</b>건</span>
+    </div>
+    <div class="table-wrap">
+      <table id="ledger-table">
+        <thead>
+          <tr>
+            <th data-key="d" class="col-name">날짜</th>
+            <th data-key="name" class="col-name">종목</th>
+            <th data-key="rs">RS</th>
+            <th data-key="chg">당일등락</th>
+            <th data-key="v">대금(억)</th>
+            <th data-key="base" id="base-th">52주 고가</th>
+            <th data-key="hi">당일 고가</th>
+            <th data-key="g">고점→고가</th>
+            <th data-key="gc">고점→종가</th>
+            <th data-key="d5">5일뒤</th>
+            <th data-key="d20">20일뒤</th>
+          </tr>
+        </thead>
+        <tbody id="table-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    const LS = { font: "ranking-root-font-px", month: "ledger-month", scope: "ledger-scope", rs: "ledger-rs", sortKey: "ledger-sort-key", sortDir: "ledger-sort-dir", window: "ledger-window" };
+    function lsGet(key, dflt) { try { const v = localStorage.getItem(key); return v === null ? dflt : v; } catch (e) { return dflt; } }
+    function lsSet(key, v) { try { localStorage.setItem(key, v); } catch (e) {} }
+
+    let ALL = [], ROWS = [], BY_MONTH = new Map(), FIRST = "", LAST = "";
+    const state = {
+      month: lsGet(LS.month, ""), scope: lsGet(LS.scope, "month"), rs: Number(lsGet(LS.rs, "0")),
+      sortKey: lsGet(LS.sortKey, "d"), sortDir: Number(lsGet(LS.sortDir, "1")), q: "", window: lsGet(LS.window, "52"),
+    };
+
+    const fmt = (n) => n.toLocaleString("ko-KR");
+    const pct = (n) => (n === null || n === undefined) ? "" : (n > 0 ? "+" : "") + n.toFixed(1) + "%";
+    const cls = (n) => (n === null || n === undefined || n === 0) ? "flat" : n > 0 ? "up" : "down";
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    function median(a) {
+      const s = a.filter((x) => x !== null && x !== undefined).sort((x, y) => x - y);
+      if (!s.length) return null;
+      const k = s.length >> 1;
+      return s.length % 2 ? s[k] : (s[k - 1] + s[k]) / 2;
+    }
+    function rsChip(n) {
+      if (n === null || n === undefined) return '<span class="rs-lo">-</span>';
+      const c = n >= 90 ? "rs-chip rs-90" : n >= 80 ? "rs-chip rs-80" : n >= 70 ? "rs-chip rs-70" : "rs-chip rs-lo";
+      return `<span class="${c}">${n}</span>`;
+    }
+
+    function drawGrid() {
+      const maxN = Math.max(1, ...[...BY_MONTH.values()].map((a) => a.length));
+      let html = "";
+      for (let y = Number(LAST.slice(0, 4)); y >= Number(FIRST.slice(0, 4)); y--) {
+        html += `<div class="year-row"><div class="year-label">${y}</div><div class="month-grid">`;
+        for (let mo = 1; mo <= 12; mo++) {
+          const m = `${y}-${String(mo).padStart(2, "0")}`;
+          if (m < FIRST || m > LAST) { html += '<div class="mpad"></div>'; continue; }
+          const list = BY_MONTH.get(m) || [];
+          if (!list.length) { html += `<div class="mcell zero"><div class="ml">${mo}월</div><div class="mn">0</div><div class="mm"></div></div>`; continue; }
+          const on = state.scope === "month" && !state.q && m === state.month;
+          html += `<button class="mcell" type="button" data-m="${m}" aria-pressed="${on}" title="${y}년 ${mo}월 ${list.length}건 · 고점→고가 중앙값 ${pct(median(list.map((r) => r.g)))}">` +
+            `<div class="ml">${mo}월</div><div class="mn">${list.length}</div><div class="mm">${pct(median(list.map((r) => r.g)))}</div>` +
+            `<div class="mh"><i style="width:${(list.length / maxN) * 100}%"></i></div></button>`;
+        }
+        html += "</div></div>";
+      }
+      const wrap = document.getElementById("month-grid-wrap");
+      wrap.innerHTML = html;
+      wrap.querySelectorAll("button.mcell").forEach((b) => b.addEventListener("click", () => {
+        state.month = b.dataset.m; state.scope = "month"; state.q = "";
+        document.getElementById("search-input").value = "";
+        lsSet(LS.month, state.month); lsSet(LS.scope, "month");
+        render();
+      }));
+    }
+
+    function render() {
+      const all = state.scope === "all" || !!state.q;
+      let list = all ? ROWS : (BY_MONTH.get(state.month) || []);
+      if (state.q) list = list.filter((r) => r.name.includes(state.q) || r.code.includes(state.q));
+      if (state.rs) list = list.filter((r) => r.rs !== null && r.rs >= state.rs);
+      const k = state.sortKey, dir = state.sortDir;
+      list = [...list].sort((a, b) => {
+        const x = a[k], y = b[k];
+        if (x === null && y === null) return 0;
+        if (x === null) return 1;
+        if (y === null) return -1;
+        return (typeof x === "string" ? x.localeCompare(y) : x - y) * dir || a.d.localeCompare(b.d);
+      });
+
+      document.querySelectorAll("#scope-seg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.scope === state.scope && !state.q)));
+      document.querySelectorAll("#ledger-table thead th").forEach((th) => th.classList.toggle("sorted", th.dataset.key === k));
+      const [y, mo] = state.month.split("-");
+      document.getElementById("sel-title").textContent = state.q ? `“${state.q}” 전 기간` : all ? "전 기간" : `${y}년 ${Number(mo)}월`;
+      const uniq = new Set(list.map((r) => r.code)).size;
+      const med = (key) => median(list.map((r) => r[key]));
+      const stat = (label, v, c) => `<span>${label} <b class="${c || ""}">${v}</b></span>`;
+      document.getElementById("sel-stats").innerHTML = list.length ?
+        stat("건수", `${fmt(list.length)}건 · ${fmt(uniq)}종목`) +
+        stat("고점→고가 중앙값", pct(med("g")), "up") +
+        stat("고점→종가 중앙값", pct(med("gc")), cls(med("gc"))) +
+        stat("5일뒤 중앙값", pct(med("d5")) || "-", cls(med("d5"))) +
+        stat("20일뒤 중앙값", pct(med("d20")) || "-", cls(med("d20"))) : "";
+      document.getElementById("row-count").textContent = fmt(list.length);
+
+      const maxG = Math.max(30, ...list.map((r) => r.g));
+      const shown = list.slice(0, 1500);
+      document.getElementById("table-body").innerHTML = shown.map((r) => `<tr>
+        <td class="col-name">${all ? r.d : r.d.slice(5)}</td>
+        <td class="col-name"><span class="name-main">${esc(r.name)}</span><span class="name-code">${r.code}${r.age ? ` · <span class="ipo-tag">상장 ${r.age}일</span>` : ""}${r.live ? ` · <span class="ipo-tag" style="color:var(--up)">장중</span>` : ""}</span></td>
+        <td class="rs-cell">${rsChip(r.rs)}</td>
+        <td class="${cls(r.chg)}">${pct(r.chg)}</td>
+        <td>${fmt(r.v)}</td>
+        <td>${fmt(r.base)}</td>
+        <td>${fmt(r.hi)}</td>
+        <td class="gain-cell up" style="--w:${(Math.min(r.g, maxG) / maxG) * 100}%"><span><b>${pct(r.g)}</b>${r.g > 30.01 ? '<span class="limit-flag">제한폭 밖</span>' : ""}</span></td>
+        <td class="${cls(r.gc)}">${pct(r.gc)}</td>
+        <td class="${cls(r.d5)}">${pct(r.d5)}</td>
+        <td class="${cls(r.d20)}">${pct(r.d20)}</td>
+      </tr>`).join("") +
+        (list.length > shown.length ? `<tr class="more-row"><td colspan="11">위 ${fmt(shown.length)}건만 표시 — 달을 고르거나 검색해 좁혀 주세요</td></tr>` : "") ||
+        '<tr class="empty-row"><td colspan="11">조건에 맞는 건이 없습니다</td></tr>';
+      drawGrid();
+    }
+
+    document.querySelectorAll("#ledger-table thead th").forEach((th) => th.addEventListener("click", () => {
+      const key = th.dataset.key;
+      if (state.sortKey === key) state.sortDir = -state.sortDir;
+      else { state.sortKey = key; state.sortDir = (key === "d" || key === "name") ? 1 : -1; }
+      lsSet(LS.sortKey, state.sortKey); lsSet(LS.sortDir, state.sortDir);
+      render();
+    }));
+    document.querySelectorAll("#scope-seg button").forEach((b) => b.addEventListener("click", () => {
+      state.scope = b.dataset.scope; state.q = ""; document.getElementById("search-input").value = "";
+      lsSet(LS.scope, state.scope); render();
+    }));
+    const rsSelect = document.getElementById("rs-select");
+    rsSelect.value = String(state.rs);
+    rsSelect.addEventListener("change", () => { state.rs = Number(rsSelect.value); lsSet(LS.rs, state.rs); render(); });
+    document.getElementById("search-input").addEventListener("input", (e) => { state.q = e.target.value.trim(); render(); });
+
+    // 52주 건은 120일 건의 부분집합(120일 고가 ≤ 52주 고가) — 서버는 120일로 모으고 여기서 기준만 바꿔 다시 거른다
+    function applyWindow() {
+      const w = state.window;
+      ROWS = [];
+      for (const r of ALL) {
+        const base = w === "52" ? r.h52 : r.h120;
+        if (base === null || r.hi < base) continue;
+        ROWS.push({ ...r, base, g: (r.hi / base - 1) * 100, gc: (r.c / base - 1) * 100 });
+      }
+      BY_MONTH = new Map();
+      for (const r of ROWS) { if (!BY_MONTH.has(r.m)) BY_MONTH.set(r.m, []); BY_MONTH.get(r.m).push(r); }
+      if (!BY_MONTH.has(state.month)) state.month = [...BY_MONTH.keys()].sort().pop() || LAST;
+      document.querySelectorAll("#window-seg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.window === w)));
+      document.getElementById("base-th").textContent = w === "52" ? "52주 고가" : "120일 고가";
+      document.getElementById("summary-line").innerHTML =
+        `${w === "52" ? "52주" : "120일"} 기준 · ${FIRST.replace("-", "년 ")}월부터 <b>${fmt(ROWS.length)}건 · ${fmt(new Set(ROWS.map((r) => r.code)).size)}종목</b> · 고점→고가 중앙값 <b class="up">${pct(median(ROWS.map((r) => r.g)))}</b> · 종가까지 지킨 건 <b>${fmt(ROWS.filter((r) => r.gc >= 0).length)}건</b> · 월 칸을 누르면 그 달 종목이 아래에 나옵니다${LIVE_AT ? ` · <b>장중 시세 ${LIVE_AT}</b>` : ""}`;
+      render();
+    }
+    document.querySelectorAll("#window-seg button").forEach((b) => b.addEventListener("click", () => {
+      state.window = b.dataset.window; lsSet(LS.window, state.window); applyWindow();
+    }));
+
+    // 장중 반영 — 서버(newhigh_live)가 60초마다 받는 감시 종목 시세로 오늘 건을 만든다. 52주·120일 고가는 어제까지 일봉 기준.
+    let NIGHT = [], MIN_EOK = 1500, LIVE_AT = null;
+    async function pollLive() {
+      try {
+        const res = await fetch("/api/newhigh-live", { cache: "no-store" });
+        if (!res.ok) return;
+        const lv = await res.json();
+        const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+        const have = new Set(NIGHT.filter((r) => r.d === today).map((r) => r.code));
+        const live = [];
+        for (const [code, q] of Object.entries(lv.quotes || {})) {
+          if (have.has(code) || !q.value || q.value < MIN_EOK * 1e8 || !q.h120 || q.high < q.h120) continue;
+          const prev = q.chg !== null && q.chg !== undefined ? q.price / (1 + q.chg / 100) : null;
+          live.push({ d: today, code, name: q.name || code, v: Math.round(q.value / 1e8), h52: q.h52, h120: q.h120, hi: q.high, c: q.price,
+                      chg: q.chg, d5: null, d20: null, rs: null, age: null, m: today.slice(0, 7), live: true, prev });
+        }
+        LIVE_AT = lv.quotes_as_of ? `${lv.quotes_as_of}${lv.active ? "" : "(장 마감)"}` : null;
+        ALL = NIGHT.concat(live);
+        if (live.length && today.slice(0, 7) > LAST) LAST = today.slice(0, 7);
+        applyWindow();
+        pollLive();
+      } catch (e) { /* 서버가 옛 버전이면 야간 자료만 */ }
+    }
+
+    async function load() {
+      const errBox = document.getElementById("error-box");
+      try {
+        const res = await fetch("/newhigh_ledger.json", { cache: "no-store" });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        ALL = data.rows.map((r) => ({ d: r[0], code: r[1], name: r[2], v: r[3], h52: r[4], h120: r[5], hi: r[6], c: r[7], chg: r[8], d5: r[9], d20: r[10], rs: r[11], age: r[12], m: r[0].slice(0, 7) }));
+        NIGHT = ALL; MIN_EOK = data.min_value_eok;
+        FIRST = ALL.length ? ALL[0].m : data.date.slice(0, 7);
+        LAST = data.date.slice(0, 7);
+        document.getElementById("as-of").textContent = `${data.date} 기준`;
+        document.getElementById("min-value").textContent = `${fmt(data.min_value_eok)}억`;
+        errBox.classList.add("hidden");
+        applyWindow();
+      } catch (e) {
+        errBox.textContent = "장부 데이터를 못 읽었습니다 (" + e.message + ") — 야간 갱신(new_high) 뒤에 생깁니다.";
+        errBox.classList.remove("hidden");
+      }
+    }
+
+    const MIN_FONT_PX = 14, MAX_FONT_PX = 26, DEFAULT_FONT_PX = 18;
+    function savedFont() { const v = parseInt(lsGet(LS.font, DEFAULT_FONT_PX), 10); return isFinite(v) ? v : DEFAULT_FONT_PX; }
+    function applyFontSize(px) { document.documentElement.style.fontSize = px + "px"; lsSet(LS.font, px); }
+    function changeFontSize(delta) { applyFontSize(Math.min(MAX_FONT_PX, Math.max(MIN_FONT_PX, savedFont() + delta))); }
+    document.getElementById("font-smaller-button").addEventListener("click", () => changeFontSize(-2));
+    document.getElementById("font-bigger-button").addEventListener("click", () => changeFontSize(2));
+    applyFontSize(savedFont());
+
+    load();
+    setInterval(pollLive, 60000);
+  </script>
+</body>
+</html>

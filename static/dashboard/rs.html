@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RS 상위 2%</title>
+<link rel="stylesheet" href="/market.css">
+</head>
+<body>
+
+  <div class="page-tabs">
+    <a href="/rs.html" class="active">RS 상위</a>
+    <a href="/newhigh.html#new">52주 신고가</a>
+    <a href="/newhigh.html#candidates">신고가 후보</a>
+    <a href="/ledger.html">신고가 장부</a>
+  </div>
+
+  <div class="card">
+    <header class="top">
+      <div>
+        <h1>RS 상위 2%<span class="sub" id="as-of">-</span></h1>
+      </div>
+      <nav>
+        <span id="summary-line">1M 상위 -명 · 3M 상위 -명 · 둘 다 -명</span>
+        &nbsp;·&nbsp;
+        <span class="seg">
+          <button id="font-smaller-button" type="button">A-</button>
+          <button id="font-bigger-button" type="button">A+</button>
+        </span>
+        &nbsp;·&nbsp;
+        <a href="/">← 메인</a>
+        &nbsp;<a href="/ranking.html">당일 순위</a>
+        &nbsp;<a href="/afterhours.html">애프터장</a>
+      </nav>
+    </header>
+    <p class="note">
+      RS1M·RS3M·RS6M·RS종합은 코스피+코스닥(ETF·ETN·스팩 제외) 전 종목 단면 백분위(1~99, 99=상위 1%)입니다.
+      구분: <b>둘 다</b>=1M·3M 둘 다 상위 2% · <b>3M만</b> · <b>1M만</b>. 섹터(대분류)·세부섹터(중분류)는 스탁이지 분류 기준이라 없는 종목(신규상장 등)은 "미분류"입니다.
+    </p>
+    <p id="error-box" class="err hidden"></p>
+    <div class="chips" id="sector-chips"></div>
+  </div>
+
+  <div class="card">
+    <div class="filters">
+      <div class="grp">
+        <span class="seg" id="scope-seg">
+          <button data-scope="all" type="button">전체</button>
+          <button data-scope="둘 다" type="button">둘 다</button>
+          <button data-scope="3M만" type="button">3M</button>
+          <button data-scope="1M만" type="button">1M</button>
+        </span>
+      </div>
+      <div class="grp">시장
+        <select id="market-select">
+          <option value="all">전체</option>
+          <option value="코스피">코스피</option>
+          <option value="코스닥">코스닥</option>
+        </select>
+      </div>
+      <div class="grp">당일 거래대금
+        <select id="value-select">
+          <option value="0">전체</option>
+          <option value="10000000000">100억+</option>
+          <option value="50000000000">500억+</option>
+          <option value="100000000000">1,000억+</option>
+        </select>
+      </div>
+      <div class="grp">시가총액
+        <select id="cap-select">
+          <option value="0">전체</option>
+          <option value="100000000000">1,000억+</option>
+          <option value="200000000000">2,000억+</option>
+          <option value="500000000000">5,000억+</option>
+        </select>
+      </div>
+      <div class="grp">평균대금
+        <select id="avg-period-select">
+          <option value="5">5일</option>
+          <option value="20" selected>20일</option>
+          <option value="60">60일</option>
+        </select>
+        <select id="avg-value-select">
+          <option value="0">전체</option>
+          <option value="5000000000">50억+</option>
+          <option value="10000000000" selected>100억+</option>
+          <option value="30000000000">300억+</option>
+          <option value="50000000000">500억+</option>
+          <option value="100000000000">1,000억+</option>
+          <option value="custom">직접입력…</option>
+        </select>
+        <input type="number" id="avg-value-custom" class="hidden" placeholder="억" min="0">
+      </div>
+      <div class="grp">
+        <input type="text" id="search-input" placeholder="종목명·코드 검색">
+      </div>
+      <span class="count-badge"><b id="row-count">0</b>개 종목</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th class="col-star">☆</th>
+            <th class="col-sector">섹터</th>
+            <th class="col-name">종목</th>
+            <th data-key="시장">시장</th>
+            <th data-key="종가">현재가</th>
+            <th data-key="등락률">등락률</th>
+            <th data-key="RS종합">RS 종합</th>
+            <th data-key="RS1M">RS1M</th>
+            <th data-key="RS3M">RS3M</th>
+            <th data-key="RS6M">RS6M</th>
+            <th data-key="거래대금">거래대금(억)</th>
+            <th data-key="_avg">평균대금(억)</th>
+            <th data-key="구분">구분</th>
+          </tr>
+        </thead>
+        <tbody id="table-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    const POLL_INTERVAL_MS = 30000;
+    const LS = {
+      font: "ranking-root-font-px", star: "rs-star-codes",
+      scope: "rs-filter-scope", market: "rs-filter-market", value: "rs-filter-value", cap: "rs-filter-cap",
+      avgPeriod: "rs-filter-avg-period", avgValue: "rs-filter-avg-value", avgCustom: "rs-filter-avg-custom", sector: "rs-filter-sector",
+      sortKey: "rs-sort-key", sortDir: "rs-sort-dir",
+    };
+    function lsGet(key, dflt) { try { const v = localStorage.getItem(key); return v === null ? dflt : v; } catch (e) { return dflt; } }
+    function lsSet(key, v) { try { localStorage.setItem(key, v); } catch (e) {} }
+
+    let ROWS = [];
+    let STARS = new Set((() => { try { return JSON.parse(localStorage.getItem(LS.star) || "[]"); } catch (e) { return []; } })());
+    const state = {
+      scope: lsGet(LS.scope, "all"),
+      market: lsGet(LS.market, "all"),
+      value: lsGet(LS.value, "0"),
+      cap: lsGet(LS.cap, "0"),
+      avgPeriod: lsGet(LS.avgPeriod, "20"),
+      avgValue: lsGet(LS.avgValue, "10000000000"),
+      avgCustom: lsGet(LS.avgCustom, ""),
+      sector: lsGet(LS.sector, "전체"),
+      search: "",
+      sortKey: lsGet(LS.sortKey, "RS3M"),
+      sortDir: lsGet(LS.sortDir, "desc"),
+    };
+
+    // 섹터(스탁이지 대분류) 점 색 — 강함(RS 중앙값 높음) 주황 ~ 약함(낮음) 파랑, 09-28 22:45 편지. sector_rs 는 rs_top2.json 이 준다.
+    let SECTOR_RS = {};
+    function colorOf(sector) {
+      const rs = sector ? SECTOR_RS[sector] : undefined;
+      if (rs === undefined || rs === null) return "#c6cad2";
+      const t = Math.max(0, Math.min(1, (rs - 30) / 50));  // 30점=약함(파랑) ~ 80점=강함(주황), 척도는 우리가 정함(스탁이지 정확한 기준 비공개)
+      const from = [20, 98, 201], to = [217, 113, 26];
+      const mix = from.map((c, i) => Math.round(c + (to[i] - c) * t));
+      return `rgb(${mix.join(",")})`;
+    }
+
+    function eok(v) { return (v === null || v === undefined) ? "-" : Math.round(v / 100000000).toLocaleString("ko-KR"); }
+    function num(v) { return (v === null || v === undefined) ? "-" : Math.round(v).toLocaleString("ko-KR"); }
+    function pctText(v) {
+      if (v === null || v === undefined) return { text: "-", cls: "flat" };
+      const sign = v > 0 ? "+" : "";
+      return { text: `${sign}${v.toFixed(2)}%`, cls: v > 0 ? "up" : (v < 0 ? "down" : "flat") };
+    }
+    function rsCell(v) {
+      if (v === null || v === undefined) return `<span class="rs-lo">-</span>`;
+      const n = Math.round(v);
+      let cls = "rs-lo";
+      if (n >= 90) cls = "rs-chip rs-90"; else if (n >= 80) cls = "rs-chip rs-80"; else if (n >= 70) cls = "rs-chip rs-70";
+      return `<span class="${cls}">${n}</span>`;
+    }
+    function avgValueOf(row) { return row["평균대금" + state.avgPeriod]; }
+
+    function avgThreshold() {
+      if (state.avgValue === "custom") {
+        const n = parseFloat(state.avgCustom);
+        return isFinite(n) && n > 0 ? n * 100000000 : 0;
+      }
+      return parseFloat(state.avgValue) || 0;
+    }
+
+    function passesFilters(row) {
+      if (state.scope !== "all" && row["구분"] !== state.scope) return false;
+      if (state.market !== "all" && row["시장"] !== state.market) return false;
+      if (state.sector !== "전체" && (row["섹터"] || "") !== state.sector) return false;
+      if ((row["거래대금"] || 0) < (parseFloat(state.value) || 0)) return false;
+      if ((row["시가총액"] || 0) < (parseFloat(state.cap) || 0)) return false;
+      if ((avgValueOf(row) || 0) < avgThreshold()) return false;
+      if (state.search) {
+        const q = state.search.toLowerCase();
+        if (!(row["이름"] || "").toLowerCase().includes(q) && !(row["코드"] || "").includes(q)) return false;
+      }
+      return true;
+    }
+
+    function sortedRows(rows) {
+      const key = state.sortKey, dir = state.sortDir === "asc" ? 1 : -1;
+      const val = (r) => key === "_avg" ? avgValueOf(r) : r[key];
+      return rows.slice().sort((a, b) => {
+        const av = val(a), bv = val(b);
+        const an = (av === null || av === undefined), bn = (bv === null || bv === undefined);
+        if (an && bn) return 0;
+        if (an) return 1; if (bn) return -1;
+        if (typeof av === "string") return dir * av.localeCompare(bv, "ko");
+        return dir * (av - bv);
+      });
+    }
+
+    function renderSectorChips(allRows) {
+      const base = allRows.filter((r) => {
+        const saved = state.sector; state.sector = "전체";
+        const ok = passesFilters(r); state.sector = saved; return ok;
+      });
+      const counts = new Map();
+      for (const r of base) {
+        const s = r["섹터"];
+        if (!s) continue;
+        counts.set(s, (counts.get(s) || 0) + 1);
+      }
+      const sectors = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+      const box = document.getElementById("sector-chips");
+      box.innerHTML = "";
+      const mk = (label, key, count) => {
+        const b = document.createElement("button");
+        b.type = "button"; b.className = "chip"; b.setAttribute("aria-pressed", String(state.sector === key));
+        b.innerHTML = (key === "전체" ? "" : `<span class="dot" style="background:${colorOf(key)}"></span>`) + `${label} <span class="n">${count}</span>`;
+        b.addEventListener("click", () => { state.sector = key; lsSet(LS.sector, key); render(); });
+        box.appendChild(b);
+      };
+      mk("전체", "전체", base.length);
+      for (const [s, c] of sectors) mk(s, s, c);
+    }
+
+    function renderTable(rows) {
+      const tbody = document.getElementById("table-body");
+      tbody.innerHTML = "";
+      document.getElementById("row-count").textContent = rows.length;
+      if (!rows.length) {
+        tbody.innerHTML = `<tr class="empty-row"><td colspan="13">조건에 맞는 종목이 없습니다</td></tr>`;
+        return;
+      }
+      for (const r of rows) {
+        const tr = document.createElement("tr");
+        const p = pctText(r["등락률"]);
+        const starred = STARS.has(r["코드"]);
+        const badgeCls = r["구분"] === "둘 다" ? "badge both" : "badge";
+        tr.innerHTML = `
+          <td class="col-star"><button class="star-btn${starred ? " on" : ""}" data-code="${r["코드"]}" type="button">${starred ? "★" : "☆"}</button></td>
+          <td class="col-sector">${r["섹터"] ? `<span class="sector-dot" style="background:${colorOf(r["섹터"])}"></span>${r["섹터"]}` : `<span class="market-tag">-</span>`}</td>
+          <td class="col-name"><span class="name-main">${r["이름"] || "-"}</span>${r["세부섹터"] ? ` <span class="badge">${r["세부섹터"]}</span>` : ""}<span class="name-code">${r["코드"]}</span></td>
+          <td class="market-tag">${r["시장"] || "-"}</td>
+          <td>${num(r["종가"])}</td>
+          <td class="${p.cls}">${p.text}</td>
+          <td class="rs-cell">${rsCell(r["RS종합"])}</td>
+          <td>${rsCell(r["RS1M"])}</td>
+          <td>${rsCell(r["RS3M"])}</td>
+          <td>${rsCell(r["RS6M"])}</td>
+          <td>${eok(r["거래대금"])}</td>
+          <td>${eok(avgValueOf(r))}</td>
+          <td><span class="${badgeCls}">${r["구분"]}</span></td>`;
+        tbody.appendChild(tr);
+      }
+      tbody.querySelectorAll(".star-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const code = btn.dataset.code;
+          if (STARS.has(code)) STARS.delete(code); else STARS.add(code);
+          lsSet(LS.star, JSON.stringify(Array.from(STARS)));
+          render();
+        });
+      });
+    }
+
+    function syncControls() {
+      document.querySelectorAll("#scope-seg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.scope === state.scope)));
+      document.getElementById("market-select").value = state.market === "all" ? "all" : state.market;
+      document.getElementById("value-select").value = state.value;
+      document.getElementById("cap-select").value = state.cap;
+      document.getElementById("avg-period-select").value = state.avgPeriod;
+      document.getElementById("avg-value-select").value = state.avgValue;
+      document.getElementById("avg-value-custom").value = state.avgCustom;
+      document.getElementById("avg-value-custom").classList.toggle("hidden", state.avgValue !== "custom");
+      document.querySelectorAll("thead th[data-key]").forEach((th) => {
+        th.classList.toggle("sorted", th.dataset.key === state.sortKey);
+        const base = th.textContent.replace(/ ?[↑↓]$/, "");
+        th.textContent = base + (th.dataset.key === state.sortKey ? (state.sortDir === "desc" ? " ↓" : " ↑") : "");
+      });
+    }
+
+    function render() {
+      syncControls();
+      renderSectorChips(ROWS);
+      const filtered = ROWS.filter(passesFilters);
+      renderTable(sortedRows(filtered));
+    }
+
+    function renderMeta(data) {
+      document.getElementById("as-of").textContent = data.date ? ` ${data.date} 기준` : "";
+      const both = ROWS.filter((r) => r["구분"] === "둘 다").length;
+      document.getElementById("summary-line").textContent = `1M 상위 ${data.n1m ?? "-"}명 · 3M 상위 ${data.n3m ?? "-"}명 · 둘 다 ${both}명`;
+    }
+
+    async function poll() {
+      try {
+        const res = await fetch("/rs_top2.json", { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        ROWS = data.rows || [];
+        SECTOR_RS = data.sector_rs || {};
+        renderMeta(data);
+        render();
+        document.getElementById("error-box").classList.add("hidden");
+      } catch (e) {
+        document.getElementById("error-box").textContent = "⚠ RS 상위 2% 자료를 못 불러왔습니다 — 아직 안 만들어졌을 수 있습니다.";
+        document.getElementById("error-box").classList.remove("hidden");
+      }
+    }
+
+    // ---- 필터 이벤트
+    document.querySelectorAll("#scope-seg button").forEach((b) => {
+      b.addEventListener("click", () => { state.scope = b.dataset.scope; lsSet(LS.scope, state.scope); render(); });
+    });
+    document.getElementById("market-select").addEventListener("change", (e) => { state.market = e.target.value; lsSet(LS.market, state.market); render(); });
+    document.getElementById("value-select").addEventListener("change", (e) => { state.value = e.target.value; lsSet(LS.value, state.value); render(); });
+    document.getElementById("cap-select").addEventListener("change", (e) => { state.cap = e.target.value; lsSet(LS.cap, state.cap); render(); });
+    document.getElementById("avg-period-select").addEventListener("change", (e) => { state.avgPeriod = e.target.value; lsSet(LS.avgPeriod, state.avgPeriod); render(); });
+    document.getElementById("avg-value-select").addEventListener("change", (e) => {
+      state.avgValue = e.target.value; lsSet(LS.avgValue, state.avgValue); render();
+    });
+    document.getElementById("avg-value-custom").addEventListener("input", (e) => { state.avgCustom = e.target.value; lsSet(LS.avgCustom, state.avgCustom); render(); });
+    document.getElementById("search-input").addEventListener("input", (e) => { state.search = e.target.value; render(); });
+    document.querySelectorAll("thead th[data-key]").forEach((th) => {
+      th.addEventListener("click", () => {
+        const key = th.dataset.key;
+        if (state.sortKey === key) state.sortDir = state.sortDir === "desc" ? "asc" : "desc";
+        else { state.sortKey = key; state.sortDir = "desc"; }
+        lsSet(LS.sortKey, state.sortKey); lsSet(LS.sortDir, state.sortDir);
+        render();
+      });
+    });
+
+    // ---- 글씨 크기 — ranking.html·afterhours.html 과 같은 저장 키.
+    const MIN_FONT_PX = 14, MAX_FONT_PX = 26, DEFAULT_FONT_PX = 18;
+    function savedFont() { const v = parseInt(lsGet(LS.font, DEFAULT_FONT_PX), 10); return isFinite(v) ? v : DEFAULT_FONT_PX; }
+    function applyFontSize(px) { document.documentElement.style.fontSize = px + "px"; lsSet(LS.font, px); }
+    function changeFontSize(delta) { applyFontSize(Math.min(MAX_FONT_PX, Math.max(MIN_FONT_PX, savedFont() + delta))); }
+    document.getElementById("font-smaller-button").addEventListener("click", () => changeFontSize(-2));
+    document.getElementById("font-bigger-button").addEventListener("click", () => changeFontSize(2));
+    applyFontSize(savedFont());
+
+    poll();
+    setInterval(poll, POLL_INTERVAL_MS);
+  </script>
+</body>
+</html>

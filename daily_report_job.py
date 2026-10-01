@@ -121,6 +121,24 @@ def main() -> None:
         except Exception as e:
             log(f"120일 신고가 갱신 실패: {type(e).__name__}: {e}")
 
+        # RS 점수(스탁이지 실측 대조로 분기가중 공식 확정, 09-28) — 일봉이 막 갱신된 직후에 다시 계산(순서가
+        # 바뀌면 하루 낡은 값으로 순위가 나간다). 실패해도 뒤 단계는 계속 돈다(RS 는 스튜디오 조건·연구용).
+        try:
+            from backtesting import rs_rating
+            b = rs_rating.build()
+            rs_rating.save(b)
+            rank_path = rs_rating.write_daily_rank(b)
+            top2_path = rs_rating.write_top2(b)  # results/rs_rank/*_top2.csv + static/dashboard/rs_top2.json(정적, 화면 재기동 불필요)
+            log(f"RS 점수 갱신 완료 ({int(b['rs'].iloc[-1].notna().sum())}종목, {rank_path}, {top2_path})")
+
+            # 52주 신고가·후보(09-28 22:30) — 위 RS 계산(b: close/high/low/volume/rs/period_rs)을 그대로 재사용, 일봉 재로딩 없음.
+            from backtesting import new_high
+            nh_path = new_high.publish(new_high.build(b))
+            new_high.write_json(new_high.build_ledger(b), new_high.LEDGER_PATH, compact=True)  # 신고가 장부(09-29)
+            log(f"52주 신고가 갱신 완료 ({nh_path})")
+        except Exception as e:
+            log(f"RS 점수 갱신 실패: {type(e).__name__}: {e}")
+
     for cmd, label, env_extra in STEPS:
         if not run(cmd, label, env_extra):
             ok = False

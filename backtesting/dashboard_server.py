@@ -58,6 +58,7 @@ from .afterhours_ranking import load_ranking as load_afterhours_ranking
 from .afterhours_ranking import start_background_poller as start_afterhours_poller
 from .trading_value_ranking import get_ranking as get_trading_value_ranking
 from .trading_value_ranking import start_background_poller as start_ranking_background_poller
+from . import newhigh_live
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC_DIR = os.path.join(PROJECT_ROOT, "static", "dashboard")
@@ -74,6 +75,38 @@ CONFIG_TO_CLI_FLAG = {
     "interval_seconds": "--interval-seconds",
     "model_path": "--model-path",
 }
+
+
+_NAME_CACHE: dict = {"at": 0.0, "names": {}}
+
+
+def stock_names() -> dict[str, str]:
+    """코드→종목명. 신호·체결·포지션 이력은 코드만 남겨서 화면이 코드로 보였다(09-30 사용자).
+    stock_names.json 에 없는 신규상장주는 스탁이지 분류 파일 이름으로 메운다. 1시간마다 다시 읽는다."""
+    if time.time() - _NAME_CACHE["at"] > 3600:
+        names: dict[str, str] = {}
+        try:
+            import csv
+            with open(os.path.join(PROJECT_ROOT, "data", "sectors_stockeasy.csv"), encoding="utf-8-sig") as f:
+                names.update({r["code"]: r["name"] for r in csv.DictReader(f)})
+        except (OSError, KeyError):
+            pass
+        try:
+            with open(os.path.join(PROJECT_ROOT, "data", "stock_names.json"), encoding="utf-8") as f:
+                names.update(json.load(f))
+        except (OSError, ValueError):
+            pass
+        _NAME_CACHE.update(at=time.time(), names=names)
+    return _NAME_CACHE["names"]
+
+
+def with_names(rows, code_key: str):
+    """각 행(dict)에 name 을 붙인다 — 이름을 모르면 코드 그대로."""
+    names = stock_names()
+    for r in rows or []:
+        if isinstance(r, dict) and r.get(code_key):
+            r.setdefault("name", names.get(str(r[code_key]), str(r[code_key])))
+    return rows
 
 
 def spawn_detached(command: list[str], cwd: str, log_file) -> subprocess.Popen:
@@ -123,6 +156,14 @@ CONTENT_TYPES = {
     "style.css": "text/css; charset=utf-8",
     "ranking.html": "text/html; charset=utf-8",
     "afterhours.html": "text/html; charset=utf-8",
+    "rs.html": "text/html; charset=utf-8",
+    "rs_top2.json": "application/json; charset=utf-8",  # rs_rating.write_top2 가 매일 밤 새로 씀 — 여긴 그때그때 다시 읽어 보낼 뿐
+    "market.css": "text/css; charset=utf-8",  # rs.html·newhigh.html 공용(09-28 22:35 편지)
+    "newhigh.html": "text/html; charset=utf-8",
+    "newhigh.json": "application/json; charset=utf-8",  # new_high.write_json 이 매일 밤 새로 씀
+    "newhigh_ohlc.json": "application/json; charset=utf-8",  # 신고가 후보 마우스 오버 52주 일봉(new_high.build_ohlc)
+    "ledger.html": "text/html; charset=utf-8",  # 신고가 장부(09-29)
+    "newhigh_ledger.json": "application/json; charset=utf-8",  # new_high.build_ledger 가 매일 밤 새로 씀
 }
 
 DEFAULT_STRATEGY = "strategy_1"
@@ -295,7 +336,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             })
         elif parsed.path == "/api/state":
             strategy = self._selected_strategy(query)
-            self._send_json(load_dashboard_state(self._strategy_path(strategy, "risk_state")))
+            state = load_dashboard_state(self._strategy_path(strategy, "risk_state"))
+            if isinstance(state, dict):
+                with_names(state.get("open_positions"), "code")
+            self._send_json(state)
         elif parsed.path == "/api/config":
             strategy = self._selected_strategy(query)
             self._send_json(load_strategy_config(self._strategy_path(strategy, "config")))
@@ -305,7 +349,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/signals":
             limit = int(query.get("limit", ["200"])[0])
             signal_paths = {s: self._strategy_path(s, "signals") for s in list_strategies(self.state_root)}
-            self._send_json(load_all_signal_history(signal_paths, limit=limit))
+            self._send_json(with_names(load_all_signal_history(signal_paths, limit=limit), "stock_code"))
         elif parsed.path == "/api/results":
             self._send_json(list_results(self.results_dir))
         elif parsed.path.startswith("/api/results/"):
@@ -321,7 +365,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/orders":
             strategy = self._selected_strategy(query)
             limit = int(query.get("limit", ["200"])[0])
-            self._send_json(load_order_history(self._strategy_path(strategy, "orders"), limit=limit))
+            self._send_json(with_names(load_order_history(self._strategy_path(strategy, "orders"), limit=limit), "code"))
         elif parsed.path == "/api/pnl-history":
             strategy = self._selected_strategy(query)
             self._send_json(load_pnl_history(self._strategy_path(strategy, "pnl_history")))
@@ -338,6 +382,24 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._send_static("ranking.html")
         elif parsed.path == "/afterhours.html":
             self._send_static("afterhours.html")
+        elif parsed.path == "/rs.html":
+            self._send_static("rs.html")
+        elif parsed.path == "/rs_top2.json":
+            self._send_static("rs_top2.json")
+        elif parsed.path == "/market.css":
+            self._send_static("market.css")
+        elif parsed.path == "/newhigh.html":
+            self._send_static("newhigh.html")
+        elif parsed.path == "/newhigh.json":
+            self._send_static("newhigh.json")
+        elif parsed.path == "/newhigh_ohlc.json":
+            self._send_static("newhigh_ohlc.json")
+        elif parsed.path == "/api/newhigh-live":
+            self._send_json(newhigh_live.snapshot())
+        elif parsed.path == "/ledger.html":
+            self._send_static("ledger.html")
+        elif parsed.path == "/newhigh_ledger.json":
+            self._send_static("newhigh_ledger.json")
         else:
             self.send_response(404)
             self.end_headers()
@@ -523,6 +585,8 @@ def run_dashboard_server(
         # 상태 파일에 쓴다. 이것도 브라우저 탭 유무와 무관해야 한다(베이스라인은 하루에
         # 그 6분뿐이고 소급 조회가 불가능하다 — 놓치면 그날은 끝).
         start_afterhours_poller(kiwoom_appkey, kiwoom_secretkey, kiwoom_is_mock)
+        # 장중 52주 신고가(키움 ka10016) — 60초마다, 순위 폴러와 같은 클라이언트(토큰 공유)
+        newhigh_live.start_background_poller(kiwoom_appkey, kiwoom_secretkey, kiwoom_is_mock)
         # 매일 장 마감 후(기본 15:40) top35 업데이트를 스스로 트리거 — cli.py의
         # update-top35 docstring이 안내하는 "OS 스케줄러 등록"이 이 PC에선 UAC로
         # 막혀 있어(top35_job.start_daily_scheduler 참고), 대신 이미 상시 실행 중인

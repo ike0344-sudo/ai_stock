@@ -401,7 +401,7 @@ function renderState(state) {
   for (const pos of positions) {
     const row = document.createElement("tr");
     const cells = [
-      pos.code,
+      pos.name || pos.code,
       pos.entry_time,
       formatKrw(pos.allocated_capital),
       Math.round((pos.remaining_fraction ?? 1) * 100) + "%",
@@ -491,7 +491,7 @@ function renderSignals(signals) {
     const row = document.createElement("tr");
     const cells = [
       signal.strategy,
-      signal.stock_code,
+      signal.name || signal.stock_code,  // 이름은 서버가 붙인다(09-30), 모르면 코드
       signal.signal_time,
       formatKrw(signal.price),
       signal.proba != null ? signal.proba.toFixed(2) : "-",  // ML 게이트가 없는 전략은 proba 필드가 아예 없다
@@ -514,7 +514,7 @@ function renderOrders(orders) {
   for (const order of orders) {
     const row = document.createElement("tr");
     const cells = [
-      order.code,
+      order.name || order.code,
       order.side === "buy" ? "매수" : "매도",
       order.quantity,
       formatKrw(order.price),
