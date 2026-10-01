@@ -217,6 +217,50 @@ def sector_rs_median(rs_day: pd.Series, sector_of: dict[str, str]) -> dict[str, 
     return df.groupby("sector")["rs"].median().round(1).to_dict()
 
 
+SECTOR_MIN_MEMBERS = 3      # 세부섹터는 종목이 이보다 적으면 순위가 한두 종목에 휘둘린다 — 뺀다
+SECTOR_STRONG_RS = 80
+
+
+def sector_rs_table(b: dict, day: pd.Timestamp, level: str = "sector") -> list[dict]:
+    """섹터 RS(10-01 사용자) — 오닐 업종 RS 식: 섹터 소속 종목 원점수의 **중앙값**을 섹터의 원점수로 보고,
+    그날 섹터들끼리 백분위 1~99 로 매긴다(종목 RS 와 같은 0.4q1+0.2q2+0.2q3+0.2q4·1M/3M/6M 단독 수익률).
+    중앙값이라 한 종목 급등이 섹터 점수를 끌고 가지 못한다. 1주(5거래일)·1달(21거래일) 전 점수도 같이 줘서 오르는 섹터를 보이게 한다.
+    level: "sector"(대분류) / "sub_sector"(세부섹터). ETF·ETN·스팩 제외, 분류 없는 종목 제외."""
+    close, rs = b["close"], b["rs"]
+    names = load_names()
+    sectors, subs = load_sectors_stockeasy()
+    group_of = sectors if level == "sector" else subs
+    ex = excluded_codes(names)                      # 한 번만 — 컴프리헨션 안에서 부르면 종목 수만큼 다시 계산한다
+    codes = [c for c in close.columns if c in group_of and c not in ex]
+    i = close.index.get_loc(day)
+    days = {"now": day, "w1": close.index[max(0, i - 5)], "m1": close.index[max(0, i - 21)]}
+    raws = {"rs": raw_score(close[codes]), **{k: period_raw(close[codes], PERIODS[k]) for k in ("1m", "3m", "6m")}}
+    grp = pd.Series({c: group_of[c] for c in codes})
+
+    def group_rank(raw: pd.DataFrame, d: pd.Timestamp) -> pd.Series:
+        med = raw.loc[d].groupby(grp).median()
+        n = raw.loc[d].groupby(grp).count()
+        med = med[n >= (SECTOR_MIN_MEMBERS if level == "sub_sector" else 1)].dropna()
+        return np.ceil(med.rank(pct=True) * 99).clip(1, 99)
+
+    now = {k: group_rank(r, day) for k, r in raws.items()}
+    w1, m1 = group_rank(raws["rs"], days["w1"]), group_rank(raws["rs"], days["m1"])
+    rs_now = rs.loc[day].reindex(codes)
+    out = []
+    for g in now["rs"].sort_values(ascending=False).index:
+        members = rs_now[grp == g].dropna()
+        top = members.sort_values(ascending=False).head(3)
+        out.append({
+            "섹터": g, **({"대분류": sectors.get(grp[grp == g].index[0])} if level == "sub_sector" else {}),
+            "종목수": int((grp == g).sum()), "rs": int(now["rs"][g]),
+            "rs_1m": _int_or_none(now["1m"].get(g)), "rs_3m": _int_or_none(now["3m"].get(g)), "rs_6m": _int_or_none(now["6m"].get(g)),
+            "rs_1w_ago": _int_or_none(w1.get(g)), "rs_1m_ago": _int_or_none(m1.get(g)),
+            "강한종목비율": round(float((members >= SECTOR_STRONG_RS).mean()) * 100, 1) if len(members) else None,
+            "대표": [{"코드": c, "이름": names.get(c, c), "rs": int(v)} for c, v in top.items()],
+        })
+    return out
+
+
 def avg_value(close: pd.DataFrame, volume: pd.DataFrame, day: pd.Timestamp, n: int) -> pd.Series:
     """기준일(당일 포함) 최근 n일 평균 거래대금(원) — 09-28 22:10 편지. 종가×거래량의 n일 평균."""
     value = close * volume
@@ -385,6 +429,7 @@ def write_top2(b: dict, day: pd.Timestamp | None = None) -> str:
     sectors, _ = load_sectors_stockeasy()
     payload = {"date": day.date().isoformat(), "n1m": out.attrs.get("n1", 0), "n3m": out.attrs.get("n3", 0),
               "sector_rs": sector_rs_median(b["rs"].loc[day], sectors),
+              "sector_table": {"sector": sector_rs_table(b, day, "sector"), "sub_sector": sector_rs_table(b, day, "sub_sector")},
               "rows": json.loads(out.to_json(orient="records", force_ascii=False))}
     with write("rs_rating", writer="rs_rating.top2", detail={"date": str(day.date()), "n": len(out)}):
         out.to_csv(path, index=False, encoding="utf-8-sig")
