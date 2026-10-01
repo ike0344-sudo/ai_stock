@@ -115,6 +115,24 @@ datasets:
     retention: forever_unrecoverable
     notes: ka90008 은 날짜를 무시하고 **당일분만** 준다(09-30 실측) — 그날 밤에 못 받으면 영영 없다. 장전·장중·장후 전부
 
+  - id: sophie_rank_tape
+    label: 소피증권 대금 순위 원본(분당)
+    basis: AL
+    path: kospi-theme-engine/dist/logs/rank_tape/{date}.jsonl
+    also: [kospi-theme-engine/backups/rank_tape]
+    # 09:00~15:30 분마다 ka10032 응답 한 벌(코드·원본 누적 대금·등락률·현재가·페이지 수) + 기준값 줄 + 엔진 시작 줄.
+    # 테마 소속 판정(kospi-theme-engine/docs/THEME_ATTRIBUTION_DESIGN.md v2.1) 검증 재료. 10-02 밤 재빌드부터.
+    # 닫힌 날 파일은 backup_logs.py 가 한 번만 gz 로 복사한다.
+    lock: null
+    writers:
+      - {id: engine,      cmd: kospi-theme-engine/dist/ai_stock.exe, triggers: [live]}
+      - {id: backup_logs, cmd: kospi-theme-engine/backup_logs.py,    triggers: ["watchdog"]}
+    readers: [테마 소속 판정 검증, 연구]
+    # 거래일마다 파일이 하나 생겨야 한다. 10-02 밤 재빌드 뒤 첫 거래일이 10-06(10-03·05 휴장)이다.
+    freshness: {rule: last_trading_day, deadline: "07:30", start: "2026-10-06"}
+    retention: forever_unrecoverable
+    notes: 라이브가 실제로 본 순위 — 재수집 불가, 삭제 금지·압축 보관. 정규장 대금은 재생 때 원본−기준값으로 다시 잰다
+
   - id: sophie_reference
     label: 소피증권 기준 데이터
     basis: derived

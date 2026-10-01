@@ -466,11 +466,20 @@ def dataset_status(dataset_id: str, now: datetime | None = None, cal: Calendar |
         if dataset_id == "index":
             dates = {p.stem: x for p in (catalog.root() / "data/index/daily").glob("*.csv")
                      if "_value" not in p.stem and (x := _csv_last_date(p))}
+        elif "{date}" in d.path and "{code}" not in d.path:
+            # 날짜별 파일 하나씩(소피 순위 기록 등) — 가장 최근 파일 이름이 곧 최신일이다
+            pat = catalog.root() / d.path
+            days = sorted(p.stem for p in pat.parent.glob(pat.name.replace("{date}", "*")))
+            dates = {"file": days[-1]} if days else {}
         else:
             dates = latest_dates(dataset_id) if "{code}" in d.path else \
                 {"file": x for p in [catalog.root() / d.path] if (x := _file_date(p))}
         r = verdict_last_trading_day(dates, now, cal, universe_codes(), set(inactive_codes()),
                                      d.freshness.get("deadline", "07:30"))
+        start = d.freshness.get("start")
+        exp_day = expected_daily_date(now, cal, d.freshness.get("deadline", "07:30"))
+        if start and (exp_day is None or exp_day.isoformat() < start):
+            r = {**r, "verdict": "good", "reason": f"기록 시작 전 ({start}부터)"}
     elif rule == "max_age_days":
         dates_ = latest_dates(dataset_id)
         if d.freshness.get("min_value_eok"):

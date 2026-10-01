@@ -52,7 +52,7 @@ def test_l1_1_overview_shape(client):
     assert set(d) == {"now", "datasets", "activity", "alerts_active", "daily_catchup"}
     assert set(d["now"]) == {"ts", "window", "sophie_hours", "bulk"} and d["now"]["window"] == "night"
     assert set(d["now"]["sophie_hours"]) == {"connect_from", "open", "close", "connect_to", "source"}
-    assert len(d["datasets"]) == 17 and [x["id"] for x in d["datasets"]] == [x.id for x in catalog.load().datasets]  # 2026-09-28 rs_* 4개 + sectors_stockeasy
+    assert len(d["datasets"]) == 18 and [x["id"] for x in d["datasets"]] == [x.id for x in catalog.load().datasets]  # 2026-09-28 rs_* 4개 + sectors_stockeasy
     assert {x["verdict"] for x in d["datasets"]} <= {"good", "warn", "bad"}
     for x in d["datasets"]:
         assert {"id", "label", "basis", "verdict", "reason", "retention", "last_write", "lock"} <= set(x)
