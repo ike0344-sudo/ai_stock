@@ -267,7 +267,7 @@
     }));
 
     // 장중 반영 — 서버(newhigh_live)가 60초마다 받는 감시 종목 시세로 오늘 건을 만든다. 52주·120일 고가는 어제까지 일봉 기준.
-    let NIGHT = [], MIN_EOK = 1500, LIVE_AT = null;
+    let NIGHT = [], MIN_EOK = 1500, LIVE_AT = null, NIGHT_DATE = "";
     async function pollLive() {
       try {
         const res = await fetch("/api/newhigh-live", { cache: "no-store" });
@@ -283,6 +283,7 @@
                       chg: q.chg, d5: null, d20: null, rs: null, age: null, m: today.slice(0, 7), live: true, prev });
         }
         LIVE_AT = lv.quotes_as_of ? `${lv.quotes_as_of}${lv.active ? "" : "(장 마감)"}` : null;
+        if (LIVE_AT && lv.quotes_date && lv.quotes_date !== NIGHT_DATE) document.getElementById("as-of").textContent = `${lv.quotes_date} 장중 ${lv.quotes_as_of.slice(0, 5)} · 확정 자료 ${NIGHT_DATE}`;
         ALL = NIGHT.concat(live);
         if (live.length && today.slice(0, 7) > LAST) LAST = today.slice(0, 7);
         applyWindow();
@@ -297,7 +298,7 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
         ALL = data.rows.map((r) => ({ d: r[0], code: r[1], name: r[2], v: r[3], h52: r[4], h120: r[5], hi: r[6], c: r[7], chg: r[8], d5: r[9], d20: r[10], rs: r[11], age: r[12], m: r[0].slice(0, 7) }));
-        NIGHT = ALL; MIN_EOK = data.min_value_eok;
+        NIGHT = ALL; MIN_EOK = data.min_value_eok; NIGHT_DATE = data.date;
         FIRST = ALL.length ? ALL[0].m : data.date.slice(0, 7);
         LAST = data.date.slice(0, 7);
         document.getElementById("as-of").textContent = `${data.date} 기준`;

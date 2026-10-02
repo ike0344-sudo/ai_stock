@@ -461,7 +461,7 @@
     async function pollLive() {
       try {
         const res = await fetch("/api/newhigh-live", { cache: "no-store" });
-        if (res.ok) { LIVE = await res.json(); applyLive(); renderCandidates(); renderNewHighs(); }
+        if (res.ok) { LIVE = await res.json(); applyLive(); renderAsOf(); renderCandidates(); renderNewHighs(); }
       } catch (e) { /* 서버가 아직 옛 버전이면 조용히 야간 자료만 보인다 */ }
     }
     // 후보 탭 장중 반영: 감시 종목 시세(ka10095)로 현재가·고가까지·상태를 다시 매긴다(52주 고가는 어제 자료 그대로 — 미래 정보 없음)
@@ -493,6 +493,15 @@
       DATA = { ...BASE, candidates: cands, cards: {
         "신선 후보": cnt((r) => r.fresh), "돌파권": cnt((r) => r["상태"] === "임박"),
         "돌파 중": cnt((r) => r["상태"] === "돌파중" || r["상태"] === "돌파성공"), "터치 후 밀림": cnt((r) => r["상태"] === "터치 후 밀림") } };
+    }
+
+    // 제목 옆 날짜: 장중 시세가 오늘 것이면 "오늘 장중 HH:MM" 을 앞에, 어젯밤 확정 자료 날짜는 뒤에(10-02 사용자: 10월 1일로만 보여 헷갈림)
+    function renderAsOf() {
+      const night = BASE && BASE.date ? BASE.date : "";
+      const live = LIVE.date && LIVE.date !== night && (LIVE.quotes_as_of || LIVE.as_of);
+      document.getElementById("as-of").textContent = live
+        ? ` ${LIVE.date} 장중 ${(LIVE.quotes_as_of || LIVE.as_of).slice(0, 5)}${LIVE.active ? "" : " (장 마감)"} · 52주 고가·RS·시총은 ${night} 종가 기준`
+        : (night ? ` ${night} 기준` : "");
     }
 
     function mergedNewHighs() {
@@ -581,7 +590,7 @@
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         BASE = await res.json(); DATA = BASE; applyLive();
         SECTOR_RS = DATA.sector_rs || {};
-        document.getElementById("as-of").textContent = DATA.date ? ` ${DATA.date} 기준` : "";
+        renderAsOf();
         renderCandidates(); renderNewHighs();
         document.getElementById("error-box").classList.add("hidden");
       } catch (e) {
