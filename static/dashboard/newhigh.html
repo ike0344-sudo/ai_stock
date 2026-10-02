@@ -515,8 +515,10 @@
 
     // ---- 52주 신고가 주요종목 탭
     function newPasses(r) {
-      if ((r["시총"] || 0) < parseFloat(nState.cap)) return false;
-      if ((r.rs_comp || 0) < parseFloat(nState.rs)) return false;
+      // 장중 신고가인데 어젯밤 자료(시총·RS)가 없는 종목(어제 후보 밖)은 모른다는 이유로 숨기지 않는다(10-02 LK삼양 등)
+      const unknown = (v) => r.live && (v === null || v === undefined);
+      if (!unknown(r["시총"]) && (r["시총"] || 0) < parseFloat(nState.cap)) return false;
+      if (!unknown(r.rs_comp) && (r.rs_comp || 0) < parseFloat(nState.rs)) return false;
       if ((r["거래대금"] || 0) < parseFloat(nState.value)) return false;
       if (nState.search) {
         const q = nState.search.toLowerCase();
