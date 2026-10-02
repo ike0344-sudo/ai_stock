@@ -163,7 +163,7 @@ datasets:
     readers: [소피증권 최근 소속(툴팁), 테마 소속 판정 검증, 연구]
     freshness: {rule: last_trading_day, deadline: "18:30", start: "2026-10-06"}
     # API 가 2022-02 부터 다 주므로 지워져도 --all 로 다시 받는다(git 에는 안 넣음, 113MB)
-    retention: forever_recoverable
+    retention: regenerable
     notes: 인포스탁 저작물 — 분류만 개인 연구·표시에 쓰고 재배포하지 않는다. 사용자 정답 150개 중 서술 문장이 다룬 40건은 40건 다 일치(10-03)
 
   - id: sophie_reference
