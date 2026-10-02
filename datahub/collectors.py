@@ -119,6 +119,12 @@ def collect_program_al() -> Command:
     return Command([sys.executable, "scripts/collect_program_al.py"], _root(), label="프로그램 매매 수집")
 
 
+def collect_infostock_news(session: str = "") -> Command:
+    """인포스탁 특징테마 뉴스(매일경제 톡속보 최신 글). session: am | pm | "" (오늘 것이면 아무거나)."""
+    argv = [sys.executable, "scripts/collect_infostock_news.py"] + (["--session", session] if session else [])
+    return Command(argv, _root(), label=f"인포스탁 뉴스 수집({session or '최신'})")
+
+
 def archive_minute_al(codes: list[str] | None = None) -> Command:
     argv = [sys.executable, "-X", "utf8", "-m", "datahub", "archive-minute-al"] + (["--codes", *codes] if codes else ["--all"])
     return Command(argv, _root(), label="보관소 병합")

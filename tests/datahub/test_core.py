@@ -20,8 +20,8 @@ from .conftest import REPO, run_py
 
 def test_h1_real_catalog_loads():
     cat = catalog.load()                                   # 실제 catalog.yaml — pydantic 검증 통과
-    assert len(cat.datasets) == 18  # 2026-09-28 rs_rating·rs_raw·rs_period·rs_shares(11->15) + sectors_stockeasy(->16) + program_al(09-30, ->17) + sophie_rank_tape(10-02, ->18)
-    assert set(cat.locks) == {"daily_minute", "minute_al", "tick_al", "rs_rating", "program_al"}  # 2026-09-28 rs_rating 잠금 추가
+    assert len(cat.datasets) == 19  # 2026-09-28 rs_rating·rs_raw·rs_period·rs_shares(11->15) + sectors_stockeasy(->16) + program_al(09-30, ->17) + sophie_rank_tape(10-02, ->18) + infostock_news(10-03, ->19)
+    assert set(cat.locks) == {"daily_minute", "minute_al", "tick_al", "rs_rating", "program_al", "infostock_news"}  # 2026-09-28 rs_rating · 10-03 infostock_news
     for d in cat.datasets:
         for p in [d.path, *d.also]:
             assert not Path(p).is_absolute() and ".." not in Path(p).parts

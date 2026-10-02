@@ -21,6 +21,7 @@ locks:
   tick_al:      {path: state/locks/data_tick_al,      covers: [tick_al]}
   program_al:   {path: state/locks/data_program_al,   covers: [program_al]}
   rs_rating:    {path: state/locks/data_rs_rating,    covers: [rs_rating, rs_raw, rs_period, rs_shares]}
+  infostock_news: {path: state/locks/data_infostock_news, covers: [infostock_news]}
 
 datasets:
   - id: daily
@@ -132,6 +133,21 @@ datasets:
     freshness: {rule: last_trading_day, deadline: "07:30", start: "2026-10-06"}
     retention: forever_unrecoverable
     notes: 라이브가 실제로 본 순위 — 재수집 불가, 삭제 금지·압축 보관. 정규장 대금은 재생 때 원본−기준값으로 다시 잰다
+
+  - id: infostock_news
+    label: 인포스탁 특징테마 뉴스(오전장·오후장)
+    basis: derived
+    path: data/news/infostock/{date}.json
+    # 매일경제 톡속보 목록 맨 위 글(로그인 없이 보이는 유일한 글)을 11:35·14:55 에 받아 세션별로 넣는다.
+    # 글 보기 페이지는 로그인 벽이라 그날 못 받으면 영영 없다 — 10분 뒤 재시도 5번.
+    # 파싱: kospi-theme-engine/app/ingest/infostock_news.py (소피증권 화면 "오늘 테마"가 같은 파일을 읽는다)
+    lock: infostock_news
+    writers:
+      - {id: infostock_collect, cmd: scripts/collect_infostock_news.py, triggers: [hub, manual]}
+    readers: [소피증권 오늘 테마, 테마 소속 판정 검증, 연구]
+    freshness: {rule: last_trading_day, deadline: "15:30", start: "2026-10-06"}
+    retention: forever_unrecoverable
+    notes: 인포스탁 저작물 — 테마·종목 분류만 개인 연구·표시에 쓰고 재배포하지 않는다. 테마 이름은 네이버 테마맵과 같은 표기
 
   - id: sophie_reference
     label: 소피증권 기준 데이터
@@ -266,6 +282,8 @@ schedules:
   - {id: tick_nightly, label: "체결 야간 수집",    owner: hub,      when: "매일 20:15",                       does: "조회창 안 빠진 (종목, 날짜) 전부 수집 → 압축", default: "on"}
   - {id: daily_catchup, label: "일봉 아침 따라잡기",   owner: hub,      when: "거래일 05:30~08:10",               does: "일봉이 밀렸을 때만 밀린 종목 따라잡기",       default: "on"}
   - {id: program_nightly, label: "프로그램 야간 수집", owner: hub, when: "거래일 20:10",                    does: "종목별 프로그램 매매 상위 50(당일분만 받을 수 있음) · 실패 시 30분 뒤 재시도 3번", default: "on"}
+  - {id: news_am, label: "인포스탁 오전장 테마뉴스", owner: hub, when: "거래일 11:35",                      does: "톡속보 최신 글이 오늘 오전장이면 저장 · 아니면 10분 뒤 재시도 5번", default: "on"}
+  - {id: news_pm, label: "인포스탁 오후장 테마뉴스", owner: hub, when: "거래일 14:55",                      does: "톡속보 최신 글이 오늘 오후장이면 저장 · 아니면 10분 뒤 재시도 5번", default: "on"}
   - {id: minute_archive, label: "분봉 보관소 병합",  owner: hub,      when: "매일 21:00",                       does: "캐시 중 보관소보다 새 파일 병합(안전망)",     default: "on"}
   - {id: freshness_check, label: "신선도 점검·알림", owner: hub,      when: "10분마다",                         does: "상태 계산 + 알림",                            default: "on"}
 

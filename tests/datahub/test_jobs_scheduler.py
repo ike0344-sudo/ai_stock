@@ -428,3 +428,38 @@ def test_program_nightly_거래일_20시10분에_한_번_실패하면_30분_뒤_
     world.clock["now"] = datetime(2026, 9, 3, 20, 45)
     world.tick()
     assert len(world.jobs("program_nightly")) == 2, "실패하면 30분 뒤 다시"
+
+
+def test_news_am_pm_거래일_정해진_시각부터_받을_때까지_10분마다_창이_닫히면_포기(world):
+    """인포스탁 특징테마 글은 목록 맨 위(최신) 글로만 받을 수 있다 — 오후장 글이 올라오면 오전장은 영영 없다.
+    그래서 오전은 11:35~14:30, 오후는 14:55~18:00 창 안에서만 10분 간격 최대 5번."""
+    def jobs(session):
+        return [j for j in world.jobs("infostock_news") if j["payload"].get("session") == session]
+    world.clock["now"] = datetime(2026, 9, 3, 11, 30)
+    world.tick()
+    assert world.jobs("infostock_news") == [], "11:35 전"
+    world.clock["now"] = datetime(2026, 9, 3, 11, 36)
+    world.tick(); world.tick()
+    assert len(jobs("am")) == 1 and jobs("pm") == [], "오전 글 한 번 · 오후는 아직"
+    world.store.update(jobs("am")[0]["job_id"], status="failed")          # 아직 안 올라옴(종료코드 2)
+    world.clock["now"] = datetime(2026, 9, 3, 11, 40)
+    world.tick()
+    assert len(jobs("am")) == 1, "10분 안엔 다시 안 한다"
+    world.clock["now"] = datetime(2026, 9, 3, 11, 47)
+    world.tick()
+    assert len(jobs("am")) == 2, "실패하면 10분 뒤 다시"
+    world.store.update(jobs("am")[1]["job_id"], status="done")
+    world.clock["now"] = datetime(2026, 9, 3, 12, 30)
+    world.tick()
+    assert len(jobs("am")) == 2, "받았으면 끝"
+    world.clock["now"] = datetime(2026, 9, 3, 14, 56)
+    world.tick()
+    assert len(jobs("pm")) == 1, "오후 글은 14:55 부터"
+    for j in jobs("pm"):
+        world.store.update(j["job_id"], status="failed")
+    world.clock["now"] = datetime(2026, 9, 3, 18, 10)
+    world.tick()
+    assert len(jobs("pm")) == 1, "18:00 넘으면 포기"
+    world.clock["now"] = datetime(2026, 9, 5, 11, 40)                       # 토요일
+    world.tick()
+    assert len(jobs("am")) == 2, "거래일 아니면 안 돈다"
