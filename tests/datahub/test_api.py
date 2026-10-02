@@ -52,7 +52,7 @@ def test_l1_1_overview_shape(client):
     assert set(d) == {"now", "datasets", "activity", "alerts_active", "daily_catchup"}
     assert set(d["now"]) == {"ts", "window", "sophie_hours", "bulk"} and d["now"]["window"] == "night"
     assert set(d["now"]["sophie_hours"]) == {"connect_from", "open", "close", "connect_to", "source"}
-    assert len(d["datasets"]) == 19 and [x["id"] for x in d["datasets"]] == [x.id for x in catalog.load().datasets]  # 2026-09-28 rs_* 4개 + sectors_stockeasy
+    assert len(d["datasets"]) == 20 and [x["id"] for x in d["datasets"]] == [x.id for x in catalog.load().datasets]  # 2026-09-28 rs_* 4개 + sectors_stockeasy
     assert {x["verdict"] for x in d["datasets"]} <= {"good", "warn", "bad"}
     for x in d["datasets"]:
         assert {"id", "label", "basis", "verdict", "reason", "retention", "last_write", "lock"} <= set(x)
@@ -99,7 +99,7 @@ def test_l1_5_live_lock_owner_is_409_locked(client):
         e = err(client.post("/api/data/jobs/collect-daily", json={"mode": "stale", "when": "now"}), 409, "LOCKED")
         assert e["details"]["pid"] == p.pid and e["details"]["owner"]["alive"] is True
         rows = {r["resource"]: r for r in get(client, "/api/data/locks")}
-        assert set(rows) == {"daily_minute", "minute_al", "tick_al", "rs_rating", "program_al", "infostock_news"} and rows["daily_minute"]["held"] and not rows["tick_al"]["held"]  # 09-28 rs_rating · 10-03 infostock_news
+        assert set(rows) == {"daily_minute", "minute_al", "tick_al", "rs_rating", "program_al", "infostock_news", "infostock_daily_theme"} and rows["daily_minute"]["held"] and not rows["tick_al"]["held"]  # 09-28 rs_rating · 10-03 infostock_news·daily
         assert rows["daily_minute"]["owner"]["pid"] == p.pid and rows["daily_minute"]["covers"] == ["daily", "minute_krx", "index"]
     finally:
         p.kill()
@@ -176,7 +176,7 @@ def test_l1_10_schedule_patch(client):
     err(client.patch("/api/data/schedules/tick_nightly", json={"time": "25:00"}), 400, "VALIDATION_ERROR")
     err(client.patch("/api/data/schedules/daily_catchup", json={"time": "06:00"}), 400, "VALIDATION_ERROR")      # 시각이 없는 일정
     rows = get(client, "/api/data/schedules")
-    assert [r["id"] for r in rows] == [s.id for s in catalog.load().schedules] and len(rows) == 12  # 09-30 program_nightly · 10-03 news_am/news_pm
+    assert [r["id"] for r in rows] == [s.id for s in catalog.load().schedules] and len(rows) == 13  # 09-30 program_nightly · 10-03 news_am/news_pm/news_daily
     ext = next(r for r in rows if r["id"] == "daily_report")
     assert ext["enabled"] is None and ext["editable"] is False and ext["runs"] == []
     keys = {"id", "label", "owner", "when", "does", "enabled", "editable", "time", "last_started", "last_finished", "last_ok", "last_result",

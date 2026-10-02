@@ -56,3 +56,5 @@ frontend/test-results/
 
 # tickresearch 산출 데이터(parquet 1.1만 개·2.8GB) — 코드만 커밋
 tickresearch/data/
+# 인포스탁 데일리 테마 원문(113MB, API 로 언제든 다시 받을 수 있다 — 2022-02 부터)
+data/news/infostock_daily/

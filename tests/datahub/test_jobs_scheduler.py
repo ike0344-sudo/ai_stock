@@ -463,3 +463,22 @@ def test_news_am_pm_거래일_정해진_시각부터_받을_때까지_10분마�
     world.clock["now"] = datetime(2026, 9, 5, 11, 40)                       # 토요일
     world.tick()
     assert len(jobs("am")) == 2, "거래일 아니면 안 돈다"
+
+
+def test_news_daily_거래일_17시30분부터_20시까지_10분마다(world):
+    """데일리 테마 글은 16:59쯤 올라온다 — 17:30 부터 받을 때까지 10분 간격, 20:00 넘으면 포기."""
+    world.clock["now"] = datetime(2026, 9, 3, 17, 20)
+    world.tick()
+    assert world.jobs("infostock_daily") == [], "17:30 전"
+    world.clock["now"] = datetime(2026, 9, 3, 17, 31)
+    world.tick(); world.tick()
+    assert len(world.jobs("infostock_daily")) == 1 and world.jobs("infostock_daily")[0]["payload"] == {}
+    world.store.update(world.jobs("infostock_daily")[0]["job_id"], status="failed")
+    world.clock["now"] = datetime(2026, 9, 3, 17, 42)
+    world.tick()
+    assert len(world.jobs("infostock_daily")) == 2, "실패하면 10분 뒤 다시"
+    for j in world.jobs("infostock_daily"):
+        world.store.update(j["job_id"], status="failed")
+    world.clock["now"] = datetime(2026, 9, 3, 20, 5)
+    world.tick()
+    assert len(world.jobs("infostock_daily")) == 2, "20:00 넘으면 포기"

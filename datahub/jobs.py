@@ -27,7 +27,8 @@ POLL_SECONDS = 5.0
 clock = datetime.now            # 테스트가 가짜 시계로 바꾼다(처리기 안의 "지금")
 FAKE_ENV = "STUDIO_FAKE_COLLECTORS"
 ALLOWED_SCRIPTS = ("backfill_universe.py", "tick_collect_804_828_al.py", "tick_compact_daemon.py",
-                   "scripts/collect_program_al.py", "scripts/collect_infostock_news.py")
+                   "scripts/collect_program_al.py", "scripts/collect_infostock_news.py",
+                   "scripts/collect_infostock_daily.py")
 
 # kind -> (handler, 작업 그룹, 잠금 자원). 수집은 같은 그룹 `collect` 라 동시에 1개(REST 한도가 계정 단위라서).
 KINDS = {
@@ -41,6 +42,7 @@ KINDS = {
     "program_nightly": ("datahub.jobs:collect_program_al", "collect", "program_al"),
     # 뉴스는 키움 REST 를 안 쓴다 — `local` 그룹이라 프로그램·체결 수집 뒤에서 기다리지 않는다
     "infostock_news": ("datahub.jobs:collect_infostock_news", "local", "infostock_news"),
+    "infostock_daily": ("datahub.jobs:collect_infostock_daily", "local", "infostock_daily_theme"),
 }
 
 
@@ -209,6 +211,15 @@ def collect_infostock_news(ctx):
     cmd = collectors.collect_infostock_news(ctx.params.get("session", ""))
     ctx.progress(0, "수집", cmd.label)
     _ok(_Run(ctx, "infostock_news", "수집").run(cmd), "인포스탁 뉴스 수집")
+    ctx.progress(100, "완료")
+    return {"message": cmd.label}
+
+
+def collect_infostock_daily(ctx):
+    """인포스탁 데일리 테마 글(그날분). 종료코드 2(아직 안 올라옴)는 실패로 둬서 허브가 10분 뒤 다시 돌린다."""
+    cmd = collectors.collect_infostock_daily()
+    ctx.progress(0, "수집", cmd.label)
+    _ok(_Run(ctx, "infostock_daily_theme", "수집").run(cmd), "인포스탁 데일리 테마 수집")
     ctx.progress(100, "완료")
     return {"message": cmd.label}
 

@@ -125,6 +125,11 @@ def collect_infostock_news(session: str = "") -> Command:
     return Command(argv, _root(), label=f"인포스탁 뉴스 수집({session or '최신'})")
 
 
+def collect_infostock_daily() -> Command:
+    """인포스탁 데일리 테마(공개 API) — 최신 글 중 아직 없는 날짜만 저장."""
+    return Command([sys.executable, "scripts/collect_infostock_daily.py"], _root(), label="인포스탁 데일리 테마 수집")
+
+
 def archive_minute_al(codes: list[str] | None = None) -> Command:
     argv = [sys.executable, "-X", "utf8", "-m", "datahub", "archive-minute-al"] + (["--codes", *codes] if codes else ["--all"])
     return Command(argv, _root(), label="보관소 병합")
