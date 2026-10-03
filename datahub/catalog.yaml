@@ -23,6 +23,7 @@ locks:
   rs_rating:    {path: state/locks/data_rs_rating,    covers: [rs_rating, rs_raw, rs_period, rs_shares]}
   infostock_news: {path: state/locks/data_infostock_news, covers: [infostock_news]}
   infostock_daily_theme: {path: state/locks/data_infostock_daily_theme, covers: [infostock_daily_theme]}
+  hts_flash: {path: state/locks/data_hts_flash, covers: [hts_flash]}
 
 datasets:
   - id: daily
@@ -165,6 +166,20 @@ datasets:
     # API 가 2022-02 부터 다 주므로 지워져도 --all 로 다시 받는다(git 에는 안 넣음, 113MB)
     retention: regenerable
     notes: 인포스탁 저작물 — 분류만 개인 연구·표시에 쓰고 재배포하지 않는다. 사용자 정답 150개 중 서술 문장이 다룬 40건은 40건 다 일치(10-03)
+
+  - id: hts_flash
+    label: 영웅문 뉴스 창 인포스탁 플래시(장중, 09:0x부터)
+    basis: derived
+    path: data/news/hts_flash/{date}.jsonl
+    # kospi-theme-engine/hts_flash_feed.py(승격 실행)가 영웅문 [0700] 종합시황뉴스 창의 인포스탁 글을 15초마다 읽어 한 줄씩 덧붙인다.
+    # 제목 = 같이 움직이는 종목들(+등락률), 본문 ▶ = 테마. 글의 시각은 목록을 못 읽어 '읽은 시각'(seen_at). 영웅문이 꺼져 있으면 비어 있다.
+    lock: hts_flash
+    writers:
+      - {id: hts_flash_feed, cmd: kospi-theme-engine/hts_flash_feed.py, triggers: [manual, startup]}
+    readers: [소피증권 오늘 테마(플래시), 연구]
+    freshness: {}
+    retention: forever_unrecoverable
+    notes: 인포스탁 저작물(키움 HTS 경유) — 분류만 개인 연구·표시에 쓰고 재배포하지 않는다
 
   - id: sophie_reference
     label: 소피증권 기준 데이터
