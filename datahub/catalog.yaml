@@ -24,6 +24,7 @@ locks:
   infostock_news: {path: state/locks/data_infostock_news, covers: [infostock_news]}
   infostock_daily_theme: {path: state/locks/data_infostock_daily_theme, covers: [infostock_daily_theme]}
   hts_flash: {path: state/locks/data_hts_flash, covers: [hts_flash]}
+  hts_stock: {path: state/locks/data_hts_stock, covers: [hts_stock]}
 
 datasets:
   - id: daily
@@ -180,6 +181,20 @@ datasets:
     freshness: {}
     retention: forever_unrecoverable
     notes: 인포스탁 저작물(키움 HTS 경유) — 분류만 개인 연구·표시에 쓰고 재배포하지 않는다
+
+  - id: hts_stock
+    label: 영웅문 뉴스 창 종목 뉴스 조회 결과(급등 종목 "왜 오르나")
+    basis: derived
+    path: data/news/hts_stock/{date}.jsonl
+    # 소피증권이 급등을 잡으면 state/hts_news_req.jsonl 에 요청을 적고, hts_flash_feed.py(승격)가 [0700] 검색 칸에 종목명을 넣어
+    # 최신 제목 7개와 첫 기사 본문 앞부분을 읽어 한 줄씩 덧붙인다. 언론사 전체(뉴스핌·머니투데이·이데일리·인포스탁…).
+    lock: hts_stock
+    writers:
+      - {id: hts_flash_feed, cmd: kospi-theme-engine/hts_flash_feed.py, triggers: [manual, startup]}
+    readers: [소피증권 툴팁·급등 알림, 연구]
+    freshness: {}
+    retention: forever_unrecoverable
+    notes: 언론 기사 제목·앞부분만 개인 참고용으로 저장. 재배포 금지
 
   - id: sophie_reference
     label: 소피증권 기준 데이터
