@@ -25,6 +25,7 @@ locks:
   infostock_daily_theme: {path: state/locks/data_infostock_daily_theme, covers: [infostock_daily_theme]}
   hts_flash: {path: state/locks/data_hts_flash, covers: [hts_flash]}
   hts_stock: {path: state/locks/data_hts_stock, covers: [hts_stock]}
+  daily_al:  {path: state/locks/data_daily_al,  covers: [daily_al]}
 
 datasets:
   - id: daily
@@ -40,6 +41,19 @@ datasets:
     freshness: {rule: last_trading_day, deadline: "07:30"}
     retention: keep
     notes: 거래대금은 종가×거래량(KRX) 근사
+
+  - id: daily_al
+    label: 통합 일봉(실거래대금)
+    basis: AL
+    path: data/stocks/daily_al/{code}.csv
+    lock: daily_al
+    writers:
+      - {id: collect_daily_al, cmd: scripts/collect_daily_al.py, triggers: ["watchdog:daily_report", manual]}
+    readers: [신고가 후보 대금 등급(new_high)]
+    # 매일 받는 건 52주 고가 30% 이내 종목만(신고가 후보 모집단 + 여유) — 나머지는 낡아도 된다, 그래서 신선도 규칙 없음
+    freshness: {}
+    retention: keep
+    notes: 키움 ka10081 `{code}_AL`. 열 date(YYYYMMDD)·open·high·low·close·volume·value_mw(실거래대금, 백만원). 수정주가. NXT 개시(2025-03) 전은 KRX 와 같다
 
   - id: minute_krx
     label: 1분봉(KRX)
@@ -232,6 +246,7 @@ datasets:
     also: [data/sectors.csv, data/themes.csv, data/theme_group_map.csv]
     lock: null
     writers:
+      - {id: refresh_names, cmd: scripts/refresh_stock_names.py, triggers: ["watchdog:daily_report", manual]}  # stock_names.json 만(키움 ka10099, 바뀐 이름 고침·새 종목 추가·폐지는 안 지움)
       - {id: manual, cmd: manual, triggers: [manual]}
     readers: [전부]
     freshness: {rule: none}

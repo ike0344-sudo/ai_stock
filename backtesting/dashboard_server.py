@@ -164,6 +164,8 @@ CONTENT_TYPES = {
     "newhigh_ohlc.json": "application/json; charset=utf-8",  # 신고가 후보 마우스 오버 52주 일봉(new_high.build_ohlc)
     "ledger.html": "text/html; charset=utf-8",  # 신고가 장부(09-29)
     "newhigh_ledger.json": "application/json; charset=utf-8",  # new_high.build_ledger 가 매일 밤 새로 씀
+    "burst.html": "text/html; charset=utf-8",  # 거래대금 폭발(10-04)
+    "value_burst.json": "application/json; charset=utf-8",  # value_burst.write_json 이 매일 밤 새로 씀
 }
 
 DEFAULT_STRATEGY = "strategy_1"
@@ -400,6 +402,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._send_static("ledger.html")
         elif parsed.path == "/newhigh_ledger.json":
             self._send_static("newhigh_ledger.json")
+        elif parsed.path in ("/burst.html", "/value_burst.json"):
+            self._send_static(parsed.path[1:])
         else:
             self.send_response(404)
             self.end_headers()

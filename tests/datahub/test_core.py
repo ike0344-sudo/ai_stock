@@ -20,8 +20,8 @@ from .conftest import REPO, run_py
 
 def test_h1_real_catalog_loads():
     cat = catalog.load()                                   # 실제 catalog.yaml — pydantic 검증 통과
-    assert len(cat.datasets) == 22  # hts_flash·hts_stock(10-04) +2 · 2026-09-28 rs_rating·rs_raw·rs_period·rs_shares(11->15) + sectors_stockeasy(->16) + program_al(09-30, ->17) + sophie_rank_tape(10-02, ->18) + infostock_news·infostock_daily_theme(10-03, ->20)
-    assert set(cat.locks) == {"daily_minute", "minute_al", "tick_al", "rs_rating", "program_al", "infostock_news", "infostock_daily_theme", "hts_flash", "hts_stock"}  # 2026-09-28 rs_rating · 10-03 infostock_news·daily · 10-04 hts_flash·hts_stock
+    assert len(cat.datasets) == 23  # daily_al(10-04) +1 · hts_flash·hts_stock(10-04) +2 · 2026-09-28 rs_rating·rs_raw·rs_period·rs_shares(11->15) + sectors_stockeasy(->16) + program_al(09-30, ->17) + sophie_rank_tape(10-02, ->18) + infostock_news·infostock_daily_theme(10-03, ->20)
+    assert set(cat.locks) == {"daily_minute", "minute_al", "tick_al", "rs_rating", "program_al", "infostock_news", "infostock_daily_theme", "hts_flash", "hts_stock", "daily_al"}  # 10-04 daily_al · 2026-09-28 rs_rating · 10-03 infostock_news·daily · 10-04 hts_flash·hts_stock
     for d in cat.datasets:
         for p in [d.path, *d.also]:
             assert not Path(p).is_absolute() and ".." not in Path(p).parts

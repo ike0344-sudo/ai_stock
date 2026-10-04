@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>거래대금 폭발</title>
+<link rel="stylesheet" href="/market.css">
+<style>
+  /* 거래대금 폭발 — backtesting/value_burst.py 가 매일 밤 만드는 value_burst.json(통합 실거래대금 기준) */
+  #burst-table td, #burst-table th { font-variant-numeric: tabular-nums; }
+  .tier { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: .78rem; font-weight: 700; white-space: nowrap; }
+  .tier-역대 { background: var(--up); color: #fff; }
+  .tier-4년 { background: var(--up-soft); color: var(--text); border: 1px solid var(--up); }
+  .tier-1년 { background: var(--accent-soft); color: var(--text); border: 1px solid var(--accent); }
+  .tier-평소 { background: var(--card-bg); color: var(--text); border: 1px dashed var(--text-dim); }
+  .tier-유의미 { background: var(--chip-bg); color: var(--text); border: 1px solid var(--chip-border); }
+  .sub-line { display: block; font-size: .74rem; color: var(--text-dim); }
+  .touch { color: var(--up); font-weight: 600; }
+  .sec-line { display: block; font-size: .78rem; white-space: nowrap; }
+  #hover-chart { position: fixed; z-index: 50; width: 640px; background: var(--card-bg); border: 1px solid var(--card-border);
+    border-radius: 12px; box-shadow: 0 8px 28px rgba(20,20,30,.18); padding: 10px 12px 8px; pointer-events: none; }
+  #hover-chart .hc-title { display: flex; justify-content: space-between; align-items: baseline; font-size: .86rem; margin-bottom: 4px; }
+  #hover-chart .hc-sub { color: var(--text-dim); font-size: .76rem; }
+  #hover-chart svg { display: block; width: 100%; height: auto; }
+  #hover-chart .hc-legend { display: flex; gap: 12px; font-size: .72rem; color: var(--text-dim); margin-top: 2px; }
+  #hover-chart .hc-legend i { display: inline-block; width: 14px; height: 0; border-top: 2px solid; vertical-align: middle; margin-right: 4px; }
+</style>
+</head>
+<body>
+
+  <div class="page-tabs">
+    <a href="/rs.html">RS 상위</a>
+    <a href="/newhigh.html#new">52주 신고가</a>
+    <a href="/newhigh.html#candidates">신고가 후보</a>
+    <a href="/ledger.html">신고가 장부</a>
+    <a href="/burst.html" class="active">거래대금 폭발</a>
+  </div>
+
+  <div class="card">
+    <header class="top">
+      <div><h1>거래대금 폭발<span class="sub" id="as-of">-</span></h1></div>
+      <nav>
+        <span class="seg">
+          <button id="font-smaller-button" type="button">A-</button>
+          <button id="font-bigger-button" type="button">A+</button>
+        </span>
+        &nbsp;·&nbsp;
+        <a href="/">← 메인</a>
+      </nav>
+    </header>
+    <p class="note">
+      최근 <b id="win-days">20</b>거래일 안에 거래대금이 크게 터진 종목입니다. 대금은 <b>통합(KRX+NXT) 실거래대금</b>이고, 그날 대금을 그날 이전 기간의 최대와 비교해 등급을 매깁니다.
+      <span class="tier tier-역대">역대</span> 데이터 기간(약 7년) 최대 초과 ·
+      <span class="tier tier-4년">4년</span> 직전 4년 최대 초과 ·
+      <span class="tier tier-1년">1년</span> 직전 1년 최대 초과 ·
+      <span class="tier tier-유의미">1년 유의미</span> 직전 1년 최대의 70% 이상 ·
+      <span class="tier tier-평소">평소 대비</span> 1,000억 이상이면서 직전 20일 평균의 2.5배 이상이고 그날 +7% 이상(과거에 더 크게 터진 적이 있어도 잡힌다).
+      한 종목에 여러 날이면 가장 높은 등급의 날을 보여 줍니다. 폭발일 아래 = 폭발일 기준 240일 고점(옛 고점)을 그날 이후 처음 넘은 날 — 종가로 넘었으면 <b>종가 돌파</b>(빨강), 고가만 닿았으면 <b>터치</b>. 지금 종가가 옛 고점 위면 고점까지 칸에 <b>돌파 중</b>과 옛 고점 대비 상승폭이 나옵니다. 남은 거리 = 오늘 포함 240거래일 고점 ÷ 현재가 − 1(0%면 지금이 고점).
+      등락률·현재가·고점은 KRX 종가 기준입니다. RS = RS 종합(1M = 최근 1개월 RS), 섹터 RS = 그 섹터(스탁이지 대분류/세부섹터) 전 종목 RS 종합의 중앙값.
+      종목 줄에 마우스를 올리면 240일 일봉(5·10·20일선)이 나옵니다.
+    </p>
+    <p id="error-box" class="err hidden"></p>
+  </div>
+
+  <div class="card">
+    <div class="filters">
+      <div class="grp">등급
+        <select id="tier-select">
+          <option value="0">역대만</option>
+          <option value="1">4년 이상</option>
+          <option value="2">1년 이상</option>
+          <option value="3">1년 유의미 이상</option>
+          <option value="4">평소 대비 이상(전체)</option>
+        </select>
+      </div>
+      <div class="grp">대금
+        <select id="value-select">
+          <option value="300">300억+</option>
+          <option value="500">500억+</option>
+          <option value="1000">1,000억+</option>
+          <option value="2000">2,000억+</option>
+          <option value="5000">5,000억+</option>
+        </select>
+      </div>
+      <div class="grp">폭발일 등락
+        <select id="chg-select">
+          <option value="-99">전체</option>
+          <option value="0">상승만</option>
+          <option value="7">+7% 이상</option>
+          <option value="15">+15% 이상</option>
+        </select>
+      </div>
+      <div class="grp">고점까지
+        <select id="dist-select">
+          <option value="999">전체</option>
+          <option value="10">10% 이내</option>
+          <option value="20">20% 이내</option>
+          <option value="25">25% 이내</option>
+          <option value="30">30% 이내</option>
+        </select>
+      </div>
+      <div class="grp">RS
+        <select id="rs-select">
+          <option value="0">전체</option>
+          <option value="70">70+</option>
+          <option value="80">80+</option>
+          <option value="90">90+</option>
+        </select>
+      </div>
+      <div class="grp"><input type="text" id="search-input" placeholder="종목명·코드 검색"></div>
+      <span class="count-badge"><b id="row-count">0</b>개 종목</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table id="burst-table">
+        <thead>
+          <tr>
+            <th data-key="tierRank">등급</th>
+            <th data-key="이름" class="col-name">종목</th>
+            <th data-key="rs">RS(1M)</th>
+            <th data-key="섹터rs" class="col-name">섹터 RS</th>
+            <th data-key="남은거리">고점까지</th>
+            <th data-key="폭발일">폭발일</th>
+            <th data-key="대금">대금(억)</th>
+            <th data-key="폭발일등락">폭발일 등락</th>
+            <th data-key="현재가">현재가</th>
+            <th data-key="현재등락">오늘</th>
+            <th data-key="고점240">240일 고점</th>
+          </tr>
+        </thead>
+        <tbody id="table-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    const LS = { font: "ranking-root-font-px", tier: "burst-tier", value: "burst-value", chg: "burst-chg", dist: "burst-dist", rs: "burst-rs", sortKey: "burst-sort-key", sortDir: "burst-sort-dir" };
+    function lsGet(key, dflt) { try { const v = localStorage.getItem(key); return v === null ? dflt : v; } catch (e) { return dflt; } }
+    function lsSet(key, v) { try { localStorage.setItem(key, v); } catch (e) {} }
+
+    const TIERS = ["역대", "4년", "1년", "1년 유의미", "평소 대비"];
+    const state = { tier: lsGet(LS.tier, "4"), value: lsGet(LS.value, "1000"), chg: lsGet(LS.chg, "-99"), dist: lsGet(LS.dist, "999"), rs: lsGet(LS.rs, "0"),
+                    sortKey: lsGet(LS.sortKey, "tierRank"), sortDir: Number(lsGet(LS.sortDir, "1")), q: "" };
+    let ROWS = [];
+
+    const fmt = (n) => Math.round(n).toLocaleString("ko-KR");
+    const pct = (n) => (n === null || n === undefined) ? "-" : (n > 0 ? "+" : "") + n.toFixed(1) + "%";
+    const cls = (n) => (!n) ? "flat" : n > 0 ? "up" : "down";
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    const tierBadge = (t) => `<span class="tier tier-${t === "1년 유의미" ? "유의미" : t === "평소 대비" ? "평소" : t}">${t}</span>`;
+
+    function render() {
+      let list = ROWS.filter((r) => r.tierRank <= Number(state.tier) && r["대금"] >= Number(state.value)
+        && r["폭발일등락"] >= Number(state.chg) && r["남은거리"] <= Number(state.dist) && (state.rs === "0" || (r.rs ?? -1) >= Number(state.rs)));
+      if (state.q) list = list.filter((r) => r["이름"].includes(state.q) || r["코드"].includes(state.q));
+      const k = state.sortKey, dir = state.sortDir;
+      list.sort((a, b) => {
+        const x = a[k], y = b[k];
+        if (x === null || x === undefined) return 1;
+        if (y === null || y === undefined) return -1;
+        return (typeof x === "string" ? x.localeCompare(y) : x - y) * dir || b["대금"] - a["대금"];
+      });
+      document.querySelectorAll("#burst-table thead th").forEach((th) => th.classList.toggle("sorted", th.dataset.key === k));
+      document.getElementById("row-count").textContent = list.length;
+      const tbody = document.getElementById("table-body");
+      tbody.innerHTML = list.map((r) => `<tr data-code="${r["코드"]}">
+        <td>${tierBadge(r["등급"])}${r["횟수"] > 1 ? `<span class="sub-line">20일 중 ${r["횟수"]}번</span>` : ""}</td>
+        <td class="col-name"><span class="name-main">${esc(r["이름"])}</span><span class="name-code">${r["코드"]}</span></td>
+        <td>${rsCell(r.rs)} <span class="sub-line" style="display:inline">${r.rs_1m === null || r.rs_1m === undefined ? "" : "1M " + r.rs_1m}</span></td>
+        <td class="col-name"><span class="sec-line">${esc(r["섹터"])} ${rsCell(r["섹터rs"])}</span><span class="sec-line sub-line">${esc(r["세부섹터"])} ${rsCell(r["세부섹터rs"])}</span></td>
+        <td>${distCell(r)}</td>
+        <td>${r["폭발일"].slice(5)}${hitLine(r)}</td>
+        <td><b>${fmt(r["대금"])}</b><span class="sub-line">비교 ${fmt(r["비교대금"])} · ×${r["배수"].toFixed(2)}</span></td>
+        <td class="${cls(r["폭발일등락"])}">${pct(r["폭발일등락"])}</td>
+        <td>${fmt(r["현재가"])}</td>
+        <td class="${cls(r["현재등락"])}">${pct(r["현재등락"])}</td>
+        <td>${fmt(r["고점240"])}<span class="sub-line">${r["고점일"]}</span></td>
+      </tr>`).join("") || '<tr class="empty-row"><td colspan="11">조건에 맞는 종목이 없습니다</td></tr>';
+      const byCode = new Map(list.map((r) => [r["코드"], r]));
+      tbody.querySelectorAll("tr[data-code]").forEach((tr) => bindHover(tr, byCode.get(tr.dataset.code)));
+    }
+
+    // 폭발일 기준 240일 고점(기준고점)을 그날 이후 처음 넘은 날 — 종가로 넘었으면 '돌파', 고가만 닿았으면 '터치'
+    const when = (day, n) => n === 0 ? "그날" : `${day.slice(5)}(+${n}일)`;
+    function hitLine(r) {
+      if (r["돌파일"]) return `<span class="sub-line touch">${when(r["돌파일"], r["돌파까지일"])} 종가 돌파</span>`;
+      if (r["터치일"]) return `<span class="sub-line">${when(r["터치일"], r["터치까지일"])} 고점 터치(종가는 못 넘음)</span>`;
+      return "";
+    }
+    // 지금 종가가 기준고점 위면 '돌파 중' + 옛 고점 대비 얼마나 올라 있는지, 아니면 남은 거리
+    function distCell(r) {
+      if (r["현재가"] >= r["기준고점"]) return `<b class="up">돌파 중</b><span class="sub-line">옛 고점 ${fmt(r["기준고점"])} 대비 +${((r["현재가"] / r["기준고점"] - 1) * 100).toFixed(1)}%</span>`;
+      return `<b>${r["남은거리"] <= 0 ? "고점" : r["남은거리"].toFixed(1) + "%"}</b>`;
+    }
+
+    function rsCell(v) {
+      if (v === null || v === undefined) return '<span class="rs-lo">-</span>';
+      const n = Math.round(v);
+      const c = n >= 90 ? "rs-chip rs-90" : n >= 80 ? "rs-chip rs-80" : n >= 70 ? "rs-chip rs-70" : "rs-lo";
+      return `<span class="${c}">${n}</span>`;
+    }
+
+    // ---- 마우스 오버 240일 일봉 + 5·10·20일선 (사용자 10-04). 일봉은 value_burst.json 의 ohlc(240+19일 — 20일선 워밍업)
+    let OHLC = {};
+    const SHOW = 240, MAS = [[5, "#e0a500"], [10, "#16a34a"], [20, "#7c5cff"]];
+    const hc = document.createElement("div"); hc.id = "hover-chart"; hc.hidden = true; document.body.appendChild(hc);
+    function ma(arr, n) { const out = []; let s = 0; arr.forEach((v, i) => { s += v; if (i >= n) s -= arr[i - n]; out.push(i >= n - 1 ? s / n : null); }); return out; }
+    function candleSvg(all, high240, burstDay) {
+      const skip = Math.max(0, all.length - SHOW), rows = all.slice(skip);
+      const W = 616, H = 300, PH = 228, VH = 52, padR = 52, n = rows.length, cw = (W - padR) / n;
+      const lines = MAS.map(([w, color]) => [ma(all.map((r) => r[4]), w).slice(skip), color]);
+      const hi = Math.max(...rows.map((r) => r[2])), lo = Math.min(...rows.map((r) => r[3]));
+      const pad = (hi - lo) * 0.04, top = hi + pad, bot = lo - pad;
+      const y = (v) => ((top - v) / (top - bot)) * PH;
+      const vmax = Math.max(...rows.map((r) => r[5])) || 1;
+      let g = "";
+      for (let k = 0; k <= 4; k++) {
+        const v = bot + (top - bot) * k / 4, yy = y(v).toFixed(1);
+        g += `<line x1="0" x2="${W - padR}" y1="${yy}" y2="${yy}" stroke="var(--card-border)" stroke-width="1"/>`;
+        g += `<text x="${W - padR + 4}" y="${yy}" dy="3" font-size="10" fill="var(--text-dim)">${Math.round(v).toLocaleString("ko-KR")}</text>`;
+      }
+      rows.forEach((r, i) => {
+        const [d, o, h, l, c, v] = r, x = i * cw, cx = x + cw / 2, up = c >= o;
+        const col = up ? "var(--up)" : "var(--down)";
+        if (d === burstDay) g += `<rect x="${x.toFixed(1)}" y="0" width="${Math.max(2, cw).toFixed(1)}" height="${H}" fill="var(--accent)" opacity=".15"/>`;
+        const bt = y(Math.max(o, c)), bh = Math.max(1, Math.abs(y(o) - y(c)));
+        g += `<line x1="${cx.toFixed(1)}" x2="${cx.toFixed(1)}" y1="${y(h).toFixed(1)}" y2="${y(l).toFixed(1)}" stroke="${col}" stroke-width="1"/>`;
+        g += `<rect x="${(x + cw * 0.15).toFixed(1)}" y="${bt.toFixed(1)}" width="${Math.max(1, cw * 0.7).toFixed(1)}" height="${bh.toFixed(1)}" fill="${col}"/>`;
+        const vh = (v / vmax) * (VH - 4);
+        g += `<rect x="${(x + cw * 0.15).toFixed(1)}" y="${(H - vh).toFixed(1)}" width="${Math.max(1, cw * 0.7).toFixed(1)}" height="${vh.toFixed(1)}" fill="${col}" opacity=".35"/>`;
+      });
+      for (const [vals, color] of lines)
+        g += `<polyline fill="none" stroke="${color}" stroke-width="1.2" points="${vals.map((v, i) => v === null ? "" : `${((i + 0.5) * cw).toFixed(1)},${y(v).toFixed(1)}`).filter(Boolean).join(" ")}"/>`;
+      const yy = y(high240).toFixed(1);
+      g += `<line x1="0" x2="${W - padR}" y1="${yy}" y2="${yy}" stroke="var(--up)" stroke-dasharray="4 3" stroke-width="1.2"/>`;
+      g += `<text x="${W - padR + 4}" y="${yy}" dy="3" font-size="10" font-weight="700" fill="var(--up)">${Math.round(high240).toLocaleString("ko-KR")}</text>`;
+      const dl = (s) => `${String(s).slice(2, 4)}.${String(s).slice(4, 6)}`;
+      [0, Math.floor(n / 4), Math.floor(n / 2), Math.floor(3 * n / 4), n - 1].forEach((i) => {
+        g += `<text x="${((i + 0.5) * cw).toFixed(1)}" y="${PH + 13}" font-size="10" text-anchor="middle" fill="var(--text-dim)">${dl(rows[i][0])}</text>`;
+      });
+      return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="240일 일봉">${g}</svg>`;
+    }
+    function placeHc(ev) {
+      const pad = 16, w = hc.offsetWidth, h = hc.offsetHeight;
+      let x = ev.clientX + pad, yy = ev.clientY + pad;
+      if (x + w > window.innerWidth - 8) x = ev.clientX - w - pad;
+      if (yy + h > window.innerHeight - 8) yy = Math.max(8, window.innerHeight - h - 8);
+      hc.style.left = Math.max(8, x) + "px"; hc.style.top = yy + "px";
+    }
+    function showHc(r, ev) {
+      const rows = OHLC[r["코드"]];
+      hc.hidden = false;
+      if (!rows || rows.length < 5) { hc.innerHTML = `<div class="hc-title"><b>${esc(r["이름"])}</b><span class="hc-sub">일봉 없음</span></div>`; placeHc(ev); return; }
+      hc.innerHTML = `<div class="hc-title"><span><b>${esc(r["이름"])}</b> <span class="hc-sub">${r["코드"]} · ${esc(r["섹터"])} · 최근 ${Math.min(SHOW, rows.length)}거래일</span></span>`
+        + `<span class="hc-sub">종가 ${fmt(rows[rows.length - 1][4])} · 240일 고점 ${fmt(r["고점240"])}</span></div>`
+        + candleSvg(rows, r["고점240"], Number(r["폭발일"].replaceAll("-", "")))
+        + `<div class="hc-legend">${MAS.map(([w, c]) => `<span><i style="border-color:${c}"></i>${w}일선</span>`).join("")}<span><i style="border-color:var(--up);border-top-style:dashed"></i>240일 고점</span><span>파란 띠 = 폭발일</span></div>`;
+      placeHc(ev);
+    }
+    function bindHover(tr, r) {
+      tr.addEventListener("mouseenter", (ev) => showHc(r, ev));
+      tr.addEventListener("mousemove", placeHc);
+      tr.addEventListener("mouseleave", () => { hc.hidden = true; });
+    }
+
+    for (const [id, key] of [["tier-select", "tier"], ["value-select", "value"], ["chg-select", "chg"], ["dist-select", "dist"], ["rs-select", "rs"]]) {
+      const el = document.getElementById(id);
+      if (![...el.options].some((o) => o.value === state[key])) state[key] = el.options[el.options.length - 1].value;
+      el.value = state[key];
+      el.addEventListener("change", () => { state[key] = el.value; lsSet(LS[key], el.value); render(); });
+    }
+    document.getElementById("search-input").addEventListener("input", (e) => { state.q = e.target.value.trim(); render(); });
+    document.querySelectorAll("#burst-table thead th").forEach((th) => th.addEventListener("click", () => {
+      const key = th.dataset.key;
+      if (state.sortKey === key) state.sortDir = -state.sortDir;
+      else { state.sortKey = key; state.sortDir = (key === "tierRank" || key === "이름" || key === "남은거리") ? 1 : -1; }
+      lsSet(LS.sortKey, state.sortKey); lsSet(LS.sortDir, state.sortDir);
+      render();
+    }));
+
+    async function load() {
+      const errBox = document.getElementById("error-box");
+      try {
+        const res = await fetch("/value_burst.json", { cache: "no-store" });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        OHLC = data.ohlc || {};
+        ROWS = data.rows.map((r) => ({ ...r, tierRank: TIERS.indexOf(r["등급"]) }));
+        document.getElementById("as-of").textContent = `${data.since} ~ ${data.date}`;
+        document.getElementById("win-days").textContent = data.window_days;
+        errBox.classList.add("hidden");
+        render();
+      } catch (e) {
+        errBox.textContent = "데이터를 못 읽었습니다 (" + e.message + ") — 야간 갱신(value_burst) 뒤에 생깁니다.";
+        errBox.classList.remove("hidden");
+      }
+    }
+
+    const MIN_FONT_PX = 14, MAX_FONT_PX = 26, DEFAULT_FONT_PX = 18;
+    function savedFont() { const v = parseInt(lsGet(LS.font, DEFAULT_FONT_PX), 10); return isFinite(v) ? v : DEFAULT_FONT_PX; }
+    function applyFontSize(px) { document.documentElement.style.fontSize = px + "px"; lsSet(LS.font, px); }
+    function changeFontSize(delta) { applyFontSize(Math.min(MAX_FONT_PX, Math.max(MIN_FONT_PX, savedFont() + delta))); }
+    document.getElementById("font-smaller-button").addEventListener("click", () => changeFontSize(-2));
+    document.getElementById("font-bigger-button").addEventListener("click", () => changeFontSize(2));
+    applyFontSize(savedFont());
+
+    load();
+  </script>
+</body>
+</html>

@@ -111,6 +111,10 @@ def main() -> None:
         except Exception as e:                      # 지수가 실패해도 종목 기반 재계산은 의미가 있다
             log(f"지수 증분 수집 실패(계속 진행): {e}")
 
+        # 종목명(10-04): 이름이 바뀐 종목이 화면에 옛 이름으로 나오지 않게, 화면 데이터를 만들기 전에 키움 목록으로 고친다.
+        # 실패해도 이름이 하루 낡을 뿐이라 전체 성공 여부에는 넣지 않는다.
+        run([sys.executable, "scripts/refresh_stock_names.py"], "종목명 갱신")
+
         # 일봉이 갱신된 직후에 120일 신고가를 다시 뽑는다 — 순서가 바뀌면 하루 낡은
         # 고가로 거래대금 상위 화면에 별표가 붙는다. 실패해도 뒤 단계는 계속 돈다
         # (별표가 하루 낡을 뿐, 리포트 파이프라인과는 무관하다).
@@ -138,6 +142,16 @@ def main() -> None:
             log(f"52주 신고가 갱신 완료 ({nh_path})")
         except Exception as e:
             log(f"RS 점수 갱신 실패: {type(e).__name__}: {e}")
+
+        # 거래대금 폭발 화면(10-04) — 대금은 통합(KRX+NXT) 일봉으로만 잰다(KRX 일봉은 NXT 가 빠져 반 토막).
+        # 실패해도 화면이 하루 낡을 뿐이라 전체 성공 여부에는 넣지 않는다.
+        run([sys.executable, "scripts/collect_daily_al.py"], "통합 일봉 증분 수집")
+        try:
+            from backtesting import value_burst
+            vb = value_burst.build()
+            log(f"거래대금 폭발 갱신 완료 ({value_burst.write_json(vb)}, {len(vb['rows'])}종목)")
+        except Exception as e:
+            log(f"거래대금 폭발 갱신 실패: {type(e).__name__}: {e}")
 
     for cmd, label, env_extra in STEPS:
         if not run(cmd, label, env_extra):
