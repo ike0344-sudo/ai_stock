@@ -56,7 +56,7 @@
       <span class="tier tier-유의미">1년 유의미</span> 직전 1년 최대의 70% 이상 ·
       <span class="tier tier-평소">평소 대비</span> 1,000억 이상이면서 직전 20일 평균의 2.5배 이상이고 그날 +7% 이상(과거에 더 크게 터진 적이 있어도 잡힌다).
       한 종목에 여러 날이면 가장 높은 등급의 날을 보여 줍니다. 폭발일 아래 = 폭발일 기준 240일 고점(옛 고점)을 그날 이후 처음 넘은 날 — 종가로 넘었으면 <b>종가 돌파</b>(빨강), 고가만 닿았으면 <b>터치</b>. 지금 종가가 옛 고점 위면 고점까지 칸에 <b>돌파 중</b>과 옛 고점 대비 상승폭이 나옵니다. 남은 거리 = 오늘 포함 240거래일 고점 ÷ 현재가 − 1(0%면 지금이 고점).
-      등락률·현재가·고점은 KRX 종가 기준입니다. RS = RS 종합(1M = 최근 1개월 RS), 섹터 RS = 그 섹터(스탁이지 대분류/세부섹터) 전 종목 RS 종합의 중앙값.
+      등락률·현재가·240일 고점·옛 고점은 <b>가격 기준</b> 버튼으로 통합(KRX+NXT, 영웅문 통합 차트와 같은 값)과 KRX 중에 고릅니다. 거래대금 등급은 언제나 통합입니다. RS = RS 종합(1M = 최근 1개월 RS), 섹터 RS = 그 섹터(스탁이지 대분류/세부섹터) 전 종목 RS 종합의 중앙값.
       종목 줄에 마우스를 올리면 240일 일봉(5·10·20일선)이 나옵니다.
     </p>
     <p id="error-box" class="err hidden"></p>
@@ -64,6 +64,12 @@
 
   <div class="card">
     <div class="filters">
+      <div class="grp">가격 기준
+        <span class="seg" id="basis-seg">
+          <button type="button" data-basis="통합">통합(KRX+NXT)</button>
+          <button type="button" data-basis="KRX">KRX</button>
+        </span>
+      </div>
       <div class="grp">등급
         <select id="tier-select">
           <option value="0">역대만</option>
@@ -136,14 +142,23 @@
   </div>
 
   <script>
-    const LS = { font: "ranking-root-font-px", tier: "burst-tier", value: "burst-value", chg: "burst-chg", dist: "burst-dist", rs: "burst-rs", sortKey: "burst-sort-key", sortDir: "burst-sort-dir" };
+    const LS = { font: "ranking-root-font-px", tier: "burst-tier", value: "burst-value", chg: "burst-chg", dist: "burst-dist", rs: "burst-rs", basis: "burst-basis", sortKey: "burst-sort-key", sortDir: "burst-sort-dir" };
     function lsGet(key, dflt) { try { const v = localStorage.getItem(key); return v === null ? dflt : v; } catch (e) { return dflt; } }
     function lsSet(key, v) { try { localStorage.setItem(key, v); } catch (e) {} }
 
     const TIERS = ["역대", "4년", "1년", "1년 유의미", "평소 대비"];
     const state = { tier: lsGet(LS.tier, "4"), value: lsGet(LS.value, "1000"), chg: lsGet(LS.chg, "-99"), dist: lsGet(LS.dist, "999"), rs: lsGet(LS.rs, "0"),
-                    sortKey: lsGet(LS.sortKey, "tierRank"), sortDir: Number(lsGet(LS.sortDir, "1")), q: "" };
-    let ROWS = [];
+                    basis: lsGet(LS.basis, "통합"), sortKey: lsGet(LS.sortKey, "tierRank"), sortDir: Number(lsGet(LS.sortDir, "1")), q: "" };
+    let ROWS = [], DATA = null;
+    // 가격 칸은 고른 기준(통합/KRX)의 값을 줄에 펼쳐 넣는다 — 정렬·필터·표가 같은 이름으로 읽게. KRX 일봉이 없는 종목은 통합으로.
+    function applyBasis() {
+      ROWS = DATA.rows.map((r) => ({ ...r, ...(r["가격"][state.basis] || r["가격"]["통합"]), tierRank: TIERS.indexOf(r["등급"]) }));
+      document.querySelectorAll("#basis-seg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.basis === state.basis)));
+      render();
+    }
+    document.querySelectorAll("#basis-seg button").forEach((b) => b.addEventListener("click", () => {
+      state.basis = b.dataset.basis; lsSet(LS.basis, state.basis); applyBasis();
+    }));
 
     const fmt = (n) => Math.round(n).toLocaleString("ko-KR");
     const pct = (n) => (n === null || n === undefined) ? "-" : (n > 0 ? "+" : "") + n.toFixed(1) + "%";
@@ -191,7 +206,7 @@
     }
     // 지금 종가가 기준고점 위면 '돌파 중' + 옛 고점 대비 얼마나 올라 있는지, 아니면 남은 거리
     function distCell(r) {
-      if (r["현재가"] >= r["기준고점"]) return `<b class="up">돌파 중</b><span class="sub-line">옛 고점 ${fmt(r["기준고점"])} 대비 +${((r["현재가"] / r["기준고점"] - 1) * 100).toFixed(1)}%</span>`;
+      if (r["현재가"] > r["기준고점"]) return `<b class="up">돌파 중</b><span class="sub-line">옛 고점 ${fmt(r["기준고점"])} 대비 +${((r["현재가"] / r["기준고점"] - 1) * 100).toFixed(1)}%</span>`;
       return `<b>${r["남은거리"] <= 0 ? "고점" : r["남은거리"].toFixed(1) + "%"}</b>`;
     }
 
@@ -203,7 +218,14 @@
     }
 
     // ---- 마우스 오버 240일 일봉 + 5·10·20일선 (사용자 10-04). 일봉은 value_burst.json 의 ohlc(240+19일 — 20일선 워밍업)
-    let OHLC = {};
+    // 일봉(통합·KRX)은 value_burst_ohlc.json 에 따로 있다 — 처음 마우스를 올릴 때 한 번만 받는다(휴대폰은 오버가 없어 안 받음)
+    let OHLC_ALL = null, ohlcLoading = null;
+    function loadOhlc() {
+      if (OHLC_ALL || ohlcLoading) return ohlcLoading;
+      ohlcLoading = fetch("/value_burst_ohlc.json", { cache: "no-store" }).then((r) => r.ok ? r.json() : {}).then((j) => { OHLC_ALL = j; return j; }).catch(() => { OHLC_ALL = {}; return OHLC_ALL; });
+      return ohlcLoading;
+    }
+    const ohlcOf = (code) => ((OHLC_ALL || {})[state.basis] || (OHLC_ALL || {})["통합"] || {})[code];
     const SHOW = 240, MAS = [[5, "#e0a500"], [10, "#16a34a"], [20, "#7c5cff"]];
     const hc = document.createElement("div"); hc.id = "hover-chart"; hc.hidden = true; document.body.appendChild(hc);
     function ma(arr, n) { const out = []; let s = 0; arr.forEach((v, i) => { s += v; if (i >= n) s -= arr[i - n]; out.push(i >= n - 1 ? s / n : null); }); return out; }
@@ -249,11 +271,13 @@
       if (yy + h > window.innerHeight - 8) yy = Math.max(8, window.innerHeight - h - 8);
       hc.style.left = Math.max(8, x) + "px"; hc.style.top = yy + "px";
     }
-    function showHc(r, ev) {
-      const rows = OHLC[r["코드"]];
-      hc.hidden = false;
+    async function showHc(r, ev) {
+      hc.hidden = false; hc.dataset.code = r["코드"];
+      if (!OHLC_ALL) { hc.innerHTML = `<div class="hc-title"><b>${esc(r["이름"])}</b><span class="hc-sub">일봉 불러오는 중…</span></div>`; placeHc(ev); await loadOhlc(); }
+      if (hc.dataset.code !== r["코드"] || hc.hidden) return;
+      const rows = ohlcOf(r["코드"]);
       if (!rows || rows.length < 5) { hc.innerHTML = `<div class="hc-title"><b>${esc(r["이름"])}</b><span class="hc-sub">일봉 없음</span></div>`; placeHc(ev); return; }
-      hc.innerHTML = `<div class="hc-title"><span><b>${esc(r["이름"])}</b> <span class="hc-sub">${r["코드"]} · ${esc(r["섹터"])} · 최근 ${Math.min(SHOW, rows.length)}거래일</span></span>`
+      hc.innerHTML = `<div class="hc-title"><span><b>${esc(r["이름"])}</b> <span class="hc-sub">${r["코드"]} · ${esc(r["섹터"])} · 최근 ${Math.min(SHOW, rows.length)}거래일 · ${state.basis}</span></span>`
         + `<span class="hc-sub">종가 ${fmt(rows[rows.length - 1][4])} · 240일 고점 ${fmt(r["고점240"])}</span></div>`
         + candleSvg(rows, r["고점240"], Number(r["폭발일"].replaceAll("-", "")))
         + `<div class="hc-legend">${MAS.map(([w, c]) => `<span><i style="border-color:${c}"></i>${w}일선</span>`).join("")}<span><i style="border-color:var(--up);border-top-style:dashed"></i>240일 고점</span><span>파란 띠 = 폭발일</span></div>`;
@@ -262,7 +286,7 @@
     function bindHover(tr, r) {
       tr.addEventListener("mouseenter", (ev) => showHc(r, ev));
       tr.addEventListener("mousemove", placeHc);
-      tr.addEventListener("mouseleave", () => { hc.hidden = true; });
+      tr.addEventListener("mouseleave", () => { hc.hidden = true; hc.dataset.code = ""; });
     }
 
     for (const [id, key] of [["tier-select", "tier"], ["value-select", "value"], ["chg-select", "chg"], ["dist-select", "dist"], ["rs-select", "rs"]]) {
@@ -286,12 +310,11 @@
         const res = await fetch("/value_burst.json", { cache: "no-store" });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
-        OHLC = data.ohlc || {};
-        ROWS = data.rows.map((r) => ({ ...r, tierRank: TIERS.indexOf(r["등급"]) }));
+        DATA = data;
         document.getElementById("as-of").textContent = `${data.since} ~ ${data.date}`;
         document.getElementById("win-days").textContent = data.window_days;
         errBox.classList.add("hidden");
-        render();
+        applyBasis();
       } catch (e) {
         errBox.textContent = "데이터를 못 읽었습니다 (" + e.message + ") — 야간 갱신(value_burst) 뒤에 생깁니다.";
         errBox.classList.remove("hidden");
@@ -308,5 +331,6 @@
 
     load();
   </script>
+<script src="/market-mobile.js"></script>
 </body>
 </html>

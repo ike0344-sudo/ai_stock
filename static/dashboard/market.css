@@ -124,3 +124,37 @@ details.legend table { margin-top: 8px; }
 details.legend td, details.legend th { text-align: left; padding: 4px 10px; font-size: .82rem; }
 
 @media (max-width: 760px) { .card { border-radius: 10px; padding: 10px 12px; } }
+
+/* ===== 휴대폰(반응형, 10-05 사용자) — 5개 화면 공용 =====
+   표는 market-mobile.js 가 열 이름을 칸마다 data-label 로 달아 두면, 좁은 화면에서 줄 하나를 카드 하나로 바꾼다(정보는 접지 않는다). */
+@media (max-width: 720px) {
+  body { padding: 10px 10px 32px; }
+  .page-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; padding-bottom: 2px; }
+  .page-tabs::-webkit-scrollbar { display: none; }
+  .page-tabs a { flex: none; white-space: nowrap; padding: 7px 12px; }
+  header.top { align-items: flex-start; }
+  header.top h1 { font-size: 1.05rem; }
+  header.top .sub { display: block; margin: 2px 0 0; }
+  header.top nav { flex-wrap: wrap; gap: 6px 10px; }
+  header.top nav a { white-space: nowrap; }
+  .filters { gap: 8px; }
+  .filters .grp { flex-wrap: wrap; }
+  .count-badge { margin-left: 0; width: 100%; }
+  #search-input, input[type=text] { width: 100%; max-width: 260px; }
+
+  table.cards thead { display: none; }
+  table.cards, table.cards tbody { display: block; }
+  table.cards tbody tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 12px;
+    border: 1px solid var(--card-border); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; background: var(--card-bg); }
+  table.cards tbody tr:hover { background: var(--card-bg); }
+  table.cards tbody td { display: block; padding: 0; border: none; text-align: left; white-space: normal; min-width: 0; overflow-wrap: anywhere; }
+  table.cards tbody td::before { content: attr(data-label); display: block; font-size: .7rem; color: var(--text-dim); font-weight: 400; margin-bottom: 1px; }
+  table.cards tbody td.card-title { grid-column: 1 / -1; order: -1; font-size: 1rem; }
+  table.cards tbody td.card-title::before { display: none; }
+  details.legend td { white-space: normal; }
+  table.cards tbody td[data-label=""]::before { display: none; }
+  table.cards tr.empty-row td, table.cards tr.more-row td { grid-column: 1 / -1; text-align: center; }
+  table.cards tr.empty-row, table.cards tr.more-row { display: block; }
+}
+/* 손가락 화면엔 마우스 오버 일봉이 없다(눌러도 안 사라져 표를 가린다) */
+@media (hover: none) { #hover-chart { display: none !important; } }

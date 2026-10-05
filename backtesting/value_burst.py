@@ -8,11 +8,12 @@
 - 1년 유의미 = 직전 245거래일 최대의 70% 이상(처음 80% — 10-04 사용자가 70% 로 낮춤, 알테오젠 2024-02-22(78%) 같은 날을 잡으려고)
 - 평소 대비 = 1,000억 이상 + 직전 20일 평균의 2.5배 이상 + 그날 종가 +7% 이상(10-04 사용자) — 과거 최대와 비교하는 위 등급으로는
   작년에 크게 터진 종목의 '조용하다 갑자기 터진 날'이 안 잡힌다(디아이 2026-09-21 1년 최대의 39%·평소 6배, 알테오젠 2024-02-21 26%·2.5배).
-  2025년 기준 하루 7.6건, 그중 위 등급에 없던 날 3.9건. 등락은 KRX 종가로 잰다(화면의 폭발일 등락과 같은 값).
+  2025년 기준 하루 7.6건, 그중 위 등급에 없던 날 3.9건. 등락은 통합 종가로 잰다(화면의 폭발일 등락과 같은 값).
 - 한 종목에 여러 날이면 가장 높은 등급, 같으면 최근 날을 보여 주고 횟수를 같이 단다.
 
 대금은 통합(data/stocks/daily_al, scripts/collect_daily_al.py) — KRX 일봉으로 재면 NXT 가 빠져 2025-03 뒤로 반 토막 난다(심텍 09-22).
-등락률·현재가·240일 고점은 KRX 일봉(다른 화면과 같은 값). 240일 고점은 **오늘 포함** 최근 240거래일 고가, 남은 거리 = 고점 ÷ 현재가 − 1.
+가격(등락률·현재가·240일 고점·옛 고점)은 통합·KRX 두 벌을 싣고 화면에서 고른다(기본 통합 = 영웅문 통합 차트와 같은 값 —
+디아이 1/30 고가 KRX 41,700 vs 통합 42,500, 10-05). 240일 고점은 **오늘 포함** 최근 240거래일 고가, 남은 거리 = 고점 ÷ 현재가 − 1.
 """
 from __future__ import annotations
 
@@ -27,6 +28,7 @@ from backtesting import rs_rating as R
 from datahub import catalog
 
 OUT_PATH = "static/dashboard/value_burst.json"
+OHLC_PATH = "static/dashboard/value_burst_ohlc.json"  # 마우스 오버 일봉 — 처음 오버할 때만 받는다(휴대폰은 안 받음)
 WINDOW_DAYS = 20
 MIN_EOK = 300          # 저장 하한 — 화면 기본 필터는 1,000억
 HIGH_DAYS = 240
@@ -54,6 +56,33 @@ def tiers_of(val: pd.Series, close: pd.Series | None = None) -> pd.Series:
     return t
 
 
+def price_view(d: pd.DataFrame, bdate: str) -> tuple[dict, list] | None:
+    """한 가격 기준(통합 또는 KRX 일봉, date=YYYYMMDD 문자열)으로 화면 가격 칸과 마우스 오버 일봉. 폭발일 행이 없으면 None."""
+    bi = d.index[d.date == bdate]
+    if not len(bi) or bi[0] == 0:
+        return None
+    b = bi[0]
+    recent = d.tail(HIGH_DAYS)
+    hi_i = recent.high.idxmax()
+    cur, hi = float(d.close.iloc[-1]), float(recent.high.max())
+    prior_hi = d.high.iloc[max(0, b - HIGH_DAYS):b].max()            # 옛 고점 = 폭발일 전날까지 240일 최고 고가
+    after = d.index[(d.index >= b) & (d.high >= prior_hi)]
+    closed = d.index[(d.index >= b) & (d.close > prior_hi)]          # 종가가 옛 고점 위로 마감한 첫날 = 돌파(같으면 아님 — 디아이 10/1)
+    ymd = lambda i: f"{d.date[i][:4]}-{d.date[i][4:6]}-{d.date[i][6:]}"
+    view = {
+        "폭발일등락": round(float(d.close[b] / d.close[b - 1] - 1) * 100, 1),
+        "터치일": ymd(after[0]) if len(after) else None, "터치까지일": int(after[0] - b) if len(after) else None,
+        "기준고점": float(prior_hi), "돌파일": ymd(closed[0]) if len(closed) else None,
+        "돌파까지일": int(closed[0] - b) if len(closed) else None,
+        "현재가": cur, "고점240": hi, "고점일": ymd(hi_i), "남은거리": round((hi / cur - 1) * 100, 1),
+        "현재등락": round(float(d.close.iloc[-1] / d.close.iloc[-2] - 1) * 100, 1), "시세일": ymd(len(d) - 1),
+    }
+    # 마우스 오버 240일봉(+20일선 워밍업) — value_burst_ohlc.json 으로 따로 쓴다(두 기준이라 2.9MB, 본 파일에 실으면 휴대폰도 매번 받는다)
+    bars = [[int(r.date), *(int(round(float(x))) for x in (r.open, r.high, r.low, r.close)), int(r.volume)]  # 원 단위 정수 — 파일 크기 절반
+            for r in d.tail(OHLC_DAYS).itertuples(index=False)]
+    return view, bars
+
+
 def build(window_days: int = WINDOW_DAYS) -> dict:
     names = R.load_names()
     skip = R.excluded_codes(names)
@@ -68,7 +97,7 @@ def build(window_days: int = WINDOW_DAYS) -> dict:
     krx_dir = catalog.path("daily", code="X").parent
     days = pd.read_csv(krx_dir / "005930.csv", usecols=["date"]).date.str.replace("-", "").tolist()
     cutoff, last_day = days[-window_days], days[-1]
-    rows = []
+    rows, ohlc = [], {}
     for p in sorted(al_dir.glob("*.csv")):
         code = p.stem
         if code in skip:
@@ -76,63 +105,54 @@ def build(window_days: int = WINDOW_DAYS) -> dict:
         a = pd.read_csv(p, dtype={"date": str}).dropna(subset=["value_mw"]).sort_values("date").reset_index(drop=True)
         if len(a) <= Y1 or a.date.iloc[-1] < cutoff:
             continue
-        kp = krx_dir / f"{code}.csv"
-        if not kp.exists():
-            continue
-        d = pd.read_csv(kp)
-        d["date"] = d.date.str.replace("-", "")
         val = a.value_mw / 100  # 백만원 → 억
-        # '평소 대비'의 +7% 는 KRX 종가로 잰다 — 통합 종가는 NXT 애프터마켓 가격이라 화면의 폭발일 등락(KRX)과 어긋난다(포스코DX 09-03)
-        krx_close = a.date.map(dict(zip(d.date, d.close)))
-        t = tiers_of(val, krx_close)
+        t = tiers_of(val, a.close)
         hit = a.index[(a.date >= cutoff) & t.notna() & (val >= MIN_EOK)]
         if not len(hit):
             continue
         k = max(hit, key=lambda i: (-TIERS.index(t[i]), a.date[i]))
-        bi = d.index[d.date == a.date[k]]
-        if not len(bi) or bi[0] == 0:
+        if k == 0:
             continue
-        b = bi[0]
-        recent = d.tail(HIGH_DAYS)
-        hi_i = recent.high.idxmax()
-        cur, hi = float(d.close.iloc[-1]), float(recent.high.max())
-        prior_hi = d.high.iloc[max(0, b - HIGH_DAYS):b].max()
-        after = d.index[(d.index >= b) & (d.high >= prior_hi)]
-        touch_day = f"{d.date[after[0]][:4]}-{d.date[after[0]][4:6]}-{d.date[after[0]][6:]}" if len(after) else None
-        touch_after = int(after[0] - b) if len(after) else None
-        closed = d.index[(d.index >= b) & (d.close >= prior_hi)]  # 종가로 뚫은 첫날 = 돌파
-        break_day = f"{d.date[closed[0]][:4]}-{d.date[closed[0]][4:6]}-{d.date[closed[0]][6:]}" if len(closed) else None
+        bdate = a.date[k]
+        kp = krx_dir / f"{code}.csv"
+        krx = None
+        if kp.exists():
+            krx = pd.read_csv(kp)
+            krx["date"] = krx.date.str.replace("-", "")
+        # 가격(옛 고점·240일 고점·현재가·등락·터치/돌파)은 통합과 KRX 두 벌을 싣고 화면에서 고른다(10-05 사용자).
+        # 거래대금 등급은 언제나 통합 — KRX 대금은 NXT 가 빠져 반 토막이다.
+        views = {"통합": price_view(a, bdate)}
+        if krx is not None and (kv := price_view(krx, bdate)) is not None:
+            views["KRX"] = kv
+        if views["통합"] is None:
+            continue
         y1max = val.shift(1).rolling(Y1, min_periods=Y1).max()[k]
         base = {"역대": val.shift(1).expanding().max()[k], "4년": val.shift(1).rolling(Y4, min_periods=Y1).max()[k],
                 "평소 대비": val.shift(1).rolling(SPIKE_AVG).mean()[k]}.get(t[k], y1max)  # 평소 대비의 비교 대금 = 직전 20일 평균
+        for basis, (_, bars) in views.items():
+            ohlc.setdefault(basis, {})[code] = bars
         rows.append({
             "코드": code, "이름": names.get(code, code), "섹터": sectors.get(code, "미분류"), "세부섹터": subs.get(code, "미분류"),
             "rs": R._int_or_none(rs_day.get(code)), "rs_1m": R._int_or_none(rs1m_day.get(code)),
             "섹터rs": sec_rs.get(sectors.get(code)), "세부섹터rs": sub_rs.get(subs.get(code)),
             "등급": t[k], "폭발일": f"{a.date[k][:4]}-{a.date[k][4:6]}-{a.date[k][6:]}", "대금": round(float(val[k])),
             "비교대금": round(float(base)), "배수": round(float(val[k] / base), 2),
-            "폭발일등락": round(float(d.close[b] / d.close[b - 1] - 1) * 100, 1),
-            "폭발일고점터치": bool(d.high[b] >= prior_hi), "횟수": int(len(hit)),
-            # 폭발일 이후 처음으로 폭발일 기준 240일 고점을 넘은 날(당일 포함) — 심텍은 09-22 못 닿고 10-02 터치(사용자 10-04)
-            "터치일": touch_day, "터치까지일": touch_after,
-            "기준고점": float(prior_hi), "돌파일": break_day, "돌파까지일": int(closed[0] - b) if len(closed) else None,
-            "현재가": cur, "고점240": hi, "고점일": f"{d.date[hi_i][:4]}-{d.date[hi_i][4:6]}-{d.date[hi_i][6:]}",
-            "남은거리": round((hi / cur - 1) * 100, 1), "현재등락": round(float(d.close.iloc[-1] / d.close.iloc[-2] - 1) * 100, 1),
+            "횟수": int(len(hit)), "가격": {basis: v for basis, (v, _) in views.items()},
             "데이터시작": a.date.iloc[0][:4],
         })
     rows.sort(key=lambda r: (TIERS.index(r["등급"]), -r["대금"]))
     day = f"{last_day[:4]}-{last_day[4:6]}-{last_day[6:]}"
-    # 종목이 수십 개라 일봉(약 600KB)을 같은 파일에 싣는다 — 따로 두면 서버 라우트가 늘어 재시작이 필요하다
-    from backtesting.new_high import build_ohlc
-    ohlc = build_ohlc([r["코드"] for r in rows], days=OHLC_DAYS, daily_dir=str(krx_dir))
     return {"date": day, "window_days": window_days, "since": f"{cutoff[:4]}-{cutoff[4:6]}-{cutoff[6:]}", "rows": rows, "ohlc": ohlc}
 
 
 def write_json(payload: dict, path: str = OUT_PATH) -> str:
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
-    os.replace(tmp, path)
+    """본 자료(path)와 일봉(OHLC_PATH)을 나눠 쓴다."""
+    payload = dict(payload)
+    for p, obj in ((OHLC_PATH, payload.pop("ohlc", {})), (path, payload)):
+        tmp = f"{p}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, p)
     return path
 
 

@@ -6,10 +6,11 @@
 KRX 일봉(data/stocks/daily)은 NXT 거래가 빠져 2025-03 뒤로 대금이 크게 작다 — 심텍 2026-09-22 KRX 2,810억 vs 통합 5,559억
 (사용자가 "역대 신고 거래대금"이라 짚었는데 KRX 로는 안 잡혔다). 그래서 대금 신고 판정은 이 통합 일봉으로만 한다.
 매일 전 종목(2,500여 번 호출)은 저녁 소피증권 REST 몫을 잡아먹어, 그날 KRX 대금이 300억 이상인 종목만 받는다 —
-통합 1,000억 폭발인데 KRX 300억 미만(NXT 비중 70%+)인 날은 사실상 없다. 1페이지 = 600거래일이라 며칠 빠져도 다음 수집에 메워진다.
+통합 1,000억 폭발인데 KRX 300억 미만(NXT 비중 70%+)인 날은 사실상 없다. 화면에 올라 있는 종목은 대금과 무관하게 매일 받는다(가격도 통합). 1페이지 = 600거래일이라 며칠 빠져도 다음 수집에 메워진다.
 배치 앱키(batch_keys)를 쓴다 — 소피증권 키로 토큰을 새로 받으면 소피 토큰이 [8005] 로 무효가 된다. 저장은 허브 쓰기 관문 안에서만.
 """
 import argparse
+import json
 import os
 import sys
 import time
@@ -32,6 +33,12 @@ NEW_PAGES = 3  # 처음 받는 종목: 3페이지 ≈ 7년(역대·4년 판정�
 
 def targets(all_codes: bool) -> list[str]:
     daily = catalog.path("daily", code="X").parent
+    # 거래대금 폭발 화면에 올라 있는 종목은 대금이 식어도 매일 받는다 — 화면 가격(현재가·고점)이 통합 일봉에서 나온다(10-05)
+    shown = set()
+    try:
+        shown = {r["코드"] for r in json.load(open(os.path.join(ROOT, "static/dashboard/value_burst.json"), encoding="utf-8"))["rows"]}
+    except (OSError, ValueError, KeyError):
+        pass
     out = []
     for p in sorted(daily.glob("*.csv")):
         if all_codes:
@@ -41,7 +48,7 @@ def targets(all_codes: bool) -> list[str]:
             last = pd.read_csv(p).iloc[-1]
         except (IndexError, pd.errors.EmptyDataError):
             continue
-        if last.close * last.volume >= MIN_KRX_EOK * 1e8:
+        if last.close * last.volume >= MIN_KRX_EOK * 1e8 or p.stem in shown:
             out.append(p.stem)
     return out
 
