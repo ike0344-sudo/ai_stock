@@ -137,6 +137,7 @@ def build(window_days: int = WINDOW_DAYS) -> dict:
             "섹터rs": sec_rs.get(sectors.get(code)), "세부섹터rs": sub_rs.get(subs.get(code)),
             "등급": t[k], "폭발일": f"{a.date[k][:4]}-{a.date[k][4:6]}-{a.date[k][6:]}", "대금": round(float(val[k])),
             "비교대금": round(float(base)), "배수": round(float(val[k] / base), 2),
+            "평균대금": round(float(val.tail(SPIKE_AVG).mean())),   # 최근 20거래일 평균(억) — 화면 "평균 대금" 필터(10-06 사용자)
             "횟수": int(len(hit)), "가격": {basis: v for basis, (v, _) in views.items()},
             "데이터시작": a.date.iloc[0][:4],
         })

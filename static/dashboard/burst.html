@@ -88,6 +88,13 @@
           <option value="5000">5,000억+</option>
         </select>
       </div>
+      <div class="grp">평균 대금
+        <select id="avg-select" title="최근 20거래일 하루 평균 거래대금">
+          <option value="0">전체</option>
+          <option value="100">100억+</option>
+          <option value="300">300억+</option>
+        </select>
+      </div>
       <div class="grp">폭발일 등락
         <select id="chg-select">
           <option value="-99">전체</option>
@@ -142,12 +149,12 @@
   </div>
 
   <script>
-    const LS = { font: "ranking-root-font-px", tier: "burst-tier", value: "burst-value", chg: "burst-chg", dist: "burst-dist", rs: "burst-rs", basis: "burst-basis", sortKey: "burst-sort-key", sortDir: "burst-sort-dir" };
+    const LS = { font: "ranking-root-font-px", tier: "burst-tier", value: "burst-value", avg: "burst-avg", chg: "burst-chg", dist: "burst-dist", rs: "burst-rs", basis: "burst-basis", sortKey: "burst-sort-key", sortDir: "burst-sort-dir" };
     function lsGet(key, dflt) { try { const v = localStorage.getItem(key); return v === null ? dflt : v; } catch (e) { return dflt; } }
     function lsSet(key, v) { try { localStorage.setItem(key, v); } catch (e) {} }
 
     const TIERS = ["역대", "4년", "1년", "1년 유의미", "평소 대비"];
-    const state = { tier: lsGet(LS.tier, "4"), value: lsGet(LS.value, "1000"), chg: lsGet(LS.chg, "-99"), dist: lsGet(LS.dist, "999"), rs: lsGet(LS.rs, "0"),
+    const state = { tier: lsGet(LS.tier, "4"), value: lsGet(LS.value, "1000"), avg: lsGet(LS.avg, "0"), chg: lsGet(LS.chg, "-99"), dist: lsGet(LS.dist, "999"), rs: lsGet(LS.rs, "0"),
                     basis: lsGet(LS.basis, "통합"), sortKey: lsGet(LS.sortKey, "tierRank"), sortDir: Number(lsGet(LS.sortDir, "1")), q: "" };
     let ROWS = [], DATA = null;
     // 가격 칸은 고른 기준(통합/KRX)의 값을 줄에 펼쳐 넣는다 — 정렬·필터·표가 같은 이름으로 읽게. KRX 일봉이 없는 종목은 통합으로.
@@ -167,7 +174,7 @@
     const tierBadge = (t) => `<span class="tier tier-${t === "1년 유의미" ? "유의미" : t === "평소 대비" ? "평소" : t}">${t}</span>`;
 
     function render() {
-      let list = ROWS.filter((r) => r.tierRank <= Number(state.tier) && r["대금"] >= Number(state.value)
+      let list = ROWS.filter((r) => r.tierRank <= Number(state.tier) && r["대금"] >= Number(state.value) && (r["평균대금"] == null || r["평균대금"] >= Number(state.avg))
         && r["폭발일등락"] >= Number(state.chg) && r["남은거리"] <= Number(state.dist) && (state.rs === "0" || (r.rs ?? -1) >= Number(state.rs)));
       if (state.q) list = list.filter((r) => r["이름"].includes(state.q) || r["코드"].includes(state.q));
       const k = state.sortKey, dir = state.sortDir;
@@ -187,7 +194,7 @@
         <td class="col-name"><span class="sec-line">${esc(r["섹터"])} ${rsCell(r["섹터rs"])}</span><span class="sec-line sub-line">${esc(r["세부섹터"])} ${rsCell(r["세부섹터rs"])}</span></td>
         <td>${distCell(r)}</td>
         <td>${r["폭발일"].slice(5)}${hitLine(r)}</td>
-        <td><b>${fmt(r["대금"])}</b><span class="sub-line">비교 ${fmt(r["비교대금"])} · ×${r["배수"].toFixed(2)}</span></td>
+        <td><b>${fmt(r["대금"])}</b><span class="sub-line">비교 ${fmt(r["비교대금"])} · ×${r["배수"].toFixed(2)}${r["평균대금"] != null ? ` · 평균 ${fmt(r["평균대금"])}` : ""}</span></td>
         <td class="${cls(r["폭발일등락"])}">${pct(r["폭발일등락"])}</td>
         <td>${fmt(r["현재가"])}</td>
         <td class="${cls(r["현재등락"])}">${pct(r["현재등락"])}</td>
@@ -289,7 +296,7 @@
       tr.addEventListener("mouseleave", () => { hc.hidden = true; hc.dataset.code = ""; });
     }
 
-    for (const [id, key] of [["tier-select", "tier"], ["value-select", "value"], ["chg-select", "chg"], ["dist-select", "dist"], ["rs-select", "rs"]]) {
+    for (const [id, key] of [["tier-select", "tier"], ["value-select", "value"], ["avg-select", "avg"], ["chg-select", "chg"], ["dist-select", "dist"], ["rs-select", "rs"]]) {
       const el = document.getElementById(id);
       if (![...el.options].some((o) => o.value === state[key])) state[key] = el.options[el.options.length - 1].value;
       el.value = state[key];
