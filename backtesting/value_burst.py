@@ -28,10 +28,12 @@ from backtesting import rs_rating as R
 from datahub import catalog
 
 OUT_PATH = "static/dashboard/value_burst.json"
-OHLC_PATH = "static/dashboard/value_burst_ohlc.json"  # 마우스 오버 일봉 — 처음 오버할 때만 받는다(휴대폰은 안 받음)
+OHLC_PATH = "static/dashboard/value_burst_ohlc.json"
+REFS_PATH = "state/value_burst_refs.json"   # 장중 실시간(value_burst_live)이 읽는 종목별 비교 기준 — 화면이 아니라 서버만 읽는다  # 마우스 오버 일봉 — 처음 오버할 때만 받는다(휴대폰은 안 받음)
 WINDOW_DAYS = 20
 MIN_EOK = 300          # 저장 하한 — 화면 기본 필터는 1,000억
 HIGH_DAYS = 240
+MA_DAYS = (5, 10, 20)
 OHLC_DAYS = HIGH_DAYS + 19  # 마우스 오버 240일봉 — 20일선이 첫 봉부터 그려지게 19일 더
 TIERS = ("역대", "4년", "1년", "1년 유의미", "평소 대비")
 Y4, Y1, NEAR = 980, 245, 0.7
@@ -76,6 +78,8 @@ def price_view(d: pd.DataFrame, bdate: str) -> tuple[dict, list] | None:
         "돌파까지일": int(closed[0] - b) if len(closed) else None,
         "현재가": cur, "고점240": hi, "고점일": ymd(hi_i), "남은거리": round((hi / cur - 1) * 100, 1),
         "현재등락": round(float(d.close.iloc[-1] / d.close.iloc[-2] - 1) * 100, 1), "시세일": ymd(len(d) - 1),
+        # 이동평균(오늘 종가 포함) — 화면의 '이평선 위' 필터용(10-07 사용자)
+        **{f"ma{n}": round(float(d.close.tail(n).mean()), 1) for n in MA_DAYS},
     }
     # 마우스 오버 240일봉(+20일선 워밍업) — value_burst_ohlc.json 으로 따로 쓴다(두 기준이라 2.9MB, 본 파일에 실으면 휴대폰도 매번 받는다)
     bars = [[int(r.date), *(int(round(float(x))) for x in (r.open, r.high, r.low, r.close)), int(r.volume)]  # 원 단위 정수 — 파일 크기 절반
@@ -97,13 +101,26 @@ def build(window_days: int = WINDOW_DAYS) -> dict:
     krx_dir = catalog.path("daily", code="X").parent
     days = pd.read_csv(krx_dir / "005930.csv", usecols=["date"]).date.str.replace("-", "").tolist()
     cutoff, last_day = days[-window_days], days[-1]
-    rows, ohlc = [], {}
+    rows, ohlc, refs = [], {}, {}
     for p in sorted(al_dir.glob("*.csv")):
         code = p.stem
         if code in skip:
             continue
         a = pd.read_csv(p, dtype={"date": str}).dropna(subset=["value_mw"]).sort_values("date").reset_index(drop=True)
-        if len(a) <= Y1 or a.date.iloc[-1] < cutoff:
+        if len(a) <= Y1:
+            continue
+        # 장중 실시간용 비교 기준 — 내일(다음 거래일) 장중 대금을 "그날 이전 기간"과 비교하려면 오늘까지 포함한 최대·평균이다
+        v = a.value_mw / 100
+        kp0 = krx_dir / f"{code}.csv"
+        h_krx = float(pd.read_csv(kp0, usecols=["high"]).high.tail(HIGH_DAYS).max()) if kp0.exists() else None
+        refs[code] = {"n": names.get(code, code), "s": sectors.get(code, "미분류"), "ss": subs.get(code, "미분류"),
+                      "rs": R._int_or_none(rs_day.get(code)), "rs1": R._int_or_none(rs1m_day.get(code)),
+                      "all": round(float(v.max())), "y4": round(float(v.tail(Y4).max())), "y1": round(float(v.tail(Y1).max())),
+                      "avg20": round(float(v.tail(SPIKE_AVG).mean())), "h_al": float(a.high.tail(HIGH_DAYS).max()), "h_krx": h_krx,
+                      # 장중 이동평균 = (직전 n-1일 종가 합 + 현재가) / n — 그 합을 미리 둔다
+                      "ms": {str(n): float(a.close.tail(n - 1).sum()) for n in MA_DAYS},
+                      "asof": a.date.iloc[-1]}
+        if a.date.iloc[-1] < cutoff:
             continue
         val = a.value_mw / 100  # 백만원 → 억
         t = tiers_of(val, a.close)
@@ -137,19 +154,21 @@ def build(window_days: int = WINDOW_DAYS) -> dict:
             "섹터rs": sec_rs.get(sectors.get(code)), "세부섹터rs": sub_rs.get(subs.get(code)),
             "등급": t[k], "폭발일": f"{a.date[k][:4]}-{a.date[k][4:6]}-{a.date[k][6:]}", "대금": round(float(val[k])),
             "비교대금": round(float(base)), "배수": round(float(val[k] / base), 2),
-            "평균대금": round(float(val.tail(SPIKE_AVG).mean())),   # 최근 20거래일 평균(억) — 화면 "평균 대금" 필터(10-06 사용자)
+            "평균대금": refs[code]["avg20"],    # 최근 20거래일 평균(억) — 화면 "평균 대금" 필터(10-06 사용자)
             "횟수": int(len(hit)), "가격": {basis: v for basis, (v, _) in views.items()},
             "데이터시작": a.date.iloc[0][:4],
         })
     rows.sort(key=lambda r: (TIERS.index(r["등급"]), -r["대금"]))
     day = f"{last_day[:4]}-{last_day[4:6]}-{last_day[6:]}"
-    return {"date": day, "window_days": window_days, "since": f"{cutoff[:4]}-{cutoff[4:6]}-{cutoff[6:]}", "rows": rows, "ohlc": ohlc}
+    return {"date": day, "window_days": window_days, "since": f"{cutoff[:4]}-{cutoff[4:6]}-{cutoff[6:]}", "rows": rows, "ohlc": ohlc,
+            "refs": {"date": day, "codes": refs, "sec_rs": sec_rs, "sub_rs": sub_rs}}
 
 
 def write_json(payload: dict, path: str = OUT_PATH) -> str:
     """본 자료(path)와 일봉(OHLC_PATH)을 나눠 쓴다."""
     payload = dict(payload)
-    for p, obj in ((OHLC_PATH, payload.pop("ohlc", {})), (path, payload)):
+    os.makedirs(os.path.dirname(REFS_PATH), exist_ok=True)
+    for p, obj in ((OHLC_PATH, payload.pop("ohlc", {})), (REFS_PATH, payload.pop("refs", {})), (path, payload)):
         tmp = f"{p}.tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(obj, f, ensure_ascii=False, separators=(",", ":"))

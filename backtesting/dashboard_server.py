@@ -59,6 +59,7 @@ from .afterhours_ranking import start_background_poller as start_afterhours_poll
 from .trading_value_ranking import get_ranking as get_trading_value_ranking
 from .trading_value_ranking import start_background_poller as start_ranking_background_poller
 from . import newhigh_live
+from . import value_burst_live
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC_DIR = os.path.join(PROJECT_ROOT, "static", "dashboard")
@@ -398,6 +399,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._send_static("newhigh.json")
         elif parsed.path == "/newhigh_ohlc.json":
             self._send_static("newhigh_ohlc.json")
+        elif parsed.path == "/api/value-burst-live":
+            self._send_json(value_burst_live.snapshot())
         elif parsed.path == "/api/newhigh-live":
             self._send_json(newhigh_live.snapshot())
         elif parsed.path == "/ledger.html":
@@ -593,6 +596,8 @@ def run_dashboard_server(
         start_afterhours_poller(kiwoom_appkey, kiwoom_secretkey, kiwoom_is_mock)
         # 장중 52주 신고가(키움 ka10016) — 60초마다, 순위 폴러와 같은 클라이언트(토큰 공유)
         newhigh_live.start_background_poller(kiwoom_appkey, kiwoom_secretkey, kiwoom_is_mock)
+        # 거래대금 폭발 장중(10-06) — 60초마다 통합 대금 상위 4쪽, 같은 클라이언트(토큰 공유)
+        value_burst_live.start_background_poller(kiwoom_appkey, kiwoom_secretkey, kiwoom_is_mock)
         # 매일 장 마감 후(기본 15:40) top35 업데이트를 스스로 트리거 — cli.py의
         # update-top35 docstring이 안내하는 "OS 스케줄러 등록"이 이 PC에선 UAC로
         # 막혀 있어(top35_job.start_daily_scheduler 참고), 대신 이미 상시 실행 중인

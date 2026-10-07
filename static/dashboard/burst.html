@@ -55,7 +55,7 @@
       <span class="tier tier-1년">1년</span> 직전 1년 최대 초과 ·
       <span class="tier tier-유의미">1년 유의미</span> 직전 1년 최대의 70% 이상 ·
       <span class="tier tier-평소">평소 대비</span> 1,000억 이상이면서 직전 20일 평균의 2.5배 이상이고 그날 +7% 이상(과거에 더 크게 터진 적이 있어도 잡힌다).
-      한 종목에 여러 날이면 가장 높은 등급의 날을 보여 줍니다. 폭발일 아래 = 폭발일 기준 240일 고점(옛 고점)을 그날 이후 처음 넘은 날 — 종가로 넘었으면 <b>종가 돌파</b>(빨강), 고가만 닿았으면 <b>터치</b>. 지금 종가가 옛 고점 위면 고점까지 칸에 <b>돌파 중</b>과 옛 고점 대비 상승폭이 나옵니다. 남은 거리 = 오늘 포함 240거래일 고점 ÷ 현재가 − 1(0%면 지금이 고점).
+      한 종목에 여러 날이면 가장 높은 등급의 날을 보여 줍니다. <b>장중에는 1분마다</b> 통합 거래대금 상위 약 400종목을 어젯밤 기준과 비교해 오늘 터진 종목을 '오늘 장중'으로 맨 위에 올립니다(장중 고가는 몰라 고점 판정은 현재가로만, 확정은 밤 갱신). 폭발일 아래 = 폭발일 기준 240일 고점(옛 고점)을 그날 이후 처음 넘은 날 — 종가로 넘었으면 <b>종가 돌파</b>(빨강), 고가만 닿았으면 <b>터치</b>. 지금 종가가 옛 고점 위면 고점까지 칸에 <b>돌파 중</b>과 옛 고점 대비 상승폭이 나옵니다. 남은 거리 = 오늘 포함 240거래일 고점 ÷ 현재가 − 1(0%면 지금이 고점).
       등락률·현재가·240일 고점·옛 고점은 <b>가격 기준</b> 버튼으로 통합(KRX+NXT, 영웅문 통합 차트와 같은 값)과 KRX 중에 고릅니다. 거래대금 등급은 언제나 통합입니다. RS = RS 종합(1M = 최근 1개월 RS), 섹터 RS = 그 섹터(스탁이지 대분류/세부섹터) 전 종목 RS 종합의 중앙값.
       종목 줄에 마우스를 올리면 240일 일봉(5·10·20일선)이 나옵니다.
     </p>
@@ -112,6 +112,13 @@
           <option value="30">30% 이내</option>
         </select>
       </div>
+      <div class="grp">현재가가
+        <span class="seg" id="ma-seg">
+          <button type="button" data-ma="5">5일선 위</button>
+          <button type="button" data-ma="10">10일선 위</button>
+          <button type="button" data-ma="20">20일선 위</button>
+        </span>
+      </div>
       <div class="grp">RS
         <select id="rs-select">
           <option value="0">전체</option>
@@ -121,7 +128,7 @@
         </select>
       </div>
       <div class="grp"><input type="text" id="search-input" placeholder="종목명·코드 검색"></div>
-      <span class="count-badge"><b id="row-count">0</b>개 종목</span>
+      <span class="count-badge"><b id="row-count">0</b>개 종목 <span id="live-asof" class="market-tag"></span></span>
     </div>
   </div>
 
@@ -149,20 +156,50 @@
   </div>
 
   <script>
-    const LS = { font: "ranking-root-font-px", tier: "burst-tier", value: "burst-value", avg: "burst-avg", chg: "burst-chg", dist: "burst-dist", rs: "burst-rs", basis: "burst-basis", sortKey: "burst-sort-key", sortDir: "burst-sort-dir" };
+    const LS = { font: "ranking-root-font-px", tier: "burst-tier", value: "burst-value", avg: "burst-avg", chg: "burst-chg", dist: "burst-dist", rs: "burst-rs", ma: "burst-ma", basis: "burst-basis", sortKey: "burst-sort-key", sortDir: "burst-sort-dir" };
     function lsGet(key, dflt) { try { const v = localStorage.getItem(key); return v === null ? dflt : v; } catch (e) { return dflt; } }
     function lsSet(key, v) { try { localStorage.setItem(key, v); } catch (e) {} }
 
     const TIERS = ["역대", "4년", "1년", "1년 유의미", "평소 대비"];
-    const state = { tier: lsGet(LS.tier, "4"), value: lsGet(LS.value, "1000"), avg: lsGet(LS.avg, "0"), chg: lsGet(LS.chg, "-99"), dist: lsGet(LS.dist, "999"), rs: lsGet(LS.rs, "0"),
+    const state = { tier: lsGet(LS.tier, "4"), value: lsGet(LS.value, "1000"), avg: lsGet(LS.avg, "0"), chg: lsGet(LS.chg, "-99"), dist: lsGet(LS.dist, "999"), rs: lsGet(LS.rs, "0"), ma: lsGet(LS.ma, "").split(",").filter(Boolean),
                     basis: lsGet(LS.basis, "통합"), sortKey: lsGet(LS.sortKey, "tierRank"), sortDir: Number(lsGet(LS.sortDir, "1")), q: "" };
     let ROWS = [], DATA = null;
     // 가격 칸은 고른 기준(통합/KRX)의 값을 줄에 펼쳐 넣는다 — 정렬·필터·표가 같은 이름으로 읽게. KRX 일봉이 없는 종목은 통합으로.
     function applyBasis() {
-      ROWS = DATA.rows.map((r) => ({ ...r, ...(r["가격"][state.basis] || r["가격"]["통합"]), tierRank: TIERS.indexOf(r["등급"]) }));
+      ROWS = mergedRows().map((r) => ({ ...r, ...(r["가격"][state.basis] || r["가격"]["통합"]), tierRank: TIERS.indexOf(r["등급"]) }));
       document.querySelectorAll("#basis-seg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.basis === state.basis)));
       render();
     }
+    // ---- 장중 실시간(10-06): 서버(value_burst_live)가 60초마다 통합 대금 상위로 판정한 오늘 폭발을 합친다.
+    // 비교 기준은 어젯밤 값. 장중 고가는 몰라서 240일 고점 판정은 현재가로만 한다(확정은 밤 갱신).
+    let LIVE = { rows: [] };
+    const today = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+    function livePrice(x, h) {
+      const over = h && x["현재가"] > h;
+      return { "폭발일등락": x["등락"], "현재가": x["현재가"], "현재등락": x["등락"], "기준고점": h,
+               "고점240": over ? x["현재가"] : h, "고점일": over ? "오늘(장중)" : "-", "남은거리": over ? 0 : (h ? +((h / x["현재가"] - 1) * 100).toFixed(1) : 0),
+               "ma5": x.ma5, "ma10": x.ma10, "ma20": x.ma20,
+               "터치일": over ? today() : null, "터치까지일": over ? 0 : null, "돌파일": over ? today() : null, "돌파까지일": over ? 0 : null };
+    }
+    function mergedRows() {
+      const night = new Map(DATA.rows.map((r) => [r["코드"], r]));
+      const live = (LIVE.rows || []).map((x) => ({ ...x, live: true, "폭발일": today(), "횟수": ((night.get(x["코드"]) || {})["횟수"] || 0) + 1,
+        "가격": { "통합": livePrice(x, x.h_al), "KRX": livePrice(x, x.h_krx || x.h_al) } }));
+      const liveCodes = new Set(live.map((r) => r["코드"]));
+      return live.concat(DATA.rows.filter((r) => !liveCodes.has(r["코드"])));
+    }
+    async function pollLive() {
+      try {
+        const res = await fetch("/api/value-burst-live", { cache: "no-store" });
+        if (!res.ok) return;
+        LIVE = await res.json();
+        document.getElementById("live-asof").textContent = LIVE.as_of && (LIVE.rows || []).length !== undefined
+          ? `· 장중 ${LIVE.as_of.slice(0, 5)}${LIVE.active ? "" : "(장 마감)"} 오늘 ${LIVE.rows.length}종목` : "";
+        if (DATA) applyBasis();
+      } catch (e) { /* 서버가 옛 버전이면 야간 자료만 */ }
+    }
+    setInterval(pollLive, 60000);
+
     document.querySelectorAll("#basis-seg button").forEach((b) => b.addEventListener("click", () => {
       state.basis = b.dataset.basis; lsSet(LS.basis, state.basis); applyBasis();
     }));
@@ -175,10 +212,11 @@
 
     function render() {
       let list = ROWS.filter((r) => r.tierRank <= Number(state.tier) && r["대금"] >= Number(state.value) && (r["평균대금"] == null || r["평균대금"] >= Number(state.avg))
-        && r["폭발일등락"] >= Number(state.chg) && r["남은거리"] <= Number(state.dist) && (state.rs === "0" || (r.rs ?? -1) >= Number(state.rs)));
+        && r["폭발일등락"] >= Number(state.chg) && r["남은거리"] <= Number(state.dist) && (state.rs === "0" || (r.rs ?? -1) >= Number(state.rs)) && aboveMa(r));
       if (state.q) list = list.filter((r) => r["이름"].includes(state.q) || r["코드"].includes(state.q));
       const k = state.sortKey, dir = state.sortDir;
       list.sort((a, b) => {
+        if (k === "tierRank" && !!a.live !== !!b.live) return a.live ? -1 : 1;   // 기본 정렬에선 오늘 장중 폭발을 맨 위로
         const x = a[k], y = b[k];
         if (x === null || x === undefined) return 1;
         if (y === null || y === undefined) return -1;
@@ -188,7 +226,7 @@
       document.getElementById("row-count").textContent = list.length;
       const tbody = document.getElementById("table-body");
       tbody.innerHTML = list.map((r) => `<tr data-code="${r["코드"]}">
-        <td>${tierBadge(r["등급"])}${r["횟수"] > 1 ? `<span class="sub-line">20일 중 ${r["횟수"]}번</span>` : ""}</td>
+        <td>${tierBadge(r["등급"])}${r.live ? '<span class="sub-line touch">오늘 장중</span>' : ""}${r["횟수"] > 1 ? `<span class="sub-line">20일 중 ${r["횟수"]}번</span>` : ""}</td>
         <td class="col-name"><span class="name-main">${esc(r["이름"])}</span><span class="name-code">${r["코드"]}</span></td>
         <td>${rsCell(r.rs)} <span class="sub-line" style="display:inline">${r.rs_1m === null || r.rs_1m === undefined ? "" : "1M " + r.rs_1m}</span></td>
         <td class="col-name"><span class="sec-line">${esc(r["섹터"])} ${rsCell(r["섹터rs"])}</span><span class="sec-line sub-line">${esc(r["세부섹터"])} ${rsCell(r["세부섹터rs"])}</span></td>
@@ -207,6 +245,7 @@
     // 폭발일 기준 240일 고점(기준고점)을 그날 이후 처음 넘은 날 — 종가로 넘었으면 '돌파', 고가만 닿았으면 '터치'
     const when = (day, n) => n === 0 ? "그날" : `${day.slice(5)}(+${n}일)`;
     function hitLine(r) {
+      if (r.live && r["돌파일"]) return '<span class="sub-line touch">현재가가 옛 고점 위(장중)</span>';
       if (r["돌파일"]) return `<span class="sub-line touch">${when(r["돌파일"], r["돌파까지일"])} 종가 돌파</span>`;
       if (r["터치일"]) return `<span class="sub-line">${when(r["터치일"], r["터치까지일"])} 고점 터치(종가는 못 넘음)</span>`;
       return "";
@@ -216,6 +255,19 @@
       if (r["현재가"] > r["기준고점"]) return `<b class="up">돌파 중</b><span class="sub-line">옛 고점 ${fmt(r["기준고점"])} 대비 +${((r["현재가"] / r["기준고점"] - 1) * 100).toFixed(1)}%</span>`;
       return `<b>${r["남은거리"] <= 0 ? "고점" : r["남은거리"].toFixed(1) + "%"}</b>`;
     }
+
+    // 이평선 필터(10-07 사용자 "각각"): 5·10·20일선 버튼을 따로 켜고 끈다 — 켠 선마다 현재가가 그 선 위여야 한다(아무것도 안 켜면 전체).
+    // 이평은 고른 가격 기준(통합/KRX), 오늘 종가 포함. 장중 줄은 (직전 n-1일 종가 합 + 현재가) / n 으로 서버가 계산한 값.
+    function aboveMa(r) {
+      return state.ma.every((m) => r["ma" + m] && r["현재가"] > r["ma" + m]);
+    }
+    function paintMa() { document.querySelectorAll("#ma-seg button").forEach((b) => b.setAttribute("aria-pressed", String(state.ma.includes(b.dataset.ma)))); }
+    document.querySelectorAll("#ma-seg button").forEach((b) => b.addEventListener("click", () => {
+      const m = b.dataset.ma;
+      state.ma = state.ma.includes(m) ? state.ma.filter((x) => x !== m) : [...state.ma, m];
+      lsSet(LS.ma, state.ma.join(",")); paintMa(); render();
+    }));
+    paintMa();
 
     function rsCell(v) {
       if (v === null || v === undefined) return '<span class="rs-lo">-</span>';
@@ -322,6 +374,7 @@
         document.getElementById("win-days").textContent = data.window_days;
         errBox.classList.add("hidden");
         applyBasis();
+        pollLive();
       } catch (e) {
         errBox.textContent = "데이터를 못 읽었습니다 (" + e.message + ") — 야간 갱신(value_burst) 뒤에 생깁니다.";
         errBox.classList.remove("hidden");
