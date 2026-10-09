@@ -30,6 +30,8 @@
   .bar-cell::before { content: ""; position: absolute; right: 0; top: 5px; bottom: 5px; width: var(--w, 0); background: var(--up-soft); border-radius: 3px; }
   .bar-cell > span { position: relative; }
   .first-tag { color: var(--accent); font-weight: 600; }
+  .tier { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: .72rem; font-weight: 700; white-space: nowrap; margin-left: 6px; vertical-align: 1px; }
+  .tier-역대 { background: var(--up); color: #fff; }   /* 거래대금 폭발(burst.html)과 같은 표식 */
   .more-row td { text-align: center; color: var(--text-faint); padding: 16px; }
   @media (max-width: 900px) { .month-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
   @media (max-width: 560px) { .year-row { grid-template-columns: 1fr; } .year-label { padding-top: 0; } .month-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
@@ -63,7 +65,7 @@
       <b>그날 거래대금이 직전 52주(245거래일, 그날 제외) 최대를 넘은 날</b> 중 대금 <b id="min-value">1,000억</b> 이상인 건입니다.
       대금은 <b>통합(KRX+NXT)</b> 실거래대금 — KRX만으로 재면 NXT 가 빠져 2025-03 뒤로 반 토막 납니다. 52주가 안 찬 신규상장주는 넣지 않습니다.
       배수 = 그날 대금 ÷ 직전 52주 최대, 평소대비 = 그날 대금 ÷ 직전 20일 평균. 누적 = 데이터 시작(2019년) 이후 그 종목의 몇 번째 신고인지(<span class="first-tag">처음</span> = 1번째).
-      5일뒤·20일뒤는 그날 통합 종가에 샀을 때. 월 칸 아랫줄은 그 달 20일뒤 중앙값. 상장폐지 종목은 빠져 있어 성과가 실제보다 좋게 나옵니다.
+      <span class="tier tier-역대" style="margin-left:0">역대</span> = 52주를 넘어 데이터 전체 기간(2019-06 또는 상장 이후) 최대까지 넘은 날 — 앞선 데이터가 4년 이상 쌓인 날만 판정하므로 2023년 중반 전에는 표시가 거의 없습니다. 5일뒤·20일뒤는 그날 통합 종가에 샀을 때. 월 칸 아랫줄은 그 달 20일뒤 중앙값. 상장폐지 종목은 빠져 있어 성과가 실제보다 좋게 나옵니다.
     </p>
     <p id="error-box" class="err hidden"></p>
   </div>
@@ -105,6 +107,12 @@
           <button type="button" data-first="1">처음만</button>
         </span>
       </div>
+      <div class="grp">
+        <span class="seg" id="ath-seg">
+          <button type="button" data-ath="0">전부</button>
+          <button type="button" data-ath="1">역대만</button>
+        </span>
+      </div>
       <div class="grp"><input type="text" id="search-input" placeholder="종목명·코드 검색 (전 기간)"></div>
       <span class="count-badge"><b id="row-count">0</b>건</span>
     </div>
@@ -130,13 +138,13 @@
   </div>
 
   <script>
-    const LS = { font: "ranking-root-font-px", month: "vledger-month", scope: "vledger-scope", min: "vledger-min", chg: "vledger-chg", first: "vledger-first", sortKey: "vledger-sort-key", sortDir: "vledger-sort-dir" };
+    const LS = { font: "ranking-root-font-px", month: "vledger-month", scope: "vledger-scope", min: "vledger-min", chg: "vledger-chg", first: "vledger-first", ath: "vledger-ath", sortKey: "vledger-sort-key", sortDir: "vledger-sort-dir" };
     function lsGet(key, dflt) { try { const v = localStorage.getItem(key); return v === null ? dflt : v; } catch (e) { return dflt; } }
     function lsSet(key, v) { try { localStorage.setItem(key, v); } catch (e) {} }
 
     let ALL = [], ROWS = [], BY_MONTH = new Map(), FIRST = "", LAST = "";
     const state = {
-      month: lsGet(LS.month, ""), scope: lsGet(LS.scope, "month"), min: Number(lsGet(LS.min, "0")), chg: Number(lsGet(LS.chg, "-999")), first: lsGet(LS.first, "0"),
+      month: lsGet(LS.month, ""), scope: lsGet(LS.scope, "month"), min: Number(lsGet(LS.min, "0")), chg: Number(lsGet(LS.chg, "-999")), first: lsGet(LS.first, "0"), ath: lsGet(LS.ath, "0"),
       sortKey: lsGet(LS.sortKey, "d"), sortDir: Number(lsGet(LS.sortDir, "1")), q: "",
     };
 
@@ -194,6 +202,7 @@
 
       document.querySelectorAll("#scope-seg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.scope === state.scope && !state.q)));
       document.querySelectorAll("#first-seg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.first === state.first)));
+      document.querySelectorAll("#ath-seg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.ath === state.ath)));
       document.querySelectorAll("#vl-table thead th").forEach((th) => th.classList.toggle("sorted", th.dataset.key === k));
       const [y, mo] = state.month.split("-");
       document.getElementById("sel-title").textContent = state.q ? `“${state.q}” 전 기간` : all ? "전 기간" : `${y}년 ${Number(mo)}월`;
@@ -212,7 +221,7 @@
       const shown = list.slice(0, 1500);
       document.getElementById("table-body").innerHTML = shown.map((r) => `<tr>
         <td class="col-name">${all ? r.d : r.d.slice(5)}</td>
-        <td class="col-name"><span class="name-main">${esc(r.name)}</span><span class="name-code">${r.code}${r.carry ? ` · <span class="first-tag" title="이 날은 기준 미만이지만 ${r.carry} 에 기준 이상 신고가 있었던 종목">${r.carry.slice(2).replace(/-/g, ".")} 이어짐</span>` : ""}</span></td>
+        <td class="col-name"><span class="name-main">${esc(r.name)}${r.ath ? '<span class="tier tier-역대">역대</span>' : ""}</span><span class="name-code">${r.code}${r.carry ? ` · <span class="first-tag" title="이 날은 기준 미만이지만 ${r.carry} 에 기준 이상 신고가 있었던 종목">${r.carry.slice(2).replace(/-/g, ".")} 이어짐</span>` : ""}</span></td>
         <td>${fmt(r.v)}</td>
         <td>${fmt(r.pm)}</td>
         <td class="bar-cell" style="--w:${(Math.min(r.x, maxX) / maxX) * 100}%"><span><b>${r.x.toFixed(2)}</b></span></td>
@@ -244,6 +253,7 @@
           }
         }
         if (state.first === "1" && r.n !== 1) continue;
+        if (state.ath === "1" && !r.ath) continue;
         ROWS.push(carry ? { ...r, carry } : r);
       }
       BY_MONTH = new Map();
@@ -269,6 +279,9 @@
     document.querySelectorAll("#first-seg button").forEach((b) => b.addEventListener("click", () => {
       state.first = b.dataset.first; lsSet(LS.first, state.first); applyFilter();
     }));
+    document.querySelectorAll("#ath-seg button").forEach((b) => b.addEventListener("click", () => {
+      state.ath = b.dataset.ath; lsSet(LS.ath, state.ath); applyFilter();
+    }));
     const minSelect = document.getElementById("min-select");
     if (![...minSelect.options].some((o) => Number(o.value) === state.min)) state.min = 0;  // 예전에 고른 1,000억+ 칸은 없어졌다
     minSelect.value = String(state.min);
@@ -285,7 +298,7 @@
         const res = await fetch("/value_ledger.json", { cache: "no-store" });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
-        ALL = data.rows.map((r) => ({ d: r[0], code: r[1], name: r[2], v: r[3], pm: r[4], x: r[5], avg: r[6], chg: r[7], c: r[8], n: r[9], d5: r[10], d20: r[11], m: r[0].slice(0, 7) }));
+        ALL = data.rows.map((r) => ({ d: r[0], code: r[1], name: r[2], v: r[3], pm: r[4], x: r[5], avg: r[6], chg: r[7], c: r[8], n: r[9], d5: r[10], d20: r[11], ath: r[12] === 1, m: r[0].slice(0, 7) }));
         FIRST = ALL.length ? ALL[0].m : data.date.slice(0, 7);
         LAST = data.date.slice(0, 7);
         document.getElementById("as-of").textContent = `${data.date} 기준`;
