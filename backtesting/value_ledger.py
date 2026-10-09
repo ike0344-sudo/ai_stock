@@ -6,7 +6,7 @@
 52주 신고거래대금 = 그날 통합(AL) 실거래대금이 **그날 제외** 직전 245거래일 최대를 넘은 날
 (value_burst 의 '1년' 등급과 같은 정의 · 245거래일이 안 찬 종목·날은 판정 안 함 — 상장 초기엔 아무 날이나 신고가 된다).
 대금은 data/stocks/daily_al(value_mw, 백만원) — KRX 일봉은 NXT 가 빠져 2025-03 뒤로 반 토막이라 쓰지 않는다.
-저장 하한 300억(value_burst 와 같음). 5일뒤·20일뒤 = 그날 통합 종가 매수 기준.
+저장 하한 1,000억(10-09 사용자). 5일뒤·20일뒤 = 그날 통합 종가 매수 기준.
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ import pandas as pd
 OUT_PATH = "static/dashboard/value_ledger.json"
 CSV_DIR = "results/value_record_52w"
 Y1 = 245
-MIN_EOK = 300
+MIN_EOK = 1000  # 10-09 사용자 "천억 이상만" (처음 300억 = value_burst 저장 하한)
 COLS = ["날짜", "코드", "종목명", "거래대금_억", "직전52주최대_억", "배수", "평소20일대비", "등락률%", "종가", "누적횟수", "5일뒤%", "20일뒤%"]
 
 
@@ -76,7 +76,7 @@ def write_csv(e: pd.DataFrame) -> None:
 
 def demo() -> None:
     """정의 점검: 245일 평탄 뒤 큰 날 → 신고, 그보다 작은 다음 날 → 아님."""
-    v = pd.Series([400.0] * 250 + [900, 800, 1000])
+    v = pd.Series([1200.0] * 250 + [1500, 1300, 1600])
     pm = v.shift(1).rolling(Y1, min_periods=Y1).max()
     assert list(((v > pm) & (v >= MIN_EOK)).iloc[-3:]) == [True, False, True]
 

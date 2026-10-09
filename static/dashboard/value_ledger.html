@@ -60,7 +60,7 @@
     </header>
     <p class="note" id="summary-line">-</p>
     <p class="note">
-      <b>그날 거래대금이 직전 52주(245거래일, 그날 제외) 최대를 넘은 날</b> 중 대금 <b id="min-value">300억</b> 이상인 건입니다.
+      <b>그날 거래대금이 직전 52주(245거래일, 그날 제외) 최대를 넘은 날</b> 중 대금 <b id="min-value">1,000억</b> 이상인 건입니다.
       대금은 <b>통합(KRX+NXT)</b> 실거래대금 — KRX만으로 재면 NXT 가 빠져 2025-03 뒤로 반 토막 납니다. 52주가 안 찬 신규상장주는 넣지 않습니다.
       배수 = 그날 대금 ÷ 직전 52주 최대, 평소대비 = 그날 대금 ÷ 직전 20일 평균. 누적 = 데이터 시작(2019년) 이후 그 종목의 몇 번째 신고인지(<span class="first-tag">처음</span> = 1번째).
       5일뒤·20일뒤는 그날 통합 종가에 샀을 때. 월 칸 아랫줄은 그 달 20일뒤 중앙값. 상장폐지 종목은 빠져 있어 성과가 실제보다 좋게 나옵니다.
@@ -86,11 +86,18 @@
       </div>
       <div class="grp">대금
         <select id="min-select">
-          <option value="0">전체</option>
-          <option value="1000">1,000억+</option>
+          <option value="0">전체(1,000억+)</option>
           <option value="3000">3,000억+</option>
           <option value="10000">1조+</option>
         </select>
+      </div>
+      <div class="grp">당일등락
+        <select id="chg-select">
+          <option value="-999">전체</option>
+          <option value="7">+7% 이상</option>
+          <option value="15">+15% 이상</option>
+        </select>
+        <span class="note" style="margin:0">· 직전 1년 안에 기준 이상 신고가 있던 종목은 이후 신고도 표시</span>
       </div>
       <div class="grp">
         <span class="seg" id="first-seg">
@@ -123,13 +130,13 @@
   </div>
 
   <script>
-    const LS = { font: "ranking-root-font-px", month: "vledger-month", scope: "vledger-scope", min: "vledger-min", first: "vledger-first", sortKey: "vledger-sort-key", sortDir: "vledger-sort-dir" };
+    const LS = { font: "ranking-root-font-px", month: "vledger-month", scope: "vledger-scope", min: "vledger-min", chg: "vledger-chg", first: "vledger-first", sortKey: "vledger-sort-key", sortDir: "vledger-sort-dir" };
     function lsGet(key, dflt) { try { const v = localStorage.getItem(key); return v === null ? dflt : v; } catch (e) { return dflt; } }
     function lsSet(key, v) { try { localStorage.setItem(key, v); } catch (e) {} }
 
     let ALL = [], ROWS = [], BY_MONTH = new Map(), FIRST = "", LAST = "";
     const state = {
-      month: lsGet(LS.month, ""), scope: lsGet(LS.scope, "month"), min: Number(lsGet(LS.min, "0")), first: lsGet(LS.first, "0"),
+      month: lsGet(LS.month, ""), scope: lsGet(LS.scope, "month"), min: Number(lsGet(LS.min, "0")), chg: Number(lsGet(LS.chg, "-999")), first: lsGet(LS.first, "0"),
       sortKey: lsGet(LS.sortKey, "d"), sortDir: Number(lsGet(LS.sortDir, "1")), q: "",
     };
 
@@ -205,7 +212,7 @@
       const shown = list.slice(0, 1500);
       document.getElementById("table-body").innerHTML = shown.map((r) => `<tr>
         <td class="col-name">${all ? r.d : r.d.slice(5)}</td>
-        <td class="col-name"><span class="name-main">${esc(r.name)}</span><span class="name-code">${r.code}</span></td>
+        <td class="col-name"><span class="name-main">${esc(r.name)}</span><span class="name-code">${r.code}${r.carry ? ` · <span class="first-tag" title="이 날은 기준 미만이지만 ${r.carry} 에 기준 이상 신고가 있었던 종목">${r.carry.slice(2).replace(/-/g, ".")} 이어짐</span>` : ""}</span></td>
         <td>${fmt(r.v)}</td>
         <td>${fmt(r.pm)}</td>
         <td class="bar-cell" style="--w:${(Math.min(r.x, maxX) / maxX) * 100}%"><span><b>${r.x.toFixed(2)}</b></span></td>
@@ -221,7 +228,24 @@
     }
 
     function applyFilter() {
-      ROWS = ALL.filter((r) => r.v >= state.min && (state.first === "0" || r.n === 1));
+      // 당일등락 필터: 그날 등락이 기준 이상이거나, 직전 365일 안에 기준 이상으로 신고가 났던 종목의 이후 신고(10-09 사용자 — HLB제약 9/29 +29.9% → 10/8 +3.3%)
+      const lastHit = new Map();
+      ROWS = [];
+      for (const r of ALL) {   // ALL 은 날짜 오름차순
+        if (r.v < state.min) continue;
+        let carry = null;
+        if (state.chg !== -999) {
+          const hit = r.chg !== null && r.chg >= state.chg;
+          const prev = lastHit.get(r.code);
+          if (hit) lastHit.set(r.code, r.d);
+          if (!hit) {
+            if (!prev || (Date.parse(r.d) - Date.parse(prev)) / 864e5 > 365) continue;
+            carry = prev;
+          }
+        }
+        if (state.first === "1" && r.n !== 1) continue;
+        ROWS.push(carry ? { ...r, carry } : r);
+      }
       BY_MONTH = new Map();
       for (const r of ROWS) { if (!BY_MONTH.has(r.m)) BY_MONTH.set(r.m, []); BY_MONTH.get(r.m).push(r); }
       if (!BY_MONTH.has(state.month)) state.month = [...BY_MONTH.keys()].sort().pop() || LAST;
@@ -246,8 +270,13 @@
       state.first = b.dataset.first; lsSet(LS.first, state.first); applyFilter();
     }));
     const minSelect = document.getElementById("min-select");
+    if (![...minSelect.options].some((o) => Number(o.value) === state.min)) state.min = 0;  // 예전에 고른 1,000억+ 칸은 없어졌다
     minSelect.value = String(state.min);
     minSelect.addEventListener("change", () => { state.min = Number(minSelect.value); lsSet(LS.min, state.min); applyFilter(); });
+    const chgSelect = document.getElementById("chg-select");
+    if (![...chgSelect.options].some((o) => Number(o.value) === state.chg)) state.chg = -999;
+    chgSelect.value = String(state.chg);
+    chgSelect.addEventListener("change", () => { state.chg = Number(chgSelect.value); lsSet(LS.chg, state.chg); applyFilter(); });
     document.getElementById("search-input").addEventListener("input", (e) => { state.q = e.target.value.trim(); render(); });
 
     async function load() {
