@@ -169,6 +169,8 @@ CONTENT_TYPES = {
     "market-mobile.js": "application/javascript; charset=utf-8",  # 시장 화면 5개 휴대폰 카드 보기(10-05)
     "value_burst_ohlc.json": "application/json; charset=utf-8",  # 거래대금 폭발 마우스 오버 일봉(통합·KRX), 처음 오버할 때만
     "value_burst.json": "application/json; charset=utf-8",  # value_burst.write_json 이 매일 밤 새로 씀
+    "value_ledger.html": "text/html; charset=utf-8",  # 52주 신고거래대금 장부(10-09)
+    "value_ledger.json": "application/json; charset=utf-8",  # value_ledger.write_json 이 매일 밤 새로 씀
 }
 
 DEFAULT_STRATEGY = "strategy_1"
@@ -407,7 +409,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._send_static("ledger.html")
         elif parsed.path == "/newhigh_ledger.json":
             self._send_static("newhigh_ledger.json")
-        elif parsed.path in ("/burst.html", "/value_burst.json", "/value_burst_ohlc.json", "/market-mobile.js"):
+        elif parsed.path in ("/burst.html", "/value_burst.json", "/value_burst_ohlc.json", "/market-mobile.js",
+                             "/value_ledger.html", "/value_ledger.json"):
             self._send_static(parsed.path[1:])
         else:
             self.send_response(404)

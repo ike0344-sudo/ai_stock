@@ -152,6 +152,12 @@ def main() -> None:
             log(f"거래대금 폭발 갱신 완료 ({value_burst.write_json(vb)}, {len(vb['rows'])}종목)")
         except Exception as e:
             log(f"거래대금 폭발 갱신 실패: {type(e).__name__}: {e}")
+        try:
+            from backtesting import value_ledger
+            vl = value_ledger.build(value_ledger.events())
+            log(f"신고대금 장부 갱신 완료 ({value_ledger.write_json(vl)}, {len(vl['rows'])}건)")
+        except Exception as e:
+            log(f"신고대금 장부 갱신 실패: {type(e).__name__}: {e}")
 
     for cmd, label, env_extra in STEPS:
         if not run(cmd, label, env_extra):
