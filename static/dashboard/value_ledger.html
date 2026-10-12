@@ -65,7 +65,7 @@
       <b>그날 거래대금이 직전 52주(245거래일, 그날 제외) 최대를 넘은 날</b> 중 대금 <b id="min-value">1,000억</b> 이상인 건입니다.
       대금은 <b>통합(KRX+NXT)</b> 실거래대금 — KRX만으로 재면 NXT 가 빠져 2025-03 뒤로 반 토막 납니다. 52주가 안 찬 신규상장주는 넣지 않습니다.
       배수 = 그날 대금 ÷ 직전 52주 최대, 평소대비 = 그날 대금 ÷ 직전 20일 평균. 누적 = 데이터 시작(2019년) 이후 그 종목의 몇 번째 신고인지(<span class="first-tag">처음</span> = 1번째).
-      <span class="tier tier-역대" style="margin-left:0">역대</span> = 52주를 넘어 데이터 전체 기간(2019-06 또는 상장 이후) 최대까지 넘은 날 — 앞선 데이터가 4년 이상 쌓인 날만 판정하므로 2023년 중반 전에는 표시가 거의 없습니다. 5일뒤·20일뒤는 그날 통합 종가에 샀을 때. 월 칸 아랫줄은 그 달 20일뒤 중앙값. 상장폐지 종목은 빠져 있어 성과가 실제보다 좋게 나옵니다.
+      <span class="tier tier-역대" style="margin-left:0">역대</span> = 52주를 넘어 데이터 전체 기간(2019-06 또는 상장 이후) 최대까지 넘은 날 — 앞선 데이터가 4년 이상 쌓인 날만 판정하므로 2023년 중반 전에는 표시가 거의 없습니다. 5일뒤·20일뒤는 그날 통합 종가에 샀을 때. 고점은 그 뒤 20거래일 안 장중 최고가와 그게 며칠째였는지(20일이 안 지났으면 지금까지). MDD 는 산 다음 날부터 고점 찍은 날까지의 장중 최저가 — 고점까지 가는 동안 가장 깊이 물린 폭(고점 당일 저가 포함). 월 칸 아랫줄은 그 달 20일뒤 중앙값. 상장폐지 종목은 빠져 있어 성과가 실제보다 좋게 나옵니다.
     </p>
     <p id="error-box" class="err hidden"></p>
   </div>
@@ -130,6 +130,8 @@
             <th data-key="n">누적</th>
             <th data-key="d5">5일뒤</th>
             <th data-key="d20">20일뒤</th>
+            <th data-key="pk" title="그 뒤 20거래일 안 장중 최고가 · 며칠째였는지">고점</th>
+            <th data-key="dd" title="산 다음 날부터 고점 찍은 날까지 장중 최저가 · 며칠째였는지 (고점까지 가는 동안 가장 깊이 물린 폭)">MDD</th>
           </tr>
         </thead>
         <tbody id="table-body"></tbody>
@@ -214,7 +216,9 @@
         stat("배수 중앙값", `${med("x").toFixed(2)}배`) +
         stat("당일등락 중앙값", pct(med("chg")), cls(med("chg"))) +
         stat("5일뒤 중앙값", pct(med("d5")) || "-", cls(med("d5"))) +
-        stat("20일뒤 중앙값", pct(med("d20")) || "-", cls(med("d20"))) : "";
+        stat("20일뒤 중앙값", pct(med("d20")) || "-", cls(med("d20"))) +
+        stat("고점 중앙값", pct(med("pk")) || "-", cls(med("pk"))) +
+        stat("MDD 중앙값", pct(med("dd")) || "-", cls(med("dd"))) : "";
       document.getElementById("row-count").textContent = fmt(list.length);
 
       const maxX = Math.max(3, ...list.map((r) => r.x));
@@ -230,9 +234,11 @@
         <td>${r.n === 1 ? '<span class="first-tag">처음</span>' : r.n}</td>
         <td class="${cls(r.d5)}">${pct(r.d5)}</td>
         <td class="${cls(r.d20)}">${pct(r.d20)}</td>
+        <td class="${cls(r.pk)}">${pct(r.pk)}${r.pkd ? ` <span class="name-code">${r.pkd}일째</span>` : ""}</td>
+        <td class="${cls(r.dd)}">${pct(r.dd)}${r.ddd ? ` <span class="name-code">${r.ddd}일째</span>` : ""}</td>
       </tr>`).join("") +
-        (list.length > shown.length ? `<tr class="more-row"><td colspan="10">위 ${fmt(shown.length)}건만 표시 — 달을 고르거나 검색해 좁혀 주세요</td></tr>` : "") ||
-        '<tr class="empty-row"><td colspan="10">조건에 맞는 건이 없습니다</td></tr>';
+        (list.length > shown.length ? `<tr class="more-row"><td colspan="12">위 ${fmt(shown.length)}건만 표시 — 달을 고르거나 검색해 좁혀 주세요</td></tr>` : "") ||
+        '<tr class="empty-row"><td colspan="12">조건에 맞는 건이 없습니다</td></tr>';
       drawGrid();
     }
 
@@ -298,7 +304,7 @@
         const res = await fetch("/value_ledger.json", { cache: "no-store" });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
-        ALL = data.rows.map((r) => ({ d: r[0], code: r[1], name: r[2], v: r[3], pm: r[4], x: r[5], avg: r[6], chg: r[7], c: r[8], n: r[9], d5: r[10], d20: r[11], ath: r[12] === 1, m: r[0].slice(0, 7) }));
+        ALL = data.rows.map((r) => ({ d: r[0], code: r[1], name: r[2], v: r[3], pm: r[4], x: r[5], avg: r[6], chg: r[7], c: r[8], n: r[9], d5: r[10], d20: r[11], ath: r[12] === 1, pk: r[13] ?? null, pkd: r[14] ?? null, dd: r[15] ?? null, ddd: r[16] ?? null, m: r[0].slice(0, 7) }));
         FIRST = ALL.length ? ALL[0].m : data.date.slice(0, 7);
         LAST = data.date.slice(0, 7);
         document.getElementById("as-of").textContent = `${data.date} 기준`;
