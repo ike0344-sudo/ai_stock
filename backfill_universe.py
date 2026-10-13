@@ -202,6 +202,18 @@ def run_backfill(w, limit, only_codes, deadline) -> None:
 
     client = KiwoomClient(*batch_keys(),
                           is_mock=os.environ.get("KIWOOM_IS_MOCK", "true").lower() == "true")
+    if only_codes is None:
+        # 거래 중단 목록부터 새로(종목정보 2번) — 낡으면 정지·폐지 종목을 매일 헛받고, 풀린 종목은 계속 빠진다.
+        try:
+            import refresh_inactive
+
+            refresh_inactive.refresh(client)
+            codes, daily_late = stale_codes(target, "--all" in sys.argv)
+            codes = codes[:limit] if limit else codes
+        except BaseException as e:             # SystemExit(종목정보가 너무 적다) 포함 — 목록 때문에 수집을 멈추지 않는다
+            if isinstance(e, KeyboardInterrupt):
+                raise
+            log(f"거래 중단 목록 갱신 실패(옛 목록으로 계속): {str(e)[:120]}")
     ok = fail = 0
     started = time.time()
     rescued = []

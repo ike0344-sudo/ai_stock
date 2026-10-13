@@ -20,9 +20,9 @@ from datahub import status
 from kiwoom_client import KiwoomClient, batch_keys
 
 
-def main() -> None:
-    load_dotenv()
-    client = KiwoomClient(*batch_keys(), is_mock=os.environ.get("KIWOOM_IS_MOCK", "true").lower() == "true")
+def refresh(client) -> dict:
+    """목록을 다시 쓰고 돌려준다. 밤 일봉 수집(backfill_universe)이 같은 client 로 매번 부른다 — 따로 돌리는 사람이 없어
+    9/25 뒤로 낡아 있었다(10-14)."""
     stock_list = {}
     for market in ("0", "10"):
         for r in client.get_stock_list(market):
@@ -36,6 +36,12 @@ def main() -> None:
         late |= {c for c, d in dates.items() if d < ref}
     codes = status.write_inactive(stock_list, sorted(late), date.today())
     print(f"후보 {len(late)}종목 → 거래 중단 {len(codes)} ({dict(Counter(v['reason'] for v in codes.values()))})")
+    return codes
+
+
+def main() -> None:
+    load_dotenv()
+    refresh(KiwoomClient(*batch_keys(), is_mock=os.environ.get("KIWOOM_IS_MOCK", "true").lower() == "true"))
 
 
 if __name__ == "__main__":
