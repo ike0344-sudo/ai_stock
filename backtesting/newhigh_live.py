@@ -108,6 +108,25 @@ def _load_refs() -> dict:
     return out
 
 
+_ledger: dict = {"mtime": None, "codes": []}
+_reg: dict = {"date": None, "q": {}}
+
+
+def _ledger_codes() -> list[str]:
+    """신고대금 장부에서 고점 창(뒤 20거래일)이 아직 열려 있는 종목 — 장부 화면이 오늘 고가·저가로 고점·MDD 를 갱신한다(10-13 사용자)."""
+    import json
+    p = "static/dashboard/value_ledger.json"
+    try:
+        m = os.path.getmtime(p)
+        if _ledger["mtime"] != m:
+            d = json.load(open(p, encoding="utf-8"))
+            tail = set(d.get("tail") or [])
+            _ledger.update(mtime=m, codes=sorted({r[1] for r in d["rows"] if r[0] in tail}))
+    except (OSError, ValueError, KeyError):
+        pass
+    return _ledger["codes"]
+
+
 def parse_quotes(payload: dict) -> dict:
     out = {}
     for it in payload.get("atn_stk_infr") or []:
@@ -130,7 +149,7 @@ def refresh_quotes(appkey: str, secretkey: str, is_mock: bool) -> None:
     refs = _refs["codes"]
     with _lock:
         extra = [r["코드"] for r in _state["rows"]]
-    codes = list(dict.fromkeys([c for c, v in refs.items() if v["watch"]] + [c for c in extra if c in refs]))
+    codes = list(dict.fromkeys([c for c, v in refs.items() if v["watch"]] + [c for c in extra if c in refs] + _ledger_codes()))
     client = _get_client(appkey, secretkey, is_mock)
     quotes = {}
     for i in range(0, len(codes), QUOTE_CHUNK):
@@ -140,6 +159,13 @@ def refresh_quotes(appkey: str, secretkey: str, is_mock: bool) -> None:
         quotes.update(parse_quotes(payload))
     for c, q in quotes.items():
         q.update(name=refs[c]["name"], h52=refs[c]["h52"], h120=refs[c]["h120"]) if c in refs else None
+    if _reg["date"] != today:
+        _reg.update(date=today, q={})
+    if dtime(9, 0) <= datetime.now().time() <= dtime(15, 31):   # 정규장 중에 본 고가·저가·현재가를 얼려 둔다 — 그 뒤 값엔 장후 거래가 섞인다(신고대금 장부 '정규장만')
+        _reg["q"] = {c: (q["high"], q["low"], q["price"]) for c, q in quotes.items()}
+    for c, q in quotes.items():
+        if c in _reg["q"]:
+            q["rh"], q["rl"], q["rp"] = _reg["q"][c]
     with _lock:
         _state.update(quotes=quotes, quotes_as_of=datetime.now().strftime("%H:%M:%S"), quote_error=None, quotes_date=today,
                       watch_n=len(codes))

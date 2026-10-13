@@ -233,7 +233,7 @@
       const shown = list.slice(0, 1500);
       document.getElementById("table-body").innerHTML = shown.map((r) => `<tr>
         <td class="col-name">${all ? r.d : r.d.slice(5)}</td>
-        <td class="col-name"><span class="name-main">${esc(r.name)}${r.ath ? '<span class="tier tier-역대">역대</span>' : ""}</span><span class="name-code">${r.code}${r.carry ? ` · <span class="first-tag" title="이 날은 기준 미만이지만 ${r.carry} 에 기준 이상 신고가 있었던 종목">${r.carry.slice(2).replace(/-/g, ".")} 이어짐</span>` : ""}</span></td>
+        <td class="col-name"><span class="name-main">${esc(r.name)}${r.ath ? '<span class="tier tier-역대">역대</span>' : ""}</span><span class="name-code">${r.code}${r.live ? ' · <span class="first-tag" title="오늘 장중 누적 대금 — 밤 갱신 때 확정">장중</span>' : ""}${r.carry ? ` · <span class="first-tag" title="이 날은 기준 미만이지만 ${r.carry} 에 기준 이상 신고가 있었던 종목">${r.carry.slice(2).replace(/-/g, ".")} 이어짐</span>` : ""}</span></td>
         <td>${fmt(r.v)}${r.full ? ` <span class="name-code">${r.rest ? `<span class="first-tag">${r.rest === 2 ? "장후 포함" : "추정"}</span> ` : ""}전체 ${fmt(r.full)}</span>` : ""}</td>
         <td>${fmt(r.pm)}</td>
         <td class="bar-cell" style="--w:${(Math.min(r.x, maxX) / maxX) * 100}%"><span><b>${r.x.toFixed(2)}</b></span></td>
@@ -313,20 +313,76 @@
     chgSelect.addEventListener("change", () => { state.chg = Number(chgSelect.value); lsSet(LS.chg, state.chg); applyFilter(); });
     document.getElementById("search-input").addEventListener("input", (e) => { state.q = e.target.value.trim(); render(); });
 
+    // 장중 반영 — 서버(value_burst_live)가 60초마다 받는 통합 대금 상위 종목 중 오늘 누적 대금이 어제까지 1년 최대를 넘은 건을 오늘 줄로 얹는다.
+    // 기준은 어젯밤 값 그대로. 정규장 대금은 장중에 못 가르므로 '정규장만' 보기에는 안 나온다(reg 없음). 밤 갱신이 오늘 것을 담으면 그만둔다.
+    let NIGHT = [], REFS = {}, NIGHT_DATE = "", MIN_EOK = 1000, TAIL = [];
+    // 뒤 20거래일 창이 아직 열린 줄(TAIL 안)은 오늘 고가·저가·현재가(newhigh_live 감시 시세)로 고점·MDD·5일뒤·20일뒤를 이어 잰다.
+    // 감시 시세는 KRX 기준(NXT 장전 제외).
+    const r2 = (x) => Math.round(x * 100) / 100;
+    function today(o, c, day, hi, lo, px, loAll, lodAll) {   // o 의 고점·MDD·뒤 수익을 오늘 고가·저가·현재가로 이어 잰다(c = 산 값)
+      if (!c || !hi || !lo) return o;
+      o = { ...o };
+      const hp = r2((hi / c - 1) * 100), lp = r2((lo / c - 1) * 100);
+      if (o.pk == null || hp > o.pk) {   // 고점이 오늘로 옮겨 갔다 — MDD 는 산 다음 날부터 오늘까지의 최저
+        o.pk = hp; o.pkd = day;
+        if (loAll == null || lp < loAll) { o.dd = lp; o.ddd = day; } else { o.dd = loAll; o.ddd = lodAll; }
+      }
+      if (day === 5 && o.d5 == null) o.d5 = r2((px / c - 1) * 100);
+      if (day === 20 && o.d20 == null) o.d20 = r2((px / c - 1) * 100);
+      return o;
+    }
+    function withToday(r, q) {
+      const i = TAIL.indexOf(r.d);
+      if (i < 0 || !q) return r;
+      const day = TAIL.length - i, o = today(r, r.c, day, q.high, q.low, q.price, r.lo, r.lod);
+      // 정규장 칸: 서버가 15:30 에 얼려 둔 값(rh·rl·rp). ponytail: 서버가 15:30 뒤에 다시 뜬 날은 얼린 값이 없어 KRX 하루 값으로 대신한다
+      // (KRX 시간외 단일가가 섞일 수 있다 — 밤 갱신 때 1분봉 정규장 값으로 확정)
+      if (r.k) o.k = today(r.k, r.k.c, day, q.rh ?? q.high, q.rl ?? q.low, q.rp ?? q.price, r.klo, r.klod);
+      return o;
+    }
+    async function pollLive() {
+      try {
+        const res = await fetch("/api/value-burst-live", { cache: "no-store" });
+        if (!res.ok) return;
+        const lv = await res.json();
+        if (!lv.date || lv.date <= NIGHT_DATE) return;
+        let base = NIGHT;
+        if (TAIL.length && lv.date > TAIL[TAIL.length - 1]) {
+          const nh = await (await fetch("/api/newhigh-live", { cache: "no-store" })).json().catch(() => ({}));
+          if (nh.quotes_date === lv.date) base = NIGHT.map((r) => withToday(r, nh.quotes[r.code]));
+        }
+        const cnt = new Map();
+        for (const r of NIGHT) if (r.isFull) cnt.set(r.code, (cnt.get(r.code) || 0) + 1);
+        const live = (lv.rows || []).filter((r) => ["역대", "4년", "1년"].includes(r["등급"]) && r["대금"] >= MIN_EOK).map((r) => {
+          const v = r["대금"], pm = REFS[r["코드"]] ?? r["비교대금"];
+          return { d: lv.date, code: r["코드"], name: r["이름"], v, pm, x: Math.round(v / pm * 100) / 100, avg: r["평균대금"] ? Math.round(v / r["평균대금"] * 10) / 10 : null,
+                   chg: r["등락"], c: r["현재가"], n: (cnt.get(r["코드"]) || 0) + 1, d5: null, d20: null, ath: r["등급"] === "역대", pk: null, pkd: null, dd: null, ddd: null,
+                   reg: null, rath: false, rest: 0, isFull: true, rpm: null, rn: null, ravg: null, k: null, m: lv.date.slice(0, 7), live: true };
+        }).sort((a, b) => b.v - a.v);
+        ALL = base.concat(live);
+        if (lv.date.slice(0, 7) > LAST) LAST = lv.date.slice(0, 7);
+        document.getElementById("as-of").textContent = `${lv.date} 장중 ${(lv.as_of || "").slice(0, 5)}${lv.active ? "" : "(장 마감)"} · 확정 자료 ${NIGHT_DATE}`;
+        applyFilter();
+      } catch (e) { /* 서버가 옛 버전이면 야간 자료만 */ }
+    }
+    setInterval(pollLive, 60000);
+
     async function load() {
       const errBox = document.getElementById("error-box");
       try {
         const res = await fetch("/value_ledger.json", { cache: "no-store" });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
-        ALL = data.rows.map((r) => ({ d: r[0], code: r[1], name: r[2], v: r[3], pm: r[4], x: r[5], avg: r[6], chg: r[7], c: r[8], n: r[9], d5: r[10], d20: r[11], ath: r[12] === 1, pk: r[13] ?? null, pkd: r[14] ?? null, dd: r[15] ?? null, ddd: r[16] ?? null, reg: r[17] ?? null, rath: r[18] === 1, rest: r[19], isFull: r[28] !== 0, rpm: r[29] ?? null, rn: r[30] ?? null, ravg: r[31] ?? null,
+        ALL = data.rows.map((r) => ({ d: r[0], code: r[1], name: r[2], v: r[3], pm: r[4], x: r[5], avg: r[6], chg: r[7], c: r[8], n: r[9], d5: r[10], d20: r[11], ath: r[12] === 1, pk: r[13] ?? null, pkd: r[14] ?? null, dd: r[15] ?? null, ddd: r[16] ?? null, reg: r[17] ?? null, rath: r[18] === 1, rest: r[19], isFull: r[28] !== 0, rpm: r[29] ?? null, rn: r[30] ?? null, ravg: r[31] ?? null, lo: r[32] ?? null, lod: r[33] ?? null, klo: r[34] ?? null, klod: r[35] ?? null,
           k: r[21] == null ? null : { chg: r[20], c: r[21], d5: r[22], d20: r[23], pk: r[24], pkd: r[25], dd: r[26], ddd: r[27] }, m: r[0].slice(0, 7) }));
+        NIGHT = ALL; TAIL = data.tail || []; REFS = data.refs || {}; NIGHT_DATE = data.date; MIN_EOK = data.min_value_eok;
         FIRST = ALL.length ? ALL[0].m : data.date.slice(0, 7);
         LAST = data.date.slice(0, 7);
         document.getElementById("as-of").textContent = `${data.date} 기준`;
         document.getElementById("min-value").textContent = `${fmt(data.min_value_eok)}억`;
         errBox.classList.add("hidden");
         applyFilter();
+        pollLive();
       } catch (e) {
         errBox.textContent = "장부 데이터를 못 읽었습니다 (" + e.message + ") — python -m backtesting.value_ledger 로 만듭니다.";
         errBox.classList.remove("hidden");

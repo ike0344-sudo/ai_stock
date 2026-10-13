@@ -29,7 +29,7 @@ Y1 = 245
 Y4 = 980  # 역대 판정에 필요한 최소 이력(value_burst 의 4년과 같은 길이)
 PEAK_DAYS = 20  # 고점을 찾는 창 — 20일뒤 칸과 같은 기간
 MIN_EOK = 1000  # 10-09 사용자 "천억 이상만" (처음 300억 = value_burst 저장 하한)
-COLS = ["날짜", "코드", "종목명", "거래대금_억", "직전52주최대_억", "배수", "평소20일대비", "등락률%", "종가", "누적횟수", "5일뒤%", "20일뒤%", "역대", "고점%", "고점일", "저점%", "저점일", "정규장_억", "정규장역대", "정규장추정", "정규_등락률%", "정규_종가", "정규_5일뒤%", "정규_20일뒤%", "정규_고점%", "정규_고점일", "정규_저점%", "정규_저점일", "전체신고", "정규직전최대_억", "정규누적", "정규평소20일대비"]
+COLS = ["날짜", "코드", "종목명", "거래대금_억", "직전52주최대_억", "배수", "평소20일대비", "등락률%", "종가", "누적횟수", "5일뒤%", "20일뒤%", "역대", "고점%", "고점일", "저점%", "저점일", "정규장_억", "정규장역대", "정규장추정", "정규_등락률%", "정규_종가", "정규_5일뒤%", "정규_20일뒤%", "정규_고점%", "정규_고점일", "정규_저점%", "정규_저점일", "전체신고", "정규직전최대_억", "정규누적", "정규평소20일대비", "전체저점%", "전체저점일", "정규_전체저점%", "정규_전체저점일"]
 
 
 def events() -> pd.DataFrame:
@@ -75,6 +75,8 @@ def events() -> pd.DataFrame:
         kdp = [_peak(md.low.fillna(k.low).fillna(kc).to_numpy(), i, kc.iat[i], low=True, days=x[1]) for i, x in zip(at, kpk)]
         peak = [_peak(d.high.to_numpy(), i, c.iat[i]) for i in at]
         dip = [_peak(d.low.to_numpy(), i, c.iat[i], low=True, days=pk[1]) for i, pk in zip(at, peak)]
+        klo = [_peak(md.low.fillna(k.low).fillna(kc).to_numpy(), i, kc.iat[i], low=True) for i in at]
+        lo = [_peak(d.low.to_numpy(), i, c.iat[i], low=True) for i in at]  # 고점일과 상관없이 뒤 20거래일 최저 — 장중에 고점이 오늘로 옮겨 가면 화면이 MDD 를 다시 잡는 데 쓴다
         rows.append(pd.DataFrame({
             "날짜": pd.to_datetime(d.date[hit]).dt.strftime("%Y-%m-%d"), "코드": code, "종목명": names.get(code, code),
             "거래대금_억": val[hit].round(0), "직전52주최대_억": prev_max[hit].round(0), "배수": (val / prev_max)[hit].round(2),
@@ -89,7 +91,8 @@ def events() -> pd.DataFrame:
             "정규_등락률%": ((kc / kc.shift(1) - 1) * 100)[hit].round(2), "정규_종가": kc[hit],
             "정규_5일뒤%": ((kc.shift(-5) / kc - 1) * 100)[hit].round(2), "정규_20일뒤%": ((kc.shift(-20) / kc - 1) * 100)[hit].round(2),
             "정규_고점%": [x[0] for x in kpk], "정규_고점일": [x[1] for x in kpk], "정규_저점%": [x[0] for x in kdp], "정규_저점일": [x[1] for x in kdp],
-            "전체신고": full[hit], "정규직전최대_억": rpm[hit].round(0),
+            "전체신고": full[hit], "정규직전최대_억": rpm[hit].round(0), "전체저점%": [x[0] for x in lo], "전체저점일": [x[1] for x in lo],
+            "정규_전체저점%": [x[0] for x in klo], "정규_전체저점일": [x[1] for x in klo],
             "정규평소20일대비": (reg / reg.shift(1).rolling(20).mean().replace(0, np.nan))[hit].round(1)}))
     out = pd.concat(rows).sort_values(["날짜", "거래대금_억"], ascending=[True, False]).reset_index(drop=True)
     out["누적횟수"] = out[out["전체신고"]].groupby("코드").cumcount() + 1  # 데이터 시작 이후 그 종목의 몇 번째 52주 신고인지
@@ -159,8 +162,14 @@ def build(e: pd.DataFrame) -> dict:
     rows = [[r[0], r[1], r[2], int(r[3]), i_(r[4]), r[5], r[6], r[7], int(r[8]), i_(r[9]), r[10], r[11], int(bool(r[12])), r[13], None if r[14] is None else int(r[14]), r[15], None if r[16] is None else int(r[16]),
              None if r[17] is None else int(r[17]), int(bool(r[18])), int(r[19]),
              r[20], None if r[21] is None else int(r[21]), r[22], r[23], r[24], None if r[25] is None else int(r[25]), r[26], i_(r[27]),
-             int(bool(r[28])), i_(r[29]), i_(r[30]), r[31]] for r in rows]
-    return {"date": e["날짜"].max(), "min_value_eok": MIN_EOK, "days": Y1, "regular_from": REG_FROM, "rows": rows}  # rows 28~31 = 하루 전체 신고 여부 · 정규장 직전 최대 · 정규장 누적 · 정규장 평소대비
+             int(bool(r[28])), i_(r[29]), i_(r[30]), r[31], r[32], i_(r[33]), r[34], i_(r[35])] for r in rows]
+    try:  # 장중 반영용 — 종목별 '어제까지 1년 최대 대금'(억). value_burst 가 밤마다 쓰는 기준을 그대로 싣는다(같은 245일·같은 통합 일봉)
+        from .value_burst import REFS_PATH
+        refs = {c: v["y1"] for c, v in json.load(open(REFS_PATH, encoding="utf-8"))["codes"].items() if v.get("y1")}
+    except (OSError, KeyError, ValueError):
+        refs = {}
+    return {"date": e["날짜"].max(), "min_value_eok": MIN_EOK, "days": Y1, "regular_from": REG_FROM, "refs": refs, "rows": rows,
+            "tail": pd.read_csv("data/stocks/daily_al/005930.csv", dtype={"date": str}).date.tail(PEAK_DAYS).map(lambda x: f"{x[:4]}-{x[4:6]}-{x[6:]}").tolist()}  # 마지막 20거래일 — 이 안의 신고는 고점 창이 아직 열려 있다  # rows 28~31 = 하루 전체 신고 여부 · 정규장 직전 최대 · 정규장 누적 · 정규장 평소대비
 
 
 def write_json(payload: dict, path: str = OUT_PATH) -> str:
