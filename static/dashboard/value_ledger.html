@@ -113,6 +113,13 @@
           <button type="button" data-ath="1">역대만</button>
         </span>
       </div>
+      <div class="grp">
+        <span class="seg" id="reg-seg">
+          <button type="button" data-reg="0">하루 전체</button>
+          <button type="button" data-reg="1">정규장만</button>
+        </span>
+        <span class="note" style="margin:0">· 정규장만 = 09:00~15:30 대금이 직전 1년 정규장 대금 최대를 넘은 날 · 등락·뒤 수익·고점·MDD 도 정규장 가격(15:30 종가)으로 · <span class="first-tag">추정</span> = NXT 몫을 어림(오차 보통 ±2%, 크면 ±8%) · <span class="first-tag">장후 포함</span> = 2025-03 전, 분봉이 없어 장후 시간외 거래(보통 1% 안팎)를 못 뗀 날</span>
+      </div>
       <div class="grp"><input type="text" id="search-input" placeholder="종목명·코드 검색 (전 기간)"></div>
       <span class="count-badge"><b id="row-count">0</b>건</span>
     </div>
@@ -140,13 +147,13 @@
   </div>
 
   <script>
-    const LS = { font: "ranking-root-font-px", month: "vledger-month", scope: "vledger-scope", min: "vledger-min", chg: "vledger-chg", first: "vledger-first", ath: "vledger-ath", sortKey: "vledger-sort-key", sortDir: "vledger-sort-dir" };
+    const LS = { font: "ranking-root-font-px", month: "vledger-month", scope: "vledger-scope", min: "vledger-min", chg: "vledger-chg", first: "vledger-first", ath: "vledger-ath", reg: "vledger-reg", sortKey: "vledger-sort-key", sortDir: "vledger-sort-dir" };
     function lsGet(key, dflt) { try { const v = localStorage.getItem(key); return v === null ? dflt : v; } catch (e) { return dflt; } }
     function lsSet(key, v) { try { localStorage.setItem(key, v); } catch (e) {} }
 
     let ALL = [], ROWS = [], BY_MONTH = new Map(), FIRST = "", LAST = "";
     const state = {
-      month: lsGet(LS.month, ""), scope: lsGet(LS.scope, "month"), min: Number(lsGet(LS.min, "0")), chg: Number(lsGet(LS.chg, "-999")), first: lsGet(LS.first, "0"), ath: lsGet(LS.ath, "0"),
+      month: lsGet(LS.month, ""), scope: lsGet(LS.scope, "month"), min: Number(lsGet(LS.min, "0")), chg: Number(lsGet(LS.chg, "-999")), first: lsGet(LS.first, "0"), ath: lsGet(LS.ath, "0"), reg: lsGet(LS.reg, "0"),
       sortKey: lsGet(LS.sortKey, "d"), sortDir: Number(lsGet(LS.sortDir, "1")), q: "",
     };
 
@@ -205,6 +212,7 @@
       document.querySelectorAll("#scope-seg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.scope === state.scope && !state.q)));
       document.querySelectorAll("#first-seg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.first === state.first)));
       document.querySelectorAll("#ath-seg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.ath === state.ath)));
+      document.querySelectorAll("#reg-seg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.reg === state.reg)));
       document.querySelectorAll("#vl-table thead th").forEach((th) => th.classList.toggle("sorted", th.dataset.key === k));
       const [y, mo] = state.month.split("-");
       document.getElementById("sel-title").textContent = state.q ? `“${state.q}” 전 기간` : all ? "전 기간" : `${y}년 ${Number(mo)}월`;
@@ -226,7 +234,7 @@
       document.getElementById("table-body").innerHTML = shown.map((r) => `<tr>
         <td class="col-name">${all ? r.d : r.d.slice(5)}</td>
         <td class="col-name"><span class="name-main">${esc(r.name)}${r.ath ? '<span class="tier tier-역대">역대</span>' : ""}</span><span class="name-code">${r.code}${r.carry ? ` · <span class="first-tag" title="이 날은 기준 미만이지만 ${r.carry} 에 기준 이상 신고가 있었던 종목">${r.carry.slice(2).replace(/-/g, ".")} 이어짐</span>` : ""}</span></td>
-        <td>${fmt(r.v)}</td>
+        <td>${fmt(r.v)}${r.full ? ` <span class="name-code">${r.rest ? `<span class="first-tag">${r.rest === 2 ? "장후 포함" : "추정"}</span> ` : ""}전체 ${fmt(r.full)}</span>` : ""}</td>
         <td>${fmt(r.pm)}</td>
         <td class="bar-cell" style="--w:${(Math.min(r.x, maxX) / maxX) * 100}%"><span><b>${r.x.toFixed(2)}</b></span></td>
         <td>${r.avg === null ? "" : r.avg.toFixed(1) + "배"}</td>
@@ -246,7 +254,11 @@
       // 당일등락 필터: 그날 등락이 기준 이상이거나, 직전 365일 안에 기준 이상으로 신고가 났던 종목의 이후 신고(10-09 사용자 — HLB제약 9/29 +29.9% → 10/8 +3.3%)
       const lastHit = new Map();
       ROWS = [];
-      for (const r of ALL) {   // ALL 은 날짜 오름차순
+      for (let r of ALL) {   // ALL 은 날짜 오름차순
+        if (state.reg === "1") {   // 정규장만: 정규장 대금이 직전 1년 정규장 대금 최대를 넘은 날(10-13 사용자 — 심텍 9/22)
+          if (r.reg === null) continue;   // 정규장 기준으로는 신고가 아닌 날은 값이 없다
+          r = { ...r, full: r.v, v: r.reg, pm: r.rpm, x: r.reg / r.rpm, n: r.rn, avg: r.ravg, ath: r.rath, ...(r.k || {}) };
+        } else if (!r.isFull) continue;   // 정규장 기준으로만 신고인 날
         if (r.v < state.min) continue;
         let carry = null;
         if (state.chg !== -999) {
@@ -285,6 +297,9 @@
     document.querySelectorAll("#first-seg button").forEach((b) => b.addEventListener("click", () => {
       state.first = b.dataset.first; lsSet(LS.first, state.first); applyFilter();
     }));
+    document.querySelectorAll("#reg-seg button").forEach((b) => b.addEventListener("click", () => {
+      state.reg = b.dataset.reg; lsSet(LS.reg, state.reg); applyFilter();
+    }));
     document.querySelectorAll("#ath-seg button").forEach((b) => b.addEventListener("click", () => {
       state.ath = b.dataset.ath; lsSet(LS.ath, state.ath); applyFilter();
     }));
@@ -304,7 +319,8 @@
         const res = await fetch("/value_ledger.json", { cache: "no-store" });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
-        ALL = data.rows.map((r) => ({ d: r[0], code: r[1], name: r[2], v: r[3], pm: r[4], x: r[5], avg: r[6], chg: r[7], c: r[8], n: r[9], d5: r[10], d20: r[11], ath: r[12] === 1, pk: r[13] ?? null, pkd: r[14] ?? null, dd: r[15] ?? null, ddd: r[16] ?? null, m: r[0].slice(0, 7) }));
+        ALL = data.rows.map((r) => ({ d: r[0], code: r[1], name: r[2], v: r[3], pm: r[4], x: r[5], avg: r[6], chg: r[7], c: r[8], n: r[9], d5: r[10], d20: r[11], ath: r[12] === 1, pk: r[13] ?? null, pkd: r[14] ?? null, dd: r[15] ?? null, ddd: r[16] ?? null, reg: r[17] ?? null, rath: r[18] === 1, rest: r[19], isFull: r[28] !== 0, rpm: r[29] ?? null, rn: r[30] ?? null, ravg: r[31] ?? null,
+          k: r[21] == null ? null : { chg: r[20], c: r[21], d5: r[22], d20: r[23], pk: r[24], pkd: r[25], dd: r[26], ddd: r[27] }, m: r[0].slice(0, 7) }));
         FIRST = ALL.length ? ALL[0].m : data.date.slice(0, 7);
         LAST = data.date.slice(0, 7);
         document.getElementById("as-of").textContent = `${data.date} 기준`;
