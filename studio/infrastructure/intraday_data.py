@@ -314,7 +314,10 @@ def _read_tick_file(code: str, day: dt.date) -> pd.DataFrame | None:
         return pd.read_parquet(base)
     csv = base.with_suffix(".csv")
     if csv.is_file():                                     # 압축 전 원본 — 시각의 앞자리 0 을 잃지 않게 문자열로
-        return pd.read_csv(csv, dtype=str, encoding="utf-8-sig")
+        raw = pd.read_csv(csv, dtype=str, encoding="utf-8-sig")
+        if "time" not in raw and "cntr_tm" in raw:        # 09-28~ 원본은 시각이 cntr_tm(YYYYMMDDHHMMSS) — 압축본의 time(HHMMSS)으로 맞춘다
+            raw["time"] = raw["cntr_tm"].str[-6:]
+        return raw
     return None
 
 
