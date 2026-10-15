@@ -29,6 +29,7 @@ Y1 = 245
 Y4 = 980  # 역대 판정에 필요한 최소 이력(value_burst 의 4년과 같은 길이)
 PEAK_DAYS = 20  # 고점을 찾는 창 — 20일뒤 칸과 같은 기간
 MIN_EOK = 1000  # 10-09 사용자 "천억 이상만" (처음 300억 = value_burst 저장 하한)
+RREFS: dict[str, int] = {}  # events() 가 채운다 — 종목별 직전 1년 정규장 대금 최대(억)
 COLS = ["날짜", "코드", "종목명", "거래대금_억", "직전52주최대_억", "배수", "평소20일대비", "등락률%", "종가", "누적횟수", "5일뒤%", "20일뒤%", "역대", "고점%", "고점일", "저점%", "저점일", "정규장_억", "정규장역대", "정규장추정", "정규_등락률%", "정규_종가", "정규_5일뒤%", "정규_20일뒤%", "정규_고점%", "정규_고점일", "정규_저점%", "정규_저점일", "전체신고", "정규직전최대_억", "정규누적", "정규평소20일대비", "전체저점%", "전체저점일", "정규_전체저점%", "정규_전체저점일"]
 
 
@@ -66,6 +67,9 @@ def events() -> pd.DataFrame:
         # 2025-11-10 하루 전체 5,078억)처럼 장전·장후 대금에 밀려 빠진다(10-13 사용자)
         rpm = reg.shift(1).rolling(Y1, min_periods=Y1).max().replace(0, np.nan)
         rhit = (reg > rpm) & (reg >= MIN_EOK)
+        rref = reg.tail(Y1).max()  # 장중 반영용 — 오늘 기준 '어제까지 1년 정규장 대금 최대'(정규장만 보기, 10-15 사용자 에스엠벡셀)
+        if rref > 0:
+            RREFS[code] = int(round(rref))
         hit = full | rhit
         if not hit.any():
             continue
@@ -168,7 +172,7 @@ def build(e: pd.DataFrame) -> dict:
         refs = {c: v["y1"] for c, v in json.load(open(REFS_PATH, encoding="utf-8"))["codes"].items() if v.get("y1")}
     except (OSError, KeyError, ValueError):
         refs = {}
-    return {"date": e["날짜"].max(), "min_value_eok": MIN_EOK, "days": Y1, "regular_from": REG_FROM, "refs": refs, "rows": rows,
+    return {"date": e["날짜"].max(), "min_value_eok": MIN_EOK, "days": Y1, "regular_from": REG_FROM, "refs": refs, "rrefs": RREFS, "rows": rows,
             "tail": pd.read_csv("data/stocks/daily_al/005930.csv", dtype={"date": str}).date.tail(PEAK_DAYS).map(lambda x: f"{x[:4]}-{x[4:6]}-{x[6:]}").tolist()}  # 마지막 20거래일 — 이 안의 신고는 고점 창이 아직 열려 있다  # rows 28~31 = 하루 전체 신고 여부 · 정규장 직전 최대 · 정규장 누적 · 정규장 평소대비
 
 
