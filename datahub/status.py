@@ -43,13 +43,24 @@ def _code_files(dataset_id: str) -> dict[str, Path]:
     return out
 
 
+_LAST_DATE: dict[str, tuple[tuple[int, int], str | None]] = {}
+
+
 def _csv_last_date(p: Path) -> str | None:
+    """파일(크기·수정시각)이 그대로면 지난번 값 — 개요 한 번에 8천 파일을 열어 2초가 들었다(10-14). stat 은 open 의 1/9."""
     try:
+        st = p.stat()
+        key = (st.st_size, st.st_mtime_ns)
+        hit = _LAST_DATE.get(str(p))
+        if hit and hit[0] == key:
+            return hit[1]
         with open(p, "rb") as f:
-            f.seek(max(0, p.stat().st_size - 200))
+            f.seek(max(0, st.st_size - 200))
             tail = f.read().decode("utf-8", errors="ignore").strip().splitlines()
         d = tail[-1][:10]
-        return d if re.match(r"\d{4}-\d{2}-\d{2}", d) else None
+        d = d if re.match(r"\d{4}-\d{2}-\d{2}", d) else None
+        _LAST_DATE[str(p)] = (key, d)
+        return d
     except (OSError, IndexError):
         return None
 
@@ -213,10 +224,16 @@ def avg_trading_value(code: str, days: int = 20) -> float:
     if key in _TV_CACHE:
         return _TV_CACHE[key]
     try:
-        with p.open(encoding="utf-8-sig") as fh:
-            head = fh.readline().strip().split(",")
+        with p.open("rb") as fh:                   # 머리줄 + 끝부분만 읽는다 — 전체(1,800줄)를 2천 종목 읽느라 개요가 7초 걸렸다(10-14)
+            head = fh.readline().decode("utf-8-sig").strip().split(",")
             ci, vi = head.index("close"), head.index("volume")
-            rows = [ln.strip().split(",") for ln in fh]
+            body_start, size = fh.tell(), p.stat().st_size
+            fh.seek(max(body_start, size - 200 * (days + 2)))
+            at_start = fh.tell() == body_start
+            lines = fh.read().decode("utf-8", errors="ignore").splitlines()
+        if not at_start:
+            lines = lines[1:]                        # 중간에서 잘린 첫 줄은 버린다
+        rows = [ln.strip().split(",") for ln in lines if ln.strip()]
     except (OSError, ValueError):
         return float("inf")
     vals = []
@@ -321,7 +338,17 @@ def expected_tick_codes(daily, dates: list[date], top_n: int = 35, extra: set[st
     `daily_top_n_from_local` 과 같은 규칙(P7) — 같은 날 종가로 뽑으면 미래참조라 D-1 순위를 쓴다.
     daily: code/date/close/volume 컬럼 표(`backtesting.daily_cache.load_daily_all` 결과)."""
     import pandas as pd
-    df = daily[["code", "date", "close", "volume"]].copy()
+    if not dates:
+        return {}
+    # 순위는 날짜마다 따로 매기므로, 필요한 날(dates 각각의 직전 순위일)부터만 남겨도 결과가 같다 — 전 기간 400만 줄을
+    # 정렬하느라 체결 조회창이 4초 걸렸다(10-14). 날짜 변환도 고유 날짜(2천 개)만 한다.
+    uniq = pd.Series(pd.unique(daily["date"]))
+    as_dt = pd.to_datetime(uniq)
+    first = pd.Timestamp(min(dates))
+    before = as_dt[as_dt < first]
+    lo = before.max() if len(before) else as_dt.min()
+    keep = set(uniq[(as_dt >= lo).to_numpy()])
+    df = daily.loc[daily["date"].isin(keep), ["code", "date", "close", "volume"]].copy()
     df["date"] = pd.to_datetime(df["date"])
     df["tv"] = df["close"] * df["volume"]
     top = df.sort_values("tv", ascending=False, kind="stable").groupby("date").head(top_n)

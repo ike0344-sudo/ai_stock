@@ -26,9 +26,13 @@ def state_base() -> Path:
     return root()
 
 
+_DEFAULT_ROOT = Path(__file__).resolve().parent.parent   # resolve 는 Windows 에서 호출당 0.5ms — 개요 1번에 2천 번 불려 1초가 됐다(10-14 측정)
+
+
 def root() -> Path:
-    """저장소 루트. 호출마다 읽는다 — 테스트가 환경변수로 바꿀 수 있게."""
-    return Path(os.environ.get("DATAHUB_ROOT") or Path(__file__).resolve().parent.parent)
+    """저장소 루트. 환경변수는 호출마다 읽는다 — 테스트가 환경변수로 바꿀 수 있게."""
+    env = os.environ.get("DATAHUB_ROOT")
+    return Path(env) if env else _DEFAULT_ROOT
 
 
 class _Model(BaseModel):

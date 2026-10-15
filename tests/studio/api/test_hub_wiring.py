@@ -12,7 +12,7 @@ def test_hub_router_mounted_before_catch_all(client):
     r = client.get("/api/data/locks")
     assert r.status_code == 200, r.text
     rows = r.json()["data"]
-    assert {x["resource"] for x in rows} == {"daily_minute", "minute_al", "tick_al"}
+    assert {x["resource"] for x in rows} == {"daily_minute", "minute_al", "tick_al", "rs_rating"}  # 2026-09-28 rs_rating 잠금 추가
     # 허브에 없는 경로는 여전히 JSON 404 봉투(캐치올)
     res = client.get("/api/data/no-such-thing")
     assert res.status_code == 404 and res.json()["error"]["code"] == "NOT_FOUND"
@@ -43,6 +43,7 @@ def fake_server(monkeypatch, root):
 
     monkeypatch.setattr(server_main.scheduler, "start", lambda r, s: calls["start"].append((r, s)) or Th())
     monkeypatch.setattr(server_main.uvicorn, "run", lambda *a, **k: calls.__setitem__("run", calls["run"] + 1))
+    monkeypatch.setattr(server_main.hub_api, "start_background_refresh", lambda s: None)   # 미리 계산 스레드는 운영 서버만
     monkeypatch.delenv("STUDIO_NO_SCHEDULER", raising=False)
     return calls
 

@@ -11,6 +11,7 @@ import sys
 
 import uvicorn
 
+from datahub import api as hub_api
 from datahub import scheduler
 from jobrunner.dispatcher import Dispatcher
 from jobrunner.store import JobStore, default_root
@@ -40,6 +41,7 @@ def main() -> int:
     dispatcher.start()
     # 허브 일정(야간 체결 수집·아침 일봉 따라잡기·보관 병합·신선도 알림). 끄려면 STUDIO_NO_SCHEDULER=1 (재기동 필요)
     sched = None if os.environ.get("STUDIO_NO_SCHEDULER") == "1" else scheduler.start(root, store)
+    hub_api.start_background_refresh(store)   # 허브 개요·체결 조회창을 뒤에서 미리 계산 — 첫 접속이 계산(옛 19초)을 기다리지 않게(10-14)
     try:
         uvicorn.run(create_app(root, dispatcher=dispatcher, services=default_services(), heartbeat_path=root / "state" / "studio" / "heartbeat.json"),
                     host=HOST, port=port, log_level="info")

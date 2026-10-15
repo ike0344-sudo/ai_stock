@@ -35,17 +35,35 @@ def append(event: dict) -> None:
 def read(days: int = 7) -> list[dict]:
     """최근 days 일의 이벤트(월 파일 두 개까지 훑는다)."""
     since = datetime.now() - timedelta(days=days)
+    cut = since.isoformat(timespec="seconds")
     events = []
     for f in {file_for(since), file_for(datetime.now())}:
-        if f.is_file():
-            for ln in f.read_text(encoding="utf-8").splitlines():
-                try:
-                    ev = json.loads(ln)
-                except ValueError:
-                    continue                         # 쓰다 만 줄 — 건너뛴다
-                if ev.get("ts", "") >= since.isoformat(timespec="seconds"):
-                    events.append(ev)
+        events += [ev for ev in _parsed(f) if ev.get("ts", "") >= cut]
     return sorted(events, key=lambda e: e["ts"])
+
+
+_PARSED: dict[str, tuple[tuple[int, int], list[dict]]] = {}
+
+
+def _parsed(f: Path) -> list[dict]:
+    """월 파일 한 개의 이벤트 — 파일(크기·수정시각)이 그대로면 다시 파싱하지 않는다. 개요 한 번에 read 가 19번 불려
+    7천 줄 JSON 을 매번 다시 읽느라 2.5초가 들었다(10-14 측정). 돌려준 dict 는 공유되니 고치지 말 것."""
+    try:
+        st = f.stat()
+    except OSError:
+        return []
+    key = (st.st_size, st.st_mtime_ns)
+    hit = _PARSED.get(str(f))
+    if hit and hit[0] == key:
+        return hit[1]
+    out = []
+    for ln in f.read_text(encoding="utf-8").splitlines():
+        try:
+            out.append(json.loads(ln))
+        except ValueError:
+            continue                                 # 쓰다 만 줄 — 건너뛴다
+    _PARSED[str(f)] = (key, out)
+    return out
 
 
 def runs(events: list[dict]) -> list[dict]:

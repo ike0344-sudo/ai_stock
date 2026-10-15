@@ -10,6 +10,8 @@
 import json
 import math
 import re
+import threading
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -137,16 +139,80 @@ def _collect_busy(store: JobStore) -> dict | None:
 # ---------- overview ----------
 
 _cache: dict[str, tuple[float, Any]] = {}
+_gen = 0                                              # _invalidate 마다 +1 — 비우기 전에 시작한 계산이 끝나서 옛 값을 다시 넣지 못하게
+_key_locks: dict[str, threading.Lock] = {}
+_refreshing: set[str] = set()
+BACKGROUND = False                                    # 운영 서버만 켠다(start_background_refresh). 켜지면 만료된 값을 바로 주고 뒤에서 다시 계산
+
+
+def _invalidate(key: str | None = None) -> None:
+    global _gen
+    _gen += 1
+    _cache.clear() if key is None else _cache.pop(key, None)
+
+
+def _store_val(key: str, gen: int, val: Any) -> None:
+    if gen == _gen:
+        _cache[key] = (time.monotonic(), val)
 
 
 def _cached(key: str, fn: Callable[[], Any]) -> Any:
-    import time
+    """60초 캐시. 같은 키를 여러 요청이 동시에 계산하지 않는다(10-14: 상태바·개요 탭이 동시에 불러 overview 를 두 번 계산, 19초).
+    BACKGROUND 면 만료돼도 옛 값을 즉시 주고 뒤에서 갱신한다 — 값이 아예 없을 때(서버 막 뜸·작업 제출 직후)만 기다린다."""
     hit = _cache.get(key)
     if hit and time.monotonic() - hit[0] < CACHE_SECONDS:
         return hit[1]
-    val = fn()
-    _cache[key] = (time.monotonic(), val)
-    return val
+    if hit and BACKGROUND:
+        _refresh_async(key, fn)
+        return hit[1]
+    lock = _key_locks.setdefault(key, threading.Lock())
+    with lock:
+        hit = _cache.get(key)                         # 기다리는 동안 다른 요청이 채웠으면 그 값
+        if hit and time.monotonic() - hit[0] < CACHE_SECONDS:
+            return hit[1]
+        gen = _gen
+        val = fn()
+        _store_val(key, gen, val)
+        return val
+
+
+def _refresh_async(key: str, fn: Callable[[], Any]) -> None:
+    if key in _refreshing:
+        return
+    _refreshing.add(key)
+
+    def run():
+        try:
+            with _key_locks.setdefault(key, threading.Lock()):
+                gen = _gen
+                _store_val(key, gen, fn())
+        except Exception:                             # noqa: BLE001 — 뒤 갱신 실패는 옛 값을 계속 주고 다음 요청 때 다시 시도
+            pass
+        finally:
+            _refreshing.discard(key)
+    threading.Thread(target=run, name=f"hub-refresh-{key}", daemon=True).start()
+
+
+def start_background_refresh(store: JobStore, period: float | None = None) -> threading.Thread:
+    """운영 서버(studio lifespan)에서 한 번 부른다. 개요·체결 조회창을 미리 계산해 두고 period 마다 다시 — 화면은 늘 즉시 받는다.
+    판단 로직은 같다(같은 함수를 미리 부를 뿐)."""
+    global BACKGROUND
+    BACKGROUND = True
+    every = period if period is not None else CACHE_SECONDS * 0.75
+
+    def loop():
+        while True:
+            for key, fn in (("overview", lambda: _overview(store, clock())), ("tick_window", lambda: _tick_window(store, clock()))):
+                try:
+                    with _key_locks.setdefault(key, threading.Lock()):
+                        gen = _gen
+                        _store_val(key, gen, fn())
+                except Exception:                     # noqa: BLE001 — 한 번 실패해도 루프는 계속(요청 경로가 직접 계산으로 폴백)
+                    pass
+            time.sleep(every)
+    t = threading.Thread(target=loop, name="hub-prewarm", daemon=True)
+    t.start()
+    return t
 
 
 def _activity(store: JobStore, now: datetime) -> list[dict]:
@@ -414,7 +480,8 @@ def _tick_window(store: JobStore, now: datetime) -> dict:
 
 @router.get("/tick-window")
 def get_tick_window(request: Request):
-    return _ok(_tick_window(_store(request), clock()))
+    store = _store(request)
+    return _ok(_cached("tick_window", lambda: _tick_window(store, clock())))      # 4초+ 계산이라 개요와 같은 캐시(10-14)
 
 
 class TickPair(BaseModel):
@@ -429,7 +496,9 @@ class TickRetry(BaseModel):
 @router.post("/tick-window/retry")
 def post_tick_retry(body: TickRetry):
     pairs = "all" if body.pairs == "all" else [(p.code, p.date) for p in body.pairs]
-    return _ok({"retried": collectors.retry(pairs)})
+    out = collectors.retry(pairs)
+    _invalidate("tick_window")                            # 다시 받기 표시가 화면에 바로 보이게
+    return _ok({"retried": out})
 
 
 @router.get("/archive")
@@ -469,7 +538,7 @@ def patch_schedule(schedule_id: str, body: SchedulePatch, request: Request):
     if body.time is not None and schedule_id not in scheduler.DEFAULT_TIMES:
         raise HubError(400, "VALIDATION_ERROR", "이 일정은 시각을 바꿀 수 없음", {"fieldErrors": {"time": "시각 변경 불가"}})
     scheduler.set_schedule(schedule_id, body.enabled, body.time)
-    _cache.clear()
+    _invalidate()
     return _ok(scheduler.schedule_row(_store(request), schedule_id, clock()))
 
 
@@ -496,7 +565,7 @@ def patch_alert(rule_id: str, body: AlertPatch):
         alerts.set_enabled(rule_id, body.enabled)
     except KeyError:
         raise HubError(404, "NOT_FOUND", f"없는 알림 규칙: {rule_id}") from None
-    _cache.pop("overview", None)
+    _invalidate("overview")
     return _ok(_rule(rule_id))
 
 
@@ -615,7 +684,7 @@ def _submit(request: Request, kind: str, mode: str | None, codes: list[str], whe
             raise HubError(422, "SOPHIE_LIVE_CONFIRM", p["reason"], {"suggest_at": p["suggest_at"]})
         sched = None
     job = jobs.create_job(store, kind, payload, scheduled_at=sched, trigger="user")
-    _cache.clear()                                        # 새 작업이 개요(활동)에 바로 보이게
+    _invalidate()                                        # 새 작업이 개요(활동)에 바로 보이게
     disp = getattr(request.app.state, "dispatcher", None)
     if disp is not None:
         disp.tick()

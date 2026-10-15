@@ -331,3 +331,33 @@ def test_overview_cache_60s_and_invalidated_by_submit(client, monkeypatch):
     assert client.post("/api/data/jobs/archive-minute-al", json={}).status_code == 202
     get(client, "/api/data/overview")
     assert len(calls) == 2                                                        # 작업을 제출하면 캐시를 비운다
+
+
+def test_cache_single_flight_and_stale_while_refresh(monkeypatch):
+    """10-14 허브 첫 접속 19초: 동시 요청이 같은 값을 두 번 계산하지 않고, 운영 모드(BACKGROUND)에선 만료돼도 옛 값을 즉시 준다."""
+    import threading
+    import time as _t
+    monkeypatch.setattr(api, "CACHE_SECONDS", 60.0)
+    api._invalidate()
+    calls, gate = [], threading.Event()
+
+    def slow():
+        calls.append(1)
+        gate.wait(2)
+        return len(calls)
+    ts = [threading.Thread(target=lambda: api._cached("k", slow)) for _ in range(3)]
+    [t.start() for t in ts]
+    _t.sleep(0.2)
+    gate.set()
+    [t.join() for t in ts]
+    assert len(calls) == 1                                           # 셋이 동시에 와도 계산은 한 번
+    api._cache["k"] = (_t.monotonic() - 999, "old")                  # 만료
+    monkeypatch.setattr(api, "BACKGROUND", True)
+    assert api._cached("k", lambda: "new") == "old"                  # 기다리지 않고 옛 값
+    for _ in range(50):
+        if api._cache["k"][1] == "new":
+            break
+        _t.sleep(0.02)
+    assert api._cache["k"][1] == "new"                               # 뒤에서 갱신됨
+    api._invalidate()
+    assert "k" not in api._cache
