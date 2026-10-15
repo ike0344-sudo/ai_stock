@@ -2399,6 +2399,189 @@ def print_part7(R: dict) -> None:
     print(R["now"].to_string(index=False) if len(R["now"]) else "  없음")
 
 
+# ====================================================================== 8차 (lead 10-15 8차 지시) — 수급(누가 샀나, H-025)을 선별에 넣기
+# 자료: data/stocks/investor_daily/{code}.csv (KRX 집계·장 마감 뒤 확정). 비율은 같은 파일의 KRX value_mw 로 나눈다. 가격은 수정주가가 아니라 안 쓴다.
+P8_GROUPS = {"외인": ("frgn",), "기관": ("orgn",), "외인+기관": ("frgn", "orgn"), "연기금": ("penfnd",), "사모": ("samo",), "개인": ("ind",)}
+P8_WINDOWS = ("D", "앞5", "앞20", "조정중")  # 신고일 · 신고 전 5일 · 신고 전 20일 · 신고 다음날~진입 전날
+P8_EXIT = "6차 청산(종가 −20%·+10%·10일)"
+
+
+def flow_ratio(inv: pd.DataFrame, d0: str, d1: str, cols) -> float:
+    """[d0, d1] 날짜(포함) 안 순매수 합 ÷ 거래대금 합(둘 다 KRX). 날이 없으면 NaN."""
+    dt = inv.date.to_numpy()
+    a, b = np.searchsorted(dt, d0), np.searchsorted(dt, d1, side="right")
+    if b <= a:
+        return np.nan
+    v = inv.value_mw.to_numpy()[a:b].sum()
+    return float(sum(inv[c].to_numpy()[a:b].sum() for c in cols) / v) if v > 0 else np.nan
+
+
+def p8_trades(F: pd.DataFrame, mask: np.ndarray, al: dict) -> pd.DataFrame:
+    """6차 매매(−25% 지정가·종가 −20% 손절·+10%·10일) 거래마다 진입 때 알 수 있는 수급 특징을 붙인다(진입 전날까지)."""
+    T = p7_trades(F, mask, "눌림25", P8_EXIT)
+    cache, feats = {}, []
+    for r in T.itertuples(index=False):
+        if r.code not in cache:
+            p = f"data/stocks/investor_daily/{r.code}.csv"
+            cache[r.code] = pd.read_csv(p, dtype={"date": str}) if os.path.isfile(p) else None
+        inv = cache[r.code]
+        dts = al[r.code].date.to_numpy()
+        k = int(np.searchsorted(dts, r.D))
+        f = {}
+        for g, cols in P8_GROUPS.items():
+            for w in P8_WINDOWS:
+                if inv is None:
+                    f[f"{g}_{w}"] = np.nan
+                    continue
+                d0, d1 = {"D": (dts[k], dts[k]), "앞5": (dts[max(0, k - 5)], dts[k - 1]), "앞20": (dts[max(0, k - 20)], dts[k - 1]),
+                          "조정중": (dts[k + 1], dts[r.j - 1])}[w]
+                f[f"{g}_{w}"] = flow_ratio(inv, d0, d1, cols) if (w != "조정중" or r.j - 1 >= k + 1) else np.nan
+        feats.append(f)
+    T = pd.concat([T, pd.DataFrame(feats)], axis=1)
+    T["entry"] = [al[c].date.iat[j] for c, j in zip(T.code, T.j)]
+    T["exit"] = [al[c].date.iat[x] for c, x in zip(T.code, T.xk)]
+    return T
+
+
+def p8_search(T: pd.DataFrame, min_n: int, max_k: int = 3) -> tuple[list, pd.DataFrame]:
+    """학습만으로: 특징 ≥/≤ 학습 분위(20·30·…·80%) 한 조건씩 욕심내어 최대 3개. 점수 = 학습 평균(비용 뒤),
+    단 학습 4년 중 3년 이상 플러스 · 건수 ≥ min_n · 문턱 앞뒤 분위(±10%p) 칸도 학습 평균이 기준(조건 전)보다 높아야 채택."""
+    yr = T.yr.to_numpy()
+    tr = yr <= 2023
+    g = T.ret.to_numpy() - 0.0025
+    feats = [c for c in T.columns if "_" in c and c.split("_")[0] in P8_GROUPS]
+    qs = (0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
+
+    def sc(m):
+        mt = m & tr
+        if mt.sum() < min_n:
+            return None
+        if sum(g[m & (yr == y)].mean() > 0 for y in range(2020, 2024) if (m & (yr == y)).sum() >= 5) < 3:
+            return None
+        return float(g[mt].mean())
+    chosen, m0, log = [], np.ones(len(T), bool), []
+    for _ in range(max_k):
+        base = sc(m0)
+        best = None
+        for f in feats:
+            if any(c[0] == f for c in chosen):
+                continue
+            x = T[f].to_numpy(float)
+            cut = np.nanquantile(x[tr & m0], qs)
+            for qi, q in enumerate(qs):
+                for side in (">=", "<="):
+                    mm = m0 & np.isfinite(x) & ((x >= cut[qi]) if side == ">=" else (x <= cut[qi]))
+                    s = sc(mm)
+                    if s is None or base is None or s <= base:
+                        continue
+                    nbs = []
+                    for d_ in (-1, 1):
+                        if 0 <= qi + d_ < len(qs):
+                            m2 = m0 & np.isfinite(x) & ((x >= cut[qi + d_]) if side == ">=" else (x <= cut[qi + d_]))
+                            nbs.append(sc(m2))
+                    if any(v is None or v <= base for v in nbs):
+                        continue
+                    if best is None or s > best[0]:
+                        best = (s, f, side, float(cut[qi]), q, mm)
+        if best is None:
+            break
+        chosen.append(best[1:5])
+        m0 = best[5]
+        log.append({"조건": f"{best[1]} {best[2]} {best[3]:.4f}(학습 {int(best[4] * 100)}% 분위)", "학습평균": best[0] * 100, "학습n": int((m0 & tr).sum()),
+                    "검증평균": g[m0 & ~tr].mean() * 100, "검증n": int((m0 & ~tr).sum())})
+    return chosen, pd.DataFrame(log)
+
+
+def p8_mask(T: pd.DataFrame, conds) -> np.ndarray:
+    m = np.ones(len(T), bool)
+    for f, side, thr, _ in conds:
+        x = T[f].to_numpy(float)
+        m &= np.isfinite(x) & ((x >= thr) if side == ">=" else (x <= thr))
+    return m
+
+
+def p8_quint(T: pd.DataFrame) -> pd.DataFrame:
+    yr, g = T.yr.to_numpy(), T.ret.to_numpy() - 0.0025
+    tr = yr <= 2023
+    rows = []
+    for f in [c for c in T.columns if "_" in c and c.split("_")[0] in P8_GROUPS]:
+        x = T[f].to_numpy(float)
+        ok = np.isfinite(x)
+        if (ok & tr).sum() < 100:
+            continue
+        cuts = np.nanquantile(x[ok & tr], [0.2, 0.4, 0.6, 0.8])
+        b = np.searchsorted(cuts, x, side="right")
+        rt = [g[ok & tr & (b == q)].mean() * 100 for q in range(5)]
+        re_ = [g[ok & ~tr & (b == q)].mean() * 100 for q in range(5)]
+        rows.append({"특징": f, "학습 1→5분위": " ".join(f"{v:+.1f}" for v in rt), "검증 1→5분위": " ".join(f"{v:+.1f}" for v in re_),
+                     "차_학습": rt[-1] - rt[0], "차_검증": re_[-1] - re_[0], "같은방향": bool(np.sign(rt[-1] - rt[0]) == np.sign(re_[-1] - re_[0]))})
+    return pd.DataFrame(rows).sort_values("차_학습", key=abs, ascending=False)
+
+
+def p8_summary(T: pd.DataFrame, m: np.ndarray, al: dict) -> dict:
+    yr, g = T.yr.to_numpy(), T.ret.to_numpy()
+    out = {}
+    for half, hm in (("학습", yr <= 2023), ("검증", yr >= 2024)):
+        x = g[m & hm] - 0.0025
+        out[half] = {"n": len(x), "평균": x.mean() * 100 if len(x) else np.nan, "중앙": np.median(x) * 100 if len(x) else np.nan,
+                     "승률": (x > 0).mean() * 100 if len(x) else np.nan, "손절%": (T.why.to_numpy()[m & hm] == "손절").mean() * 100 if len(x) else np.nan,
+                     "최악5%": np.percentile(x, 5) * 100 if len(x) else np.nan, "평균43": (x - 0.0018).mean() * 100 if len(x) else np.nan}
+    out["해별"] = by_year(np.where(m, g - 0.0025, np.nan), yr)
+    W10 = slot_filter(waves(T[m]), 10)
+    out["acct"] = (len(W10), account_curve(W10, al, K=10), account_curve(W10, al, 0.0043, K=10))
+    return out
+
+
+def part8(prep: str, al: dict) -> dict:
+    F = p7_features(prep, al)
+    sel3 = np.nan_to_num(F.pos3y.to_numpy()) >= 1.0
+    s7 = p7_rule(F, 0.5, 2, 0.15)
+    res = {}
+    for nm, mask, min_n in (("3년 신고가(6차)", sel3, 150), ("2차 상승(7차)", s7, 50)):
+        T = p8_trades(F, mask, al)
+        conds, log = p8_search(T, min_n)
+        m = p8_mask(T, conds)
+        # 문턱 흔들기: 고른 조건마다 분위를 ±10%p·±20%p 옮겨 검증까지 본다
+        shake = []
+        tr = T.yr.to_numpy() <= 2023
+        for i, (f, side, thr, q) in enumerate(conds):
+            x = T[f].to_numpy(float)
+            others = p8_mask(T, [c for jx, c in enumerate(conds) if jx != i])
+            for dq in (-0.2, -0.1, 0.0, 0.1, 0.2):
+                q2 = min(max(q + dq, 0.05), 0.95)
+                t2 = np.nanquantile(x[tr & np.isfinite(x)], q2)
+                mm = others & np.isfinite(x) & ((x >= t2) if side == ">=" else (x <= t2))
+                g = T.ret.to_numpy() - 0.0025
+                shake.append({"조건": f"{f} {side}", "분위": round(q2, 2), "학습n": int((mm & tr).sum()), "학습평균": g[mm & tr].mean() * 100,
+                              "검증n": int((mm & ~tr).sum()), "검증평균": g[mm & ~tr].mean() * 100})
+        res[nm] = {"T": T, "quint": p8_quint(T), "conds": conds, "log": log, "shake": pd.DataFrame(shake),
+                   "base": p8_summary(T, np.ones(len(T), bool), al), "flow": p8_summary(T, m, al) if conds else None,
+                   "cover": float(np.isfinite(T["외인_D"]).mean() * 100)}
+    return res
+
+
+def print_part8(R: dict) -> None:
+    pd.set_option("display.width", 300)
+    pd.set_option("display.max_rows", 300)
+    for nm, r in R.items():
+        print(f"\n========== 8차 [{nm}] 6차 매매에 수급 붙이기 — 거래 {len(r['T']):,}건, 수급 붙은 비율 {r['cover']:.1f}% ==========")
+        print("[특징별 5분위 거래당 평균(비용 뒤 %) — 학습 / 검증]")
+        print(r["quint"].round(2).to_string(index=False))
+        print("\n[학습에서 고른 조건(욕심내어 하나씩, 최대 3개)]")
+        print(r["log"].round(2).to_string(index=False) if len(r["log"]) else "  고를 조건 없음(문턱 앞뒤 칸까지 받쳐 주는 조건이 없다)")
+        if len(r["shake"]):
+            print("[문턱 흔들기]")
+            print(r["shake"].round(2).to_string(index=False))
+        for lab, s in (("수급 안 붙임(6차)", r["base"]), ("수급 붙임(8차)", r["flow"])):
+            if s is None:
+                continue
+            a, b = s["학습"], s["검증"]
+            n10, A, A43 = s["acct"]
+            print(f"\n[{lab}] 학습 {a['n']}건 {a['평균']:+.2f}% 중앙 {a['중앙']:+.2f} 승 {a['승률']:.0f}% 손절 {a['손절%']:.0f}% | 검증 {b['n']}건 {b['평균']:+.2f}%(0.43% {b['평균43']:+.2f})"
+                  f" 중앙 {b['중앙']:+.2f} 승 {b['승률']:.0f}% 손절 {b['손절%']:.0f}% 최악5% {b['최악5%']:.1f}\n   해별 {s['해별']}\n   10칸 {n10}건 7년 {A['total']:+.1f}%(0.43% {A43['total']:+.1f}%)"
+                  f" 최대 낙폭 {A['mdd']:.1f}% · " + " · ".join(f"{y} {v['ret']:+.1f}%(낙폭 {v['mdd']:.1f})" for y, v in A["years"].items()))
+
+
 # ====================================================================== 출력
 def fmt(s: dict) -> str:
     return f"n={s['n']:,} 평균 {s['mean']:+.2f}% 중앙 {s['med']:+.2f}% 승률 {s['win']:.0f}%" if s["n"] else "n=0"
@@ -2438,6 +2621,11 @@ def _self_check() -> None:
     t7 = pd.DataFrame({"ret250": [2.0, 2.0, 0.2, 2.0], "n250": [2, 0, 3, 2], "dd_pre": [-0.3, -0.3, -0.3, -0.05]})
     assert p7_rule(t7, 1.0, 1, 0.15).tolist() == [True, False, False, False]
     assert p7_rule(t7, 1.0, 1, 0.0).tolist() == [True, False, False, True]
+    # 8차 수급 비율: 이틀 합 순매수 (10+30) ÷ 대금 (100+100) = 0.2, 범위 밖 날은 안 센다
+    inv = pd.DataFrame({"date": ["20200101", "20200102", "20200103"], "value_mw": [100.0, 100.0, 100.0], "frgn": [10.0, 30.0, 99.0], "orgn": [5.0, 5.0, 5.0]})
+    assert abs(flow_ratio(inv, "20200101", "20200102", ("frgn",)) - 0.2) < 1e-12
+    assert abs(flow_ratio(inv, "20200102", "20200102", ("frgn", "orgn")) - 0.35) < 1e-12
+    assert np.isnan(flow_ratio(inv, "20200104", "20200105", ("frgn",)))
 
 
 def main() -> None:
@@ -2450,9 +2638,16 @@ def main() -> None:
     ap.add_argument("--part5", action="store_true", help="5차(선별 점수 → 진입·청산)만")
     ap.add_argument("--part6", action="store_true", help="6차(손절 있는 규칙)만")
     ap.add_argument("--part7", action="store_true", help="7차(심텍·코리아써키트 같은 종목 고르기)만")
+    ap.add_argument("--part8", action="store_true", help="8차(수급을 선별에)만")
     a = ap.parse_args()
     _self_check()
     pd.set_option("display.width", 250)
+    if a.part8:
+        al = load_al_all()
+        R = part8(a.prep, al)
+        print_part8(R)
+        pd.to_pickle(R, os.path.join(a.prep, "vl_strategy_part8.pkl"))
+        return
     if a.part7:
         al = load_al_all()
         R = part7(a.prep, al)

@@ -26,6 +26,7 @@ locks:
   hts_flash: {path: state/locks/data_hts_flash, covers: [hts_flash]}
   hts_stock: {path: state/locks/data_hts_stock, covers: [hts_stock]}
   daily_al:  {path: state/locks/data_daily_al,  covers: [daily_al]}
+  investor_daily: {path: state/locks/data_investor_daily, covers: [investor_daily]}
 
 datasets:
   - id: daily
@@ -54,6 +55,19 @@ datasets:
     freshness: {}
     retention: keep
     notes: 키움 ka10081 `{code}_AL`. 열 date(YYYYMMDD)·open·high·low·close·volume·value_mw(실거래대금, 백만원). 수정주가. NXT 개시(2025-03) 전은 KRX 와 같다
+
+  - id: investor_daily
+    label: 종목별 일별 투자자 수급(외국인·기관·개인 등 순매수 금액)
+    basis: KRX
+    path: data/stocks/investor_daily/{code}.csv
+    lock: investor_daily
+    writers:
+      - {id: collect_investor_daily, cmd: scripts/collect_investor_daily.py, triggers: [manual]}
+    readers: [신고대금 장부 선별(H-025 누가 샀나), 연구]
+    # 2026-10-15 1회 수집(장부 종목 전부, 2019-06~). 매일 갱신은 아직 안 건다 — 신선도 규칙 없음
+    freshness: {}
+    retention: keep
+    notes: 키움 ka10059(amt_qty_tp=1 금액·trde_tp=0 순매수). 열 date(YYYYMMDD)·close·chg_pct·volume·value_mw + 투자자별 순매수(백만원) ind·frgn·orgn·fnnc_invt·insrnc·invtrt·etc_fnnc·bank·penfnd·samo·natn·etc_corp·natfor. 수급 칸은 KRX 집계(_AL 로 불러도 같다 — 10-15 실측), close·volume·value_mw 도 KRX. 수정주가 아님(cur_prc 원값)
 
   - id: minute_krx
     label: 1분봉(KRX)
