@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>스캘핑 가설 정리 — 2026-09-27</title>
+<style>
+  @page { size: A4; margin: 14mm 13mm; }
+  body { font-family: "Malgun Gothic", "맑은 고딕", sans-serif; font-size: 10.5pt; line-height: 1.55; color: #222; max-width: 190mm; margin: 0 auto; }
+  h1 { font-size: 19pt; margin: 0 0 4px; }
+  h2 { font-size: 14pt; border-bottom: 2px solid #333; padding-bottom: 3px; margin-top: 22px; }
+  h3 { font-size: 12pt; margin: 0 0 6px; }
+  .sub { color: #666; margin-bottom: 14px; }
+  table { border-collapse: collapse; width: 100%; font-size: 9.5pt; }
+  th, td { border: 1px solid #bbb; padding: 4px 6px; vertical-align: top; }
+  th { background: #eee; }
+  .card { border: 1px solid #ccc; border-radius: 6px; padding: 10px 12px; margin: 12px 0; page-break-inside: avoid; }
+  .card dl { margin: 0; }
+  .card dt { font-weight: bold; margin-top: 5px; color: #333; }
+  .card dd { margin: 0 0 0 10px; }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 9pt; font-weight: bold; margin-left: 6px; }
+  .go { background: #d9f2d9; color: #1b6e1b; }
+  .hold { background: #fff1c9; color: #7a5a00; }
+  .no { background: #f8d7d7; color: #8a1c1c; }
+  .filter { background: #dde8f7; color: #1d4b8a; }
+  .new { background: #e9ddf7; color: #5a2a8a; }
+  .note { background: #f6f6f6; border-left: 4px solid #888; padding: 8px 10px; margin: 10px 0; }
+  .warn { background: #fff4f4; border-left: 4px solid #c33; padding: 8px 10px; margin: 10px 0; }
+  .guess { color: #8a5a00; font-size: 9pt; }
+  .pb { page-break-before: always; }
+  a { color: #1d4b8a; word-break: break-all; }
+  .small { font-size: 9pt; color: #555; }
+</style>
+</head>
+<body>
+
+<h1>스캘핑 가설 정리</h1>
+<div class="sub">2026-09-27 · scalping-researcher · 가설 18장 (lead 14장 + 이번에 추가 4장) · 실험·판정은 하지 않음</div>
+
+<h2>0. 오늘 한 일 (요약)</h2>
+<table>
+<tr><th>일</th><th>결과</th><th>상태</th></tr>
+<tr><td>스캘핑 가설 조사·카드 작성</td><td>새 카드 4장(H-015~H-018) 추가, 기존 5장(H-002·004·006·009·011)에 변형·출처 보탬 → 총 18장</td><td><span class="tag go">완료</span></td></tr>
+<tr><td>H-006 실험 결과 반영</td><td>backtest-agent 실험에서 <b>기각</b>: 새 구간 비용 전 −0.12%, 비용 후 −0.63%. 카드·목록·로그·관련 카드(H-007·H-012) 갱신</td><td><span class="tag go">완료</span></td></tr>
+<tr><td>트레이딩뷰 전략 규칙서</td><td>lead 가 받아 둔 코드 20개 검토 → 7개 선정·13개 제외, 규칙서 <code>tv_strategies.md</code> 작성, 3개는 기존 카드(H-004·H-012·H-013)에 변형으로 합침. 코드와 설명이 다른 것·코드 결함 추정도 표시</td><td><span class="tag go">완료</span></td></tr>
+<tr><td>관리 사고</td><td>lead 작업과 동시에 써서 목록·로그를 덮어씀 → 다시 만듦. "삭제 대상" 파일 10개는 지워야 함</td><td><span class="tag no">정리 필요</span></td></tr>
+</table>
+<p class="small">트레이딩뷰 후보 목록은 5장에 있다.</p>
+
+<div class="note">
+<b>읽는 법</b><br>
+· 가설 = "누가 왜 돈을 잃고, 우리가 왜 그 반대편에서 버는가"가 설명되는 매매 아이디어. 아직 <b>아무것도 검증 안 됨</b>.<br>
+· <span class="tag go">해볼 만함</span> 움직임이 비용보다 충분히 클 것 같음 &nbsp;
+<span class="tag hold">보류</span> 비용과 비슷하거나 모름 &nbsp;
+<span class="tag no">비용 미달</span> 벌어도 비용에 먹힘 &nbsp;
+<span class="tag filter">필터</span> 사는 규칙이 아니라 "사지 말 때" 규칙 &nbsp;
+<span class="tag new">이번 추가</span><br>
+· <span class="guess">[추론]</span> = 출처 없이 생각으로 적은 부분.
+</div>
+
+<h2>1. 비용 기준 — 이걸 넘어야 의미가 있다</h2>
+<table>
+<tr><th>항목</th><th>값</th><th>설명</th></tr>
+<tr><td>왕복 비용(카드 기준)</td><td>0.53%</td><td>수수료 + 매도세 0.20% + 슬리피지. 출처 미확인 — lead 확인 필요</td></tr>
+<tr><td>왕복 비용(코드 기본값)</td><td>0.43%</td><td>studio/domain/costs.py: 수수료 0.03% + 세금 0.20% + 슬리피지 2×0.1%</td></tr>
+<tr><td><b>문턱(보수적으로 통일)</b></td><td><b>1.06%</b></td><td>거래 한 번 평균 움직임이 이걸 못 넘으면 "비용 미달"</td></tr>
+<tr><td>호가 한 칸이 큰 가격대</td><td>문턱 1.46%</td><td>2,000·20,000·200,000원 바로 위는 1호가가 0.25% — 같은 전략도 종목 가격대에 따라 비용이 크게 다름</td></tr>
+</table>
+
+<h2>2. 한눈에 보기</h2>
+<table>
+<tr><th>id</th><th>이름</th><th>판정</th><th>데이터</th></tr>
+<tr><td>H-001</td><td>VI 재개 직후 추격 매수 금지</td><td><span class="tag filter">필터</span></td><td>있음</td></tr>
+<tr><td>H-002</td><td>VI 재개 뒤 직전 고점 재돌파</td><td><span class="tag hold">보류</span></td><td>있음</td></tr>
+<tr><td>H-003</td><td>이른 시각 상한가 → 다음 날 시가</td><td><span class="tag go">해볼 만함</span></td><td>있음(체결 가능성은 호가 필요)</td></tr>
+<tr><td>H-004</td><td>시초가 과잉반응 되돌림</td><td><span class="tag go">해볼 만함</span></td><td>있음</td></tr>
+<tr><td>H-005</td><td>종가 매수 → 다음 날 시가 매도</td><td><span class="tag hold">보류</span></td><td>있음</td></tr>
+<tr><td>H-006</td><td>재료 종목 장 초반 5분 레인지 돌파</td><td><span class="tag no">기각(실험)</span></td><td>있음</td></tr>
+<tr><td>H-007</td><td>첫 30분 → 마지막 30분</td><td><span class="tag no">비용 미달</span></td><td>있음</td></tr>
+<tr><td>H-008</td><td>어제 같은 시각 30분 반복</td><td><span class="tag no">비용 미달</span></td><td>있음</td></tr>
+<tr><td>H-009</td><td>매수 쏠림 지속</td><td><span class="tag no">비용 미달</span></td><td>있음(호가판은 보류)</td></tr>
+<tr><td>H-010</td><td>흡수 — 매도 폭주에도 가격 유지</td><td><span class="tag hold">보류</span></td><td>있음(호가 있으면 더 정확)</td></tr>
+<tr><td>H-011</td><td>NXT 장전·장후 가격 → 정규장 초반</td><td><span class="tag go">해볼 만함</span></td><td>있음</td></tr>
+<tr><td>H-012</td><td>거래 줄어든 눌림 뒤 재돌파</td><td><span class="tag hold">보류</span></td><td>있음</td></tr>
+<tr><td>H-013</td><td>저점 살짝 깨고 복귀</td><td><span class="tag hold">보류</span></td><td>있음</td></tr>
+<tr><td>H-014</td><td>외국인·기관 순매수 지속</td><td><span class="tag hold">보류</span></td><td><b>없음</b></td></tr>
+<tr><td>H-015</td><td>KRX VI 중 NXT 가격이 먼저 간다 <span class="tag new">이번 추가</span></td><td><span class="tag hold">보류</span></td><td><b>VI 시각 없음</b></td></tr>
+<tr><td>H-016</td><td>상한가 자석효과 <span class="tag new">이번 추가</span></td><td><span class="tag go">해볼 만함</span></td><td>있음</td></tr>
+<tr><td>H-017</td><td>종가 동시호가 → 시간외 되돌림 <span class="tag new">이번 추가</span></td><td><span class="tag no">비용 미달</span></td><td>있음</td></tr>
+<tr><td>H-018</td><td>라운드 넘버·호가단위 경계 돌파 <span class="tag new">이번 추가</span></td><td><span class="tag hold">보류</span></td><td>있음(호가 있으면 더 정확)</td></tr>
+</table>
+<p class="small">"해볼 만함"도 추정일 뿐, 수익이 난다는 뜻이 아님. 실험 순서는 사람이 정한다.</p>
+
+<h2 class="pb">3. 가설 카드</h2>
+
+<div class="card"><h3>H-001 VI 재개 직후 추격 매수 금지 <span class="tag filter">필터</span></h3><dl>
+<dt>왜 되나</dt><dd>급등으로 VI(2분 단일가)가 걸리면 개인이 "더 간다"며 재개 직후 사고, 기관이 그 물량을 받아 넘긴다. 한국 연구는 VI 뒤 가격이 되돌아간다고 보고. 우리는 그 시간에 <b>안 사는 것</b>으로 반대편에 선다.</dd>
+<dt>규칙</dt><dd>체결이 120초 이상 끊겼다 다시 붙으면(VI 추정) 그 뒤 300초 동안 신호 차단(이미 기능 있음). 변형: 정적 상승 VI만 막기, 600초로 늘리기, 보유 중 발동 직전가 아래로 빠지면 청산.</dd>
+<dt>데이터</dt><dd>틱(수집 중). VI는 체결 공백으로 추정 — NXT 체결이 공백을 메우는 약 19%는 못 잡음.</dd>
+<dt>버리는 조건</dt><dd>막힌 신호와 안 막힌 신호의 10분 뒤 성과가 차이 없으면.</dd>
+</dl></div>
+
+<div class="card"><h3>H-002 VI 재개 뒤 발동 직전 고점 재돌파 <span class="tag hold">보류</span></h3><dl>
+<dt>왜 되나</dt><dd><span class="guess">[추론]</span> 재개 후 추격 매수와 차익 매물이 맞붙은 뒤에도 직전 고점을 다시 넘으면, 파는 물량은 소화됐고 남은 수요가 늦게 반영되는 중. H-001과 방향이 반대 — "되돌리지 않는 소수"를 고를 수 있는지 묻는 카드.</dd>
+<dt>규칙</dt><dd>재개 후 2~10분 안에 발동 직전 60초 고점을 넘는 첫 순간 매수. 재개 최저가 이탈 시 손절.</dd>
+<dt>이번에 합친 변형</dt><dd>정적 VI(+10% 문턱)와 동적 VI를 나눠서 재기. 한국 논문: "정적 VI는 되돌리기보다 같은 방향으로 가는 경향이 더 강함"(안일찬 외 2017).</dd>
+<dt>비용</dt><dd>재개 뒤 10분 최대 상승 중앙 1.0~1.4%, 최대 하락 중앙 −1.2~−1.3%(사내 실측, 참고) → 문턱 근처. 방향이 안 갈리면 비용에 먹힘.</dd>
+<dt>버리는 조건</dt><dd>평균이 +1.06% 미만이거나, 일반 5분 돌파보다 낫지 않으면.</dd>
+</dl></div>
+
+<div class="card"><h3>H-003 이른 시각 상한가 → 다음 날 시가 이월 <span class="tag go">해볼 만함</span></h3><dl>
+<dt>왜 되나</dt><dd>상한가(±30%)는 그날 가격이 끝까지 가는 걸 막는다. 잠긴 매수 잔량 = 못 산 수요이고, 다음 날 시초가로 넘어가 시가를 밀어 올린다(Kim·Rhee 1997). 전날 줄 서서 산 뒤 다음 날 줄 못 선 사람에게 판다.</dd>
+<dt>규칙</dt><dd>10:00 전에 첫 상한가, 최근 5일 상한가 없음, 15:20 직전 가격 = 상한가 → 종가 동시호가 매수, 다음 날 시가 매도.</dd>
+<dt>핵심 위험</dt><dd>비용이 아니라 <b>체결</b>. 상한가가 유지된 날은 줄 뒤라 못 사고, 풀리는 날에만 사게 되는 역선택. "종가에 샀다"고 치면 결과가 부풀려짐.</dd>
+<dt>버리는 조건</dt><dd>평균이 +1.06% 미만, 또는 장중에 한 번이라도 풀린 날만 따로 봤을 때 +1.06% 미만.</dd>
+</dl></div>
+
+<div class="card"><h3>H-004 시초가 과잉반응 되돌림 <span class="tag go">해볼 만함</span></h3><dl>
+<dt>왜 되나</dt><dd>밤사이 뉴스를 본 개인이 시초가 동시호가에 한쪽으로 몰려 시가가 과하게 벌어지고, 장중에 되돌아온다. 한국 논문: 개인은 장 시작에 반응하고 기관은 낮에 반대로 거래하며, 주가는 낮 동안 되돌린다.</dd>
+<dt>규칙</dt><dd>(a) 5일선 위 종목이 −3~−10% 갭 하락 → 시가 매수, 종가 청산. (b) 전일 고가 위로 갭 상승한 종목은 09:30까지 매수 금지.</dd>
+<dt>이번에 합친 변형</dt><dd>(d) 기준을 전일 종가 대신 NXT 장전 거래 평균가로. (e) 동시호가 예상체결가를 허수 주문으로 부풀렸다 취소하는 경우 — 예상체결가 데이터 없음.</dd>
+<dt>버리는 조건</dt><dd>(a) 평균 +1.06% 미만 또는 승률 50% 미만. 9/14 시간외 제도 변경 전후로 결과가 뒤집히면 기간 한정 결론.</dd>
+</dl></div>
+
+<div class="card"><h3>H-005 종가 매수 → 다음 날 시가 매도 <span class="tag hold">보류</span></h3><dl>
+<dt>왜 되나</dt><dd><span class="guess">[추론]</span> 강하게 끝난 종목엔 다음 날 시초가에 개인 매수가 몰린다. 전날 종가에 사서 그 사람들에게 판다.</dd>
+<dt>규칙</dt><dd>15:20 기준 +3~+20%, 고가 근처, 거래대금 20일 평균의 2배 → 종가 매수, 다음 날 시가 매도.</dd>
+<dt>비용</dt><dd>조건 없이 전 종목에 하면 비용 미달이 거의 확실. 조건을 건 경우는 모름 — 일봉으로 바로 잴 수 있음.</dd>
+</dl></div>
+
+<div class="card"><h3>H-006 재료 종목(Stocks in Play) 장 초반 5분 레인지 돌파 <span class="tag no">기각(실험)</span></h3><dl>
+<dt>실험 결과 (09-27, backtest-agent)</dt><dd><b>안 됨.</b> 519종목×303일, 새 구간(OOS) 상위 50종목: 비용 빼기 전 −0.12%, 비용 후 −0.63%. 거래 몰린 종목을 고른 효과도 새 구간에선 사라짐(+0.07%p, 0 포함). 갭 크기별로 봐도 비용 후 플러스인 구간 없음.</dd>
+<dt>왜 되나</dt><dd>재료가 있는 날은 평소보다 거래가 몰리고 정보 반영이 하루 종일 이어진다. 평소처럼 역추세로 받는 사람은 그날이 특별한 줄 모르고 반대편에 선다. 핵심은 "평소 같은 시각보다 거래가 몰렸나"로 종목을 고르는 것.</dd>
+<dt>규칙</dt><dd>09:00~09:05 거래대금이 과거 14일 같은 5분 평균 이상이고 첫 5분이 양봉 → 5분 고가 돌파 시 매수, 15:19 청산.</dd>
+<dt>참고</dt><dd>미국 논문은 좋은 성과를 보고했지만, 독립 재현에서는 비용을 넣으면 본전 근처. 조건 없는 버전은 비용 뒤 손실. 첫 5분 손절폭이 1.06%보다 좁은 날은 비용이 손절폭의 절반을 먹음.</dd>
+<dt>버리는 조건</dt><dd>거래 몰린 그룹과 안 몰린 그룹의 성과 차이가 없으면.</dd>
+</dl></div>
+
+<div class="card"><h3>H-007 첫 30분 방향 → 마지막 30분 방향 <span class="tag no">비용 미달</span></h3><dl>
+<dt>왜 되나</dt><dd>미국 논문: 장 초반 30분 수익이 마지막 30분을 예측(늦은 정보·마감 리밸런싱).</dd>
+<dt>왜 미달</dt><dd>30분 움직임이 수십 bp 수준 — 1.06%에 한참 못 미침. 다른 전략의 시간대 가점으로만.</dd>
+</dl></div>
+
+<div class="card"><h3>H-008 어제 같은 시각 30분 수익 반복 <span class="tag no">비용 미달</span></h3><dl>
+<dt>왜 되나</dt><dd>기관이 매일 같은 시각에 주문을 쪼개 넣어 같은 시간대 수익이 반복됨(Heston 외 2010).</dd>
+<dt>왜 미달</dt><dd>30분당 수 bp — 문턱과 수십 배 차이. 보조용으로만.</dd>
+</dl></div>
+
+<div class="card"><h3>H-009 매수 쏠림(주문 불균형) 지속 <span class="tag no">비용 미달</span></h3><dl>
+<dt>왜 되나</dt><dd>큰손은 큰 주문을 잘게 쪼개 넣으니 한 구간의 매수 쏠림이 다음 구간에도 이어진다(Chordia 외 2004).</dd>
+<dt>왜 미달</dt><dd>사내 실측: 5분 돌파 신호의 10분 평균 +0.02% 안팎, "매수 우위" 조건을 붙여도 개선 없음. 체결만으로 매수/매도 방향 판정은 이미 시험해서 종결됨.</dd>
+<dt>이번에 합친 변형</dt><dd>(d) 호가 잔량 불균형(Cont 외 2014). 호가 수집은 사용자 보류 중. 설명하는 움직임이 1호가 안팎이라 단독으로는 미달, 다른 전략의 타이밍 보조로만.</dd>
+</dl></div>
+
+<div class="card"><h3>H-010 흡수 — 파는 체결이 쏟아지는데 가격이 안 빠짐 <span class="tag hold">보류</span></h3><dl>
+<dt>왜 되나</dt><dd><span class="guess">[추론]</span> 매도가 몰리는데 가격이 제자리면 누군가 큰 매수로 받아내는 중. 급하게 던진 쪽이 잃고, 소화가 끝나면 오른다.</dd>
+<dt>규칙</dt><dd>1분 대금 평소 2배 이상 + 순매도 + 가격 2호가 이내 정체 → 10분 안에 그 구간 고가 돌파 시 매수.</dd>
+<dt>약점</dt><dd>호가가 없어 "받아냈다"를 직접 확인 못 함.</dd>
+</dl></div>
+
+<div class="card"><h3>H-011 NXT 장전·장후 가격 → 정규장 초반 <span class="tag go">해볼 만함</span></h3><dl>
+<dt>왜 되나</dt><dd><span class="guess">[추론]</span> 밤사이 뉴스에 대한 첫 가격은 NXT 장전(08:00~08:50)·장후(15:30~20:00)의 얇은 거래에서 먼저 나온다. 정규장은 뒤늦게 반응한다.</dd>
+<dt>규칙</dt><dd>(a) 갭 5% 이상 종목이 거래를 실어 장전 최고가를 넘으면 매수. (b) 전날 장후 +5% 종목은 09:30까지 매수 금지. (c, 이번에 합침) 시가가 장전 평균가보다 아래로 과하게 벌어지면 되돌림 매수.</dd>
+<dt>데이터</dt><dd>틱에 시간외 체결 있음. 단 장전 거래가 없는 종목-일이 약 절반.</dd>
+<dt>버리는 조건</dt><dd>일반 5분 레인지 돌파(H-006)보다 낫지 않으면.</dd>
+</dl></div>
+
+<div class="card"><h3>H-012 거래 줄어든 눌림 뒤 재돌파 <span class="tag hold">보류</span></h3><dl>
+<dt>왜 되나</dt><dd><span class="guess">[추론]</span> 급등 뒤 되돌림에서 거래가 줄면 산 사람들이 버티는 중(팔 물량 적음). 겁먹고 판 사람과 늦게 쫓는 사람이 잃는다.</dd>
+<dt>규칙</dt><dd>60분 +5% 상승 → 거래량 절반 이하로 −2~−6% 눌림 → 거래 다시 붙으며 고점 돌파 시 매수.</dd>
+<dt>버리는 조건</dt><dd>조용한 눌림과 시끄러운 눌림의 성과가 같으면.</dd>
+</dl></div>
+
+<div class="card"><h3>H-013 저점 살짝 깨고 복귀 <span class="tag hold">보류</span></h3><dl>
+<dt>왜 되나</dt><dd><span class="guess">[추론]</span> 눈에 띄는 저점 아래엔 손절 주문이 몰려 있다. 살짝 깨면 손절이 쏟아지고, 받아낸 매수자가 있으면 곧 복귀한다. 손절 당한 사람이 잃는다.</dd>
+<dt>규칙</dt><dd>당일 저가를 1~3호가 깨고 60초 안에 복귀 + 매수 우세 → 매수. 09:30 이후만.</dd>
+<dt>비용</dt><dd>손절폭이 매우 좁아 승률이 낮으면 비용에 먹힘. 저가주는 호가 한 칸이 곧 비용 크기.</dd>
+</dl></div>
+
+<div class="card"><h3>H-014 외국인·기관(프로그램) 순매수 지속 <span class="tag hold">보류</span></h3><dl>
+<dt>왜 되나</dt><dd><span class="guess">[추론]</span> 외국인·기관은 큰 주문을 여러 번 나눠 집행하므로 순매수가 이어지면 남은 물량이 가격을 더 민다.</dd>
+<dt>막힘</dt><dd><b>종목별 장중 투자자·프로그램 순매수 데이터가 저장소에 없음.</b> 새로 수집해야 함.</dd>
+</dl></div>
+
+<div class="card"><h3>H-015 KRX VI 동안 NXT 가격이 먼저 간다 <span class="tag new">이번 추가</span> <span class="tag hold">보류</span></h3><dl>
+<dt>왜 되나</dt><dd>KRX에 VI가 걸려도 NXT는 계속 거래된다(아시아경제, KRX 관계자 설명). 그래서 그 2분 동안 NXT 가격이 KRX 재개 가격보다 먼저 정보를 반영한다. NXT를 안 보고 KRX 동시호가에 주문을 넣어 둔 사람이 불리하게 체결된다 <span class="guess">[추론]</span>.</dd>
+<dt>규칙</dt><dd>VI 시작 90초까지의 NXT 체결 평균가가 VI 직전보다 +y% 이상이면 매수, KRX 재개 뒤 1~3분 안에 청산.</dd>
+<dt>막힘</dt><dd><b>VI 공식 발동 시각이 없음.</b> 체결 공백으로 추정하는 방식은 바로 이 카드의 대상(NXT가 공백을 메운 경우)을 못 잡는다. KRX 정보데이터 [20023] 화면에 있음. NXT로 직접 주문할 수 있는지도 미확인.</dd>
+<dt>버리는 조건</dt><dd>NXT 방향과 KRX 재개 방향이 60% 미만으로 맞으면.</dd>
+</dl></div>
+
+<div class="card"><h3>H-016 상한가 자석효과 <span class="tag new">이번 추가</span> <span class="tag go">해볼 만함</span></h3><dl>
+<dt>왜 되나</dt><dd>상한가에 가까워지면 "잠기면 못 산다"는 걱정에 매수는 서두르고 매도는 미뤄져 가격이 한도 쪽으로 빨려 간다. 한국거래소 고빈도 자료로 상한가 직전 체결·시장가 주문이 가속된다고 보고됨. 단 2015년 ±30% 확대 뒤 많이 약해졌다는 평가가 있어, <b>지금도 있는지</b>가 핵심 질문.</dd>
+<dt>규칙</dt><dd>+20% 이상에서 1분 거래대금이 급증하면 매수, 상한가 1~2호가 아래에서 매도. −2% 또는 가속이 꺼지면 손절.</dd>
+<dt>위험</dt><dd>움직임은 충분히 크지만 실패하면 급락폭이 큼.</dd>
+<dt>버리는 조건</dt><dd>가속 켜진 종목의 상한가 도달률이 안 켜진 종목보다 높지 않으면.</dd>
+</dl></div>
+
+<div class="card"><h3>H-017 종가 동시호가 압력 → 시간외 되돌림 <span class="tag new">이번 추가</span> <span class="tag no">비용 미달</span></h3><dl>
+<dt>왜 되나</dt><dd>종가 동시호가엔 지수 리밸런싱처럼 가격과 무관한 대량 주문이 몰려 가격이 일시적으로 비뚤어지고, 밤사이 되돌아간다(해외 논문). 한국은 NXT·KRX 시간외 거래가 있어 그날 저녁에 잡을 수 있다.</dd>
+<dt>왜 미달</dt><dd>논문상 되돌아가는 몫이 14~24% — 종가에 −3% 밀려도 되돌림 0.4~0.7%로 추정. 시간외는 호가도 얇음. 리밸런싱일 같은 극단 사례만 따로 볼 여지.</dd>
+</dl></div>
+
+<div class="card"><h3>H-018 라운드 넘버·호가단위 경계 돌파 <span class="tag new">이번 추가</span> <span class="tag hold">보류</span></h3><dl>
+<dt>왜 되나</dt><dd>사람들은 10,000원·50,000원처럼 딱 떨어지는 값에 주문을 몰아 넣어 그 앞에서 가격이 멈칫한다(유럽 시장 연구). 물량이 소화되면 대기 주문이 한꺼번에 나와 빨라진다 <span class="guess">[추론]</span>. 한국은 20,000원 등에서 호가 한 칸 크기 자체가 바뀐다(19,990원은 10원, 20,000원부터 50원).</dd>
+<dt>규칙</dt><dd>30분 안에 경계 바로 아래에서 2번 이상 막힌 뒤 경계를 넘으면 매수, 다시 내려오면 즉시 손절.</dd>
+<dt>비용</dt><dd>경계 바로 위는 호가 한 칸이 0.25%라 문턱이 1.46%로 뛴다 — 넘기 어려움. 경계 아래에서 되밀림을 노리는 반대 방향은 비용 미달.</dd>
+<dt>버리는 조건</dt><dd>경계가 아닌 아무 가격에서 같은 조건으로 뽑은 경우와 차이 없으면.</dd>
+</dl></div>
+
+<h2 class="pb">4. 막힌 것 · 버린 것 · 다음 할 일</h2>
+<table>
+<tr><th>없는 데이터</th><th>막힌 가설</th><th>메모</th></tr>
+<tr><td>VI 공식 발동 시각·종류</td><td>H-015(필수), H-001·H-002(정확도)</td><td>KRX 정보데이터 [20023]</td></tr>
+<tr><td>호가</td><td>H-009(d), H-010·H-016·H-018 확인용, H-003 체결 가능성</td><td>사용자가 새 서버 뒤로 보류</td></tr>
+<tr><td>동시호가 예상체결가</td><td>H-004(e)</td><td>미수집</td></tr>
+<tr><td>종목별 장중 투자자·프로그램 순매수</td><td>H-014</td><td>저장소에 없음</td></tr>
+</table>
+
+<p><b>버린 아이디어</b></p>
+<ul>
+<li>장중 모멘텀, 프로그램 순매수 — 기존 H-007·H-014와 완전히 같음</li>
+<li>VWAP 되돌림 단독 — "누가 왜 잃는가"를 한 문장으로 못 씀</li>
+<li>공매도 업틱룰 이용 — 데이터가 하루 단위뿐, 장중 매매 이유를 못 세움</li>
+</ul>
+
+<p><b>다음에 조사할 것</b></p>
+<ul>
+<li>KRX VI 발동 목록을 로그인 없이 받을 수 있는지</li>
+<li>Osler(2003) 라운드 넘버·손절 군집 원문 — H-018의 [추론] 해소</li>
+<li>2015 가격제한폭 확대 뒤 자석효과 약화 원문 — H-016 핵심 질문</li>
+<li>비용 0.53%의 출처 확인(lead)</li>
+<li>research/raw/에 사용자 매매 기록이 들어오면 카드와 대조</li>
+</ul>
+
+<div class="warn"><b>관리 메모</b> — 작업 중 lead 백그라운드와 같은 폴더에 동시에 써서 목록·로그를 덮어썼고, 카드에서 목록을 다시 만들었다. 번호가 겹친 파일 10개("삭제 대상" 한 줄짜리)는 지워도 된다.</div>
+
+<h2 class="pb">5. 트레이딩뷰 전략 — 코드 20개 검토 결과</h2>
+<div class="note"><b>완료.</b> lead 가 받아 둔 공개 코드 20개(<code>research/raw/tv/</code>)를 한 줄씩 읽고 규칙을 코드 그대로 옮겼다 → <code>research/wiki/tv_strategies.md</code>. <b>7개 선정, 13개 제외.</b> 새 가설 카드는 없음(이유가 서는 3개는 기존 카드 H-004·H-012·H-013 에 변형으로 합침). 다음은 lead 가 backtest-agent 에 넘긴다. 성과가 좋은지는 아직 모른다 — 이건 "시험할 규칙 목록"이다.</div>
+
+<h3>선정 7개</h3>
+<table>
+<tr><th></th><th>이름</th><th>한 줄 규칙(코드 기준)</th><th>봉·데이터</th><th>주의</th></tr>
+<tr><td>A</td><td><a href="https://www.tradingview.com/script/ghocsiv7-Gap-Filling-Strategy/">Gap Filling</a> → H-004</td><td>아침 첫 봉이 전날 마지막 봉보다 통째로 아래(갭 하락)면 사서, 갭이 메워지는 가격에 판다</td><td>분봉(정규장만)</td><td><b>손절 없음</b>, 못 채우면 다음 날 아침 청산(하룻밤 보유)</td></tr>
+<tr><td>B</td><td><a href="https://www.tradingview.com/script/GoeqO1ev-Sweep-Reverse-Liquidity-Sweep-Reversal-Strategy/">Liquidity Sweep Reversal</a> → H-013</td><td>눈에 띄는 저점을 꼬리로 살짝 깨고(거래량 1.3배) 다시 올라오면, 다음 봉 확인 뒤 매수. 손절 꼬리 아래, 목표 1.5배</td><td>분봉</td><td>시간 청산 없음, 기준 가격이 실제 체결가가 아님</td></tr>
+<tr><td>C</td><td><a href="https://www.tradingview.com/script/EA1AXZui-VWAP-Reversal-Strategy-V1/">VWAP Reversal</a> → H-012 대조군</td><td>VWAP 를 위로 뚫은 뒤 10봉 안에 VWAP 까지 되밀렸다 다시 양봉으로 올라서면 매수</td><td>분봉</td><td>설명은 "장중"인데 <b>코드엔 장 마감 청산이 없음</b>, 실시간 신호 흔들림 가능</td></tr>
+<tr><td>D</td><td><a href="https://www.tradingview.com/script/nVECqIQx-TASC-2026-03-One-Percent-A-Week/">TASC 1%/주</a></td><td>월요일 시가 −1% 에 걸어 두고, 체결되면 +1% 에 판다. 금요일 마감에 무조건 정리</td><td>일봉(+분봉)</td><td>원래 미국 레버리지 ETF용 → 한국 레버리지 ETF 로. ETF 는 매도세가 없어 비용이 다름(확인 필요)</td></tr>
+<tr><td>E</td><td><a href="https://www.tradingview.com/script/Qg1Jra51-RSI-Bullish-Divergence-Oversold-Breakout/">RSI 강세 다이버전스</a></td><td>가격은 더 낮은 저점인데 RSI 는 높은 저점(첫 저점 RSI&lt;30) → RSI 가 사이 고점을 넘으면 매수</td><td>일봉</td><td>보유기간 상한 없음</td></tr>
+<tr><td>F</td><td><a href="https://www.tradingview.com/script/PETyqH3b-EMA-Pullback-Trend-Continuation-Strategy-with-Volume-and-Momentu/">EMA 눌림</a></td><td>50일선&gt;200일선 상승 추세에서 50일선에 닿았다 다시 올라서고 거래량·RSI 확인되면 매수</td><td>일봉·분봉</td><td>—</td></tr>
+<tr><td>G</td><td><a href="https://www.tradingview.com/script/M6uONKNI-Power-Surge-BB-Momentum-Squeeze-Release/">스퀴즈 해제</a></td><td>변동성이 좁아졌다 풀린 직후 상승 힘 지표가 50 을 넘으면 매수</td><td>일봉·분봉</td><td><span class="tag no">코드 결함 추정</span> 손절·목표가 작동 안 하고 50봉 보유만 남을 수 있음 — 먼저 확인</td></tr>
+</table>
+
+<h3>제외 13개와 이유</h3>
+<table>
+<tr><th>이름</th><th>이유</th></tr>
+<tr><td>Stock Breakout Momentum</td><td>20봉 최고가 돌파 = 이미 연구한 롤링 돌파와 겹침</td></tr>
+<tr><td>Liquidity Sweep + Delta Absorption</td><td>매수/매도 쏠림(H-009, 비용 미달) 계열. 스윕 부분은 B 로 대체</td></tr>
+<tr><td>TrendLock Supertrend Donchian</td><td><b>이름과 코드가 다름</b> — "돌파"라면서 실제로는 채널 하단 위면 매수. 사실상 거래량 급증 추격</td></tr>
+<tr><td>ICT 10AM FVG</td><td>뉴욕 시간 기준, 왜 되는지 설명 못 함</td></tr>
+<tr><td>Bjorgum Double Tap</td><td>쌍바닥 판정이 너무 복잡해 옮기다 틀릴 위험</td></tr>
+<tr><td>MACD Pullback · TrendMaster · SuperTrend Regime · Aurora KAMA · PMax · Momentum Sequence</td><td>지표를 이것저것 섞은 조합 — "누가 왜 잃나"가 없음</td></tr>
+<tr><td>STP Flip</td><td><b>위험</b> — 방향 바꿀 때마다 수량 2배(마틴게일식), 공매도 필수</td></tr>
+<tr><td>Ichimoku 5 Rules</td><td>전략이 아니라 지표</td></tr>
+</table>
+
+<h3>(참고) 처음 설명문만 보고 모은 후보</h3>
+<table>
+<tr><th>#</th><th>이름</th><th>한국 주식에 맞나(설명문 기준 1차 추정)</th><th>겹침·주의</th></tr>
+<tr><td>1</td><td><a href="https://www.tradingview.com/script/ghocsiv7-Gap-Filling-Strategy/">Gap Filling Strategy</a></td><td>장중 갭 메우기 — 맞음</td><td>H-004(시초가 과잉)와 겹칠 수 있음</td></tr>
+<tr><td>2</td><td><a href="https://www.tradingview.com/script/nVECqIQx-TASC-2026-03-One-Percent-A-Week/">TASC One Percent A Week</a></td><td>주 단위 — 일봉 1~5일 보유에 맞을 수 있음</td><td></td></tr>
+<tr><td>3</td><td><a href="https://www.tradingview.com/script/EA1AXZui-VWAP-Reversal-Strategy-V1/">VWAP Reversal Strategy V1</a></td><td>장중, 돌파 뒤 VWAP 눌림</td><td>H-012와 비슷</td></tr>
+<tr><td>4</td><td><a href="https://www.tradingview.com/script/Qg1Jra51-RSI-Bullish-Divergence-Oversold-Breakout/">RSI Bullish Divergence Breakout</a></td><td>롱</td><td>메커니즘 약할 수 있음</td></tr>
+<tr><td>5</td><td><a href="https://www.tradingview.com/script/V87nRt9v-MACD-Pullback-Sniper-Trend-ADX-Filtered-Strategy/">MACD Pullback Sniper</a></td><td>추세 눌림</td><td></td></tr>
+<tr><td>6</td><td><a href="https://www.tradingview.com/script/FDeprmix-TrendLock-Multi-Timeframe-Supertrend-Donchian-Breakout/">TrendLock Supertrend Donchian</a></td><td>돌파</td><td>여러 봉 주기 사용 → repainting 확인 필요, 롤링 돌파와 겹칠 수 있음</td></tr>
+<tr><td>7</td><td><a href="https://www.tradingview.com/script/rLkjr2sQ-Bjorgum-Double-Tap/">Bjorgum Double Tap</a></td><td>쌍바닥 패턴</td><td></td></tr>
+<tr><td>8</td><td><a href="https://www.tradingview.com/script/Za5HKgrL-ICT-10AM-First-FVG-Daily-Strategy/">ICT 10AM First FVG</a></td><td>미국 10시 기준 → 시각 옮겨야 함</td><td></td></tr>
+<tr><td>9</td><td><a href="https://www.tradingview.com/script/OvE4qQgh-Liquidity-Sweep-Delta-Absorption-PineGen-AI/">Liquidity Sweep + Delta Absorption</a></td><td>장중</td><td>H-013·H-010과 겹침, 체결 쏠림(H-009 미달) 계열</td></tr>
+<tr><td>10</td><td><a href="https://www.tradingview.com/script/oG5a3MJU/">Ichimoku 5 Rules</a></td><td>일봉</td><td></td></tr>
+<tr><td>11</td><td><a href="https://www.tradingview.com/script/nHGK4Qtp/">PMax Explorer</a></td><td>추세추종</td><td></td></tr>
+<tr><td>12</td><td><a href="https://www.tradingview.com/script/mVkDf8qh-TrendMaster-Pro-2-3-with-Alerts/">TrendMaster Pro 2.3</a></td><td>추세</td><td></td></tr>
+<tr><td>13</td><td><a href="https://www.tradingview.com/script/mpjNqADq-SuperTrend-Regime-Confluence/">SuperTrend Regime Confluence</a></td><td>추세</td><td></td></tr>
+<tr><td>14</td><td><a href="https://www.tradingview.com/script/YVnhptce-STP-Flip-Anti-Whipsaw-Modified-Always-In-Overnight-Strategy/">STP Flip Always-In Overnight</a></td><td>오버나이트</td><td>공매도 쪽 포함 가능</td></tr>
+<tr><td>15</td><td><a href="https://github.com/handiko/RSI-2-Stock-Trading-Strategy-Pinescript">RSI-2 (GitHub)</a></td><td>일봉 1~5일, 롱 — 맞음</td><td>트레이딩뷰 게시본이 아니라 A안에서는 제외</td></tr>
+</table>
+<p class="small">뺀 것: 외환·금·암호화폐 전용, 도구·템플릿(리포트 생성기·포지션 크기 예제), 스스로 파라미터를 바꾸는 것(Auto-Optimized·XGBoost — 재현 불가). 인기·성과 숫자는 판정에 안 씀.</p>
+
+<h2 class="pb">5-2. 트레이딩뷰 "칼만(Kalman)" 조사 → 조합 제안</h2>
+<div class="note">칼만이 무엇이고 어떻게 작동하는지는 따로 정리한 <code>kalman_explained.html</code> 참고(쉬운 설명·숫자 예시·함정·체결 칼만 정의).</div>
+<div class="note"><b>결론:</b> 목록 13개는 <b>전부 지표이고 전략은 0개</b>다. 칼만 필터는 "잡음을 걸러 추세·속도를 추정하는 계산 도구"일 뿐, 그 자체로 돈 버는 이유는 아니다. 그래서 칼만을 <b>이유가 있는 가설 안에서 측정 도구로 쓰는 조합</b> 두 가지를 만들었다. 성과는 아직 모른다.</div>
+
+<div class="card"><h3>H-019 테마 후발주 따라잡기 (칼만 잔차) <span class="tag new">새 카드</span> <span class="tag go">해볼 만함</span></h3><dl>
+<dt>왜 되나</dt><dd>같은 업종 안에서 뉴스는 대장주에 먼저 반영되고 나머지에는 늦게 반영된다(Hou 2007). 한국 테마장은 개인 관심이 대장주에 몰려 후발주가 한동안 "옛 가격"에 머문다 <span class="guess">[추론]</span>. 그 옛 가격에 파는 사람에게서 사서, 따라잡기를 받는다.</dd>
+<dt>칼만의 역할</dt><dd>"테마가 이만큼 오를 때 이 종목은 보통 얼마나 따라오나(민감도)"를 매 분 갱신하고, 그보다 <b>얼마나 덜 올랐나</b>를 점수(Z)로 낸다. 페어 트레이딩에서 쓰는 표준 방식을 테마 바스켓에 적용한 것이다.</dd>
+<dt>규칙</dt><dd>10:00~13:00, 테마 전체가 +3% 이상 올랐는데 이 종목은 Z ≤ −2(뚜렷이 덜 오름)이고 당일 마이너스가 아니면 → 매수. 따라잡으면(Z ≥ 0) 매도하고, 테마가 꺾이거나 14:50 이 되거나 −2% 가 되면 정리한다.</dd>
+<dt>함정 점검</dt><dd>① 칼만 없이 단순 비교한 판도 같이 잰다 — 칼만이 더 낫지 않으면 칼만 부분만 버린다. ② 테마 구성표가 날짜별 기록이 없는 "오늘 기준" 표라, 과거 날짜에 적용하면 결과가 부풀 수 있다.</dd>
+<dt>예전 연구와의 관계</dt><dd>10시에 대장주·1등주를 <b>추격</b> 매수한 테마 연구 3개는 모두 기각됐다. 이 카드는 그 <b>반대</b>(안 오른 쪽)다.</dd>
+</dl></div>
+
+<div class="card"><h3>H-012 변형: 칼만 "속도"로 조용한 눌림 가려내기 <span class="tag hold">보류</span></h3><dl>
+<dt>내용</dt><dd>급등 뒤 눌림에서, 가격은 빠졌지만 칼만이 추정한 추세 속도가 0 아래로 안 떨어졌으면 "잡음성 눌림"으로 보고 재돌파 매수를 허용한다. 트레이딩뷰 Joint-state Kalman 의 [가격, 속도] 모델을 빌려왔다.</dd>
+<dt>버리는 조건</dt><dd>속도 조건이 있든 없든 성과가 같으면 버린다.</dd>
+</dl></div>
+
+<div class="card"><h3>체결 칼만 조합 ① 놀람 추격 금지 (H-001 변형 d · H-002 변형 e) <span class="tag filter">필터</span></h3><dl>
+<dt>무엇</dt><dd>체결 하나하나에 칼만을 돌려 "이번 체결이 평소 흔들림의 몇 배로 튀었나"(놀람 점수 z)를 낸다. <b>z ≥ +3 이 나오면 60초 동안 사지 않는다.</b> VI 재개 첫 체결이 크게 튀었으면 재돌파 기대를 낮춘다.</dd>
+<dt>왜 "사라"가 아니라 "쫓지 마라"인가</dt><dd>사내 측정에서 <b>빨리 오른 직후일수록 이후 수익이 낮았다</b>(가격 속도의 방향 음수). 급하게 튄 직후 추격은 불리하다는 뜻이다. VI 공백 없이 튀는 급등도 잡는다.</dd>
+<dt>버리는 조건</dt><dd>막은 신호가 안 막은 신호보다 나쁘지 않으면 버린다. 칼만 없이 "60초 가격 +x%" 로 막은 단순판보다 낫지 않으면 칼만 부분만 버린다.</dd>
+</dl></div>
+
+<div class="card"><h3>체결 칼만 조합 ② 진짜 스윕만 (H-013 변형 c) <span class="tag hold">보류</span></h3><dl>
+<dt>무엇</dt><dd>저점 스윕을 체결가 대신 <b>칼만이 추정한 "진짜 가격"</b> 기준으로 판정한다. 추정가 자체가 저점 아래로 1호가 이상 밀렸다가 60초 안에 복귀할 때만 산다.</dd>
+<dt>왜</dt><dd>체결가 한 건이 호가 튐(매수·매도호가를 오가는 1호가 흔들림)으로 저점을 찍은 <b>가짜 스윕</b>을 걸러낸다.</dd>
+<dt>버리는 조건</dt><dd>진짜 스윕과 가짜 스윕의 15분 뒤 수익이 같으면 버린다.</dd>
+</dl></div>
+<p class="small">정확한 계산 정의(불확실성을 체결 간격만큼 키우기, 큰 체결을 더 믿기 등)는 <code>kalman_explained.html</code> 8장. 체결 칼만만으로 초단타 매매는 비용 미달이라 하지 않는다.</p>
+
+<p class="small">버린 것: 칼만 선 교차·색 바뀜 매매(이유 없는 지표 신호), 칼만 페어 트레이딩 그대로(한쪽을 공매도해야 해서 불가 → 롱 전용으로 바꾼 게 H-019), OBV·풋프린트 칼만(체결 쏠림 계열 = H-009 비용 미달).</p>
+
+<h2>6. 출처</h2>
+<ul class="small">
+<li><a href="https://core.asiae.co.kr/article/2025040315170045038">아시아경제 — 두 개의 거래소, 유명무실해지는 VI</a></li>
+<li><a href="https://nextrade.co.kr/transactionSys/content.do">넥스트레이드 거래제도</a></li>
+<li><a href="https://data.krx.co.kr/contents/MDC/STAT/issue/MDCSTAT224.jsp">KRX 변동성완화장치 발동종목 현황</a></li>
+<li><a href="https://kbthink.com/stock/vi.html">KB Think — VI 발동 기준</a></li>
+<li><a href="http://www.korfin.org/korfin_file/forum/30-2-01.pdf">안일찬 외 2017, 재무연구 30-2 (정적 VI)</a></li>
+<li><a href="https://www.kdajdqs.org/bbs/reference/1106/download/2088">Do Trading Pauses Protect Retail Investors? (H-001)</a></li>
+<li><a href="https://onlinelibrary.wiley.com/doi/abs/10.1111/j.1540-6261.1997.tb04827.x">Kim·Rhee 1997 가격제한 (H-003)</a></li>
+<li><a href="https://www.sciencedirect.com/science/article/abs/pii/S1544612323001526">How do investors react to overnight returns? Evidence from Korea (H-004)</a></li>
+<li><a href="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4416622">Zarattini·Aziz 2023 ORB</a> · <a href="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4729284">Zarattini 외 2024 Stocks in Play</a> · <a href="https://github.com/giovannibrusco/zarattini-2023-orb-qqq">독립 재현</a></li>
+<li><a href="https://www.sciencedirect.com/science/article/abs/pii/S0304405X18301351">Gao 외 2018 Market Intraday Momentum (H-007)</a></li>
+<li><a href="https://arxiv.org/abs/1005.3535">Heston·Korajczyk·Sadka 2010 (H-008)</a></li>
+<li><a href="https://www.sciencedirect.com/science/article/abs/pii/S0304405X03001752">Chordia·Subrahmanyam 2004 (H-009)</a> · <a href="https://arxiv.org/abs/1011.6402">Cont·Kukanov·Stoikov 2014 OFI</a></li>
+<li><a href="http://www2.hawaii.edu/~rheesg/Published%20Papers/2009/An%20Analysis%20of%20the%20Magnet%20Effect.pdf">Du·Liu·Rhee 2009 자석효과</a> · <a href="https://www.researchgate.net/publication/5098615_An_Anatomy_of_the_Magnet_Effect_Evidence_from_the_Korea_Stock_Exchange_High-Frequency_Data">KSE 고빈도 자석효과</a> · <a href="https://arxiv.org/pdf/1805.04728">가격제한폭 변경과 장중 변동성</a></li>
+<li><a href="https://www.sciencedirect.com/science/article/abs/pii/S1386418123000502">Who trades at the close?</a> · <a href="https://alphaarchitect.com/end-of-trading/">Alpha Architect</a> (H-017)</li>
+<li><a href="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=966454">Cellier·Bourghelle 가격 장벽</a> · <a href="https://cri.georgetown.edu/wp-content/uploads/2024/08/Bloomfield-Chin-Craig-2024-Georgetown-CRI-WP.pdf">Bloomfield 외 2024</a> · <a href="https://www.kcmi.re.kr/publications/pub_detail_view?syear=2024&zcd=002001016&zno=1799&cno=6382">자본시장연구원 호가단위</a> (H-018)</li>
+<li><a href="https://academic.oup.com/rfs/article-abstract/20/4/1113/1615954">Hou 2007 업종 내 정보 확산</a> · <a href="https://www.quantstart.com/articles/Dynamic-Hedge-Ratio-Between-ETF-Pairs-Using-the-Kalman-Filter/">QuantStart 칼만 동적 헤지비율</a> · <a href="https://bookdown.org/palomar/portfoliooptimizationbook/15.6-kalman-pairs-trading.html">Palomar 칼만 페어</a> · <a href="https://kr.tradingview.com/scripts/kalman/">트레이딩뷰 kalman 목록</a> (H-019)</li>
+<li>커뮤니티 출처(정의만 사용, 성과 숫자 미채택)와 사내 문서는 각 카드 파일(research/wiki/hypotheses/)에 있음</li>
+</ul>
+
+</body>
+</html>

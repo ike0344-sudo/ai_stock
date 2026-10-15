@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>칼만 필터 — 어떻게 작동하고 어떻게 쓰나</title>
+<style>
+  @page { size: A4; margin: 14mm 13mm; }
+  body { font-family: "Malgun Gothic", "맑은 고딕", sans-serif; font-size: 10.5pt; line-height: 1.6; color: #222; max-width: 190mm; margin: 0 auto; }
+  h1 { font-size: 19pt; margin: 0 0 4px; }
+  h2 { font-size: 14pt; border-bottom: 2px solid #333; padding-bottom: 3px; margin-top: 24px; }
+  h3 { font-size: 12pt; margin: 14px 0 6px; }
+  .sub { color: #666; margin-bottom: 14px; }
+  table { border-collapse: collapse; width: 100%; font-size: 9.5pt; margin: 6px 0; }
+  th, td { border: 1px solid #bbb; padding: 4px 6px; vertical-align: top; }
+  th { background: #eee; }
+  .note { background: #f6f6f6; border-left: 4px solid #888; padding: 8px 10px; margin: 10px 0; }
+  .key { background: #eef6ee; border-left: 4px solid #2a7a2a; padding: 8px 10px; margin: 10px 0; }
+  .warn { background: #fff4f4; border-left: 4px solid #c33; padding: 8px 10px; margin: 10px 0; }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 9pt; font-weight: bold; }
+  .go { background: #d9f2d9; color: #1b6e1b; } .hold { background: #fff1c9; color: #7a5a00; } .no { background: #f8d7d7; color: #8a1c1c; }
+  code { background: #f2f2f2; padding: 0 3px; }
+  .pb { page-break-before: always; }
+  .small { font-size: 9pt; color: #555; }
+  a { color: #1d4b8a; word-break: break-all; }
+</style>
+</head>
+<body>
+
+<h1>칼만 필터 — 어떻게 작동하고 어떻게 쓰나</h1>
+<div class="sub">2026-09-27 · scalping-researcher · 쉬운 설명 + 직접 계산 예시 + 매매에 쓸 때 주의점</div>
+
+<div class="key"><b>한 줄 요약</b><br>
+칼만 필터는 <b>"내 예상"과 "새로 들어온 가격"을 섞어 진짜 값을 추정하는 계산법</b>이다. 섞는 비율을 매번 "어느 쪽을 더 믿을 만한가"로 자동으로 정한다.<br>
+매매에서는 <b>이동평균보다 조금 똑똑한 평활선 + "지금 가격이 얼마나 놀라운가" 점수</b>로 쓰인다. 돈 버는 이유가 아니라 <b>측정 도구</b>다.</div>
+
+<h2>1. 비유로 이해하기 — 내비게이션</h2>
+<p>터널 안의 자동차를 떠올리면 된다.</p>
+<ul>
+<li><b>예상:</b> "시속 60km 로 달렸으니 1초 뒤엔 17m 앞에 있겠지." — 계산은 맞지만 오차가 쌓인다.</li>
+<li><b>측정:</b> GPS 가 "지금 여기"라고 알려 준다. — 매번 몇 m 씩 튄다.</li>
+<li><b>칼만:</b> 둘을 섞는다. GPS 가 잘 잡히면 GPS 쪽으로, GPS 가 흔들리면 내 예상 쪽으로 더 기운다.</li>
+</ul>
+<p>주가에 대입하면 이렇다: <b>"진짜 가치 흐름"은 안 보이고, 우리가 보는 체결가는 그 위에 잡음(호가 튐, 큰 주문 한 방)이 얹힌 값</b>이라고 가정한다. 칼만은 체결가에서 잡음을 걷어내 그 흐름을 추정한다.</p>
+
+<h2>2. 작동 원리 — 매 봉마다 두 단계</h2>
+<table>
+<tr><th>단계</th><th>하는 일</th><th>쉬운 말</th></tr>
+<tr><td>① 예측</td><td>지난 추정값으로 이번 값을 예상하고, <b>불확실성(P)</b>을 Q 만큼 키운다</td><td>"시간이 지났으니 내가 틀렸을 가능성이 조금 커졌다"</td></tr>
+<tr><td>② 보정</td><td>새 가격이 오면 <b>칼만 이득 K = P ÷ (P + R)</b>를 계산하고, 추정값 = 예상 + K × (새 가격 − 예상). P 는 줄어든다</td><td>"내 예상이 불확실할수록(P 큼) 새 가격을 더 믿는다"</td></tr>
+</table>
+<p>여기서 설정값은 딱 두 개다.</p>
+<table>
+<tr><th>설정</th><th>뜻</th><th>키우면</th></tr>
+<tr><td><b>Q</b> (과정 잡음)</td><td>진짜 값이 한 봉 사이에 얼마나 움직일 수 있나</td><td>선이 가격에 바짝 붙는다(빠르지만 흔들림)</td></tr>
+<tr><td><b>R</b> (측정 잡음)</td><td>체결가 하나를 얼마나 못 믿나</td><td>선이 매끄러워진다(느려짐)</td></tr>
+</table>
+<p><b>중요:</b> 오래 돌리면 결과는 <b>Q 와 R 의 비율</b>로만 정해진다(<a href="https://www.luxalgo.com/library/concept/kalman-filter/">LuxAlgo 설명</a>). 결국 조절 손잡이는 하나다.</p>
+
+<h2>3. 직접 계산해 보기 (숫자 예시)</h2>
+<p>가격이 100 → 102 → 101 → 105 로 왔다고 하자. 설정 Q = 1, R = 4. 시작값 추정 100, 불확실성 P = 10.</p>
+<table>
+<tr><th>봉</th><th>새 가격</th><th>예측 P (+Q)</th><th>K = P÷(P+R)</th><th>추정값 = 예상 + K×차이</th><th>보정 뒤 P</th></tr>
+<tr><td>1</td><td>102</td><td>10+1 = 11</td><td>11÷15 = <b>0.73</b></td><td>100 + 0.73×2 = <b>101.47</b></td><td>2.93</td></tr>
+<tr><td>2</td><td>101</td><td>3.93</td><td>3.93÷7.93 = <b>0.50</b></td><td>101.47 + 0.50×(−0.47) = <b>101.24</b></td><td>1.98</td></tr>
+<tr><td>3</td><td>105</td><td>2.98</td><td>2.98÷6.98 = <b>0.43</b></td><td>101.24 + 0.43×3.76 = <b>102.84</b></td><td>1.71</td></tr>
+<tr><td>…</td><td></td><td>2.56 로 수렴</td><td><b>0.39 로 수렴</b></td><td></td><td></td></tr>
+</table>
+<p>읽는 법: 처음엔 아는 게 없어서(P 큼) 새 가격을 73% 믿고, 봉이 쌓일수록 자기 추정을 더 믿어 39% 까지 내려간다. 마지막 봉에서 가격이 105 로 튀었지만 추정은 102.84 — <b>튄 값의 43% 만 반영</b>했다.</p>
+
+<div class="warn"><b>솔직한 사실 — 가장 중요한 부분</b><br>
+설정(Q, R)을 고정한 가장 단순한 칼만은 조금 지나면 K 가 0.39 같은 <b>고정값</b>이 된다. 그러면 계산이 <b>지수이동평균(EMA)과 똑같다</b>(위 예시는 약 4봉 EMA와 같다: 2÷0.39 − 1 ≈ 4.1).<br>
+그래서 "칼만이 이동평균보다 지연이 57% 적다" 같은 인터넷 주장(<a href="https://medium.com/coding-nexus/why-the-kalman-filter-beats-moving-averages-in-trading-36d215a3f1b7">예시</a>)은 조심해서 봐야 한다 — 같은 조건이면 결국 이름만 다른 EMA 일 수 있다. <b>칼만이 진짜 다른 값을 내는 경우는 아래 4장의 네 가지뿐</b>이다.</div>
+
+<h2 class="pb">4. 칼만이 이동평균과 진짜 다른 점 — 네 가지</h2>
+<table>
+<tr><th></th><th>무엇</th><th>쉬운 말</th><th>우리에게 쓸모</th></tr>
+<tr><td>1</td><td><b>속도까지 추정</b>(상태 = [가격, 속도])</td><td>"어디 있나"뿐 아니라 "어느 방향으로 얼마나 빨리 가나"를 같이 추정. 추세가 이어질 때 이동평균보다 덜 뒤처진다</td><td><span class="tag go">좋음</span> H-012 변형(눌림 중에도 속도가 살아 있나)</td></tr>
+<tr><td>2</td><td><b>놀람 점수</b>(예상 오차 ÷ 그 오차의 예상 크기)</td><td>"이번 가격이 평소 흔들림의 몇 배로 튀었나". ±2 를 넘으면 드문 움직임</td><td><span class="tag go">좋음</span> 급등 시작·스윕·VI 전후 감지에 쓸 수 있는 깔끔한 점수</td></tr>
+<tr><td>3</td><td><b>변하는 관계 추정</b>(칼만 회귀)</td><td>"A 가 1% 오를 때 B 는 몇 % 오르나"를 매 봉 새로 갱신. 이동창 회귀보다 덜 출렁인다(<a href="https://www.quantstart.com/articles/Dynamic-Hedge-Ratio-Between-ETF-Pairs-Using-the-Kalman-Filter/">QuantStart</a>, <a href="https://bookdown.org/palomar/portfoliooptimizationbook/15.6-kalman-pairs-trading.html">Palomar</a>)</td><td><span class="tag go">좋음</span> H-019 테마 후발주(테마 대비 덜 오른 정도)</td></tr>
+<tr><td>4</td><td><b>잡음 크기를 그때그때 조정</b>(적응형 R)</td><td>변동성이 커지면 가격을 덜 믿고, 조용하면 더 믿는다</td><td><span class="tag hold">보통</span> 장 초반·VI 직후처럼 흔들림이 큰 구간에서 선이 덜 튄다</td></tr>
+</table>
+
+<h2>5. 매매에서 실제로 쓰는 방식 — 좋다/나쁘다</h2>
+<table>
+<tr><th>쓰는 방식</th><th>판정</th><th>이유</th></tr>
+<tr><td>칼만 선을 가격이 뚫으면 매수 / 선 색이 바뀌면 매수</td><td><span class="tag no">나쁨</span></td><td>이동평균 교차와 같다. "누가 왜 잃나"가 없는 신호 — 트레이딩뷰 kalman 스크립트 대부분이 이 방식</td></tr>
+<tr><td>페어 트레이딩(두 종목 가격 차가 벌어지면 하나 사고 하나 공매도)</td><td><span class="tag no">못 씀</span></td><td>공매도가 필요 → 롱 전용으로 바꾼 것이 H-019</td></tr>
+<tr><td>다른 가설의 <b>측정 도구</b>(덜 오른 정도, 추세 속도, 놀람 점수)</td><td><span class="tag go">좋음</span></td><td>이유는 가설이 대고, 칼만은 그걸 더 깔끔하게 잰다. 칼만 없는 단순판과 꼭 비교</td></tr>
+<tr><td>잡음 제거 뒤 지표 계산(칼만 선으로 RSI 등)</td><td><span class="tag hold">보통</span></td><td>신호 수만 줄고 본질은 같음</td></tr>
+</table>
+
+<h2>6. 쓸 때 함정 다섯 가지</h2>
+<table>
+<tr><th></th><th>함정</th><th>설명</th><th>대처</th></tr>
+<tr><td>1</td><td><b>필터 vs 스무더 혼동</b></td><td>"칼만 스무더(RTS)"는 <b>미래 가격까지 써서</b> 과거 선을 다시 그린다 → 백테스트가 비현실적으로 좋아짐(repaint)</td><td>매 봉 그 시점까지만 쓰는 <b>필터</b>만 사용. 트레이딩뷰 스크립트는 이것부터 확인</td></tr>
+<tr><td>2</td><td>Q·R 최적화</td><td>손잡이를 과거 결과에 맞춰 돌리면 과최적화 — 사실상 "가장 잘 맞은 EMA 기간 고르기"</td><td>미리 정한 값 고정(R = 전날 1분 수익 분산 등), 결과 보고 안 바꿈</td></tr>
+<tr><td>3</td><td>시작값</td><td>처음 몇 봉은 P 가 커서 추정이 가격을 그대로 따라감</td><td>전날 마지막 상태를 이어받거나, 처음 N 봉은 신호에서 제외</td></tr>
+<tr><td>4</td><td>로그 가격 vs 원 가격</td><td>원 가격으로 돌리면 비싼 종목·싼 종목의 Q 가 달라져야 함</td><td>로그 가격(또는 수익률)에 돌려 종목 간 같은 설정 사용</td></tr>
+<tr><td>5</td><td>"칼만이라 더 좋다"는 착각</td><td>고정 설정이면 EMA 와 같다(3장)</td><td>같은 규칙의 EMA 판·단순판을 대조군으로 같이 백테스트</td></tr>
+</table>
+
+<h2>7. 우리 가설에 쓰는 방식 (정의)</h2>
+<table>
+<tr><th>카드</th><th>칼만 종류</th><th>설정(고정, 최적화 안 함)</th><th>쓰는 값</th></tr>
+<tr><td>H-019 테마 후발주</td><td>칼만 회귀: 종목 1분 수익 = α + β × (자기 제외 테마 평균 1분 수익)</td><td>α·β 랜덤워크, Q = δ/(1−δ)·I, δ = 0.0001(QuantStart 기본값), R = 전날 그 종목 1분 수익 분산. 전날 상태 이어받기</td><td>누적 잔차를 표준화한 Z ≤ −2 = "테마 대비 뚜렷이 덜 오름"</td></tr>
+<tr><td>H-012 변형</td><td>등속 칼만: 상태 [로그가격, 속도]</td><td>R = 전날 1분 수익 분산, 속도 잡음 = R 의 1%</td><td>눌림 동안 추정 속도 ≥ 0 이면 "잡음성 눌림"</td></tr>
+</table>
+<p class="small">두 카드 모두 "칼만 없는 단순판"을 대조군으로 같이 재고, 칼만이 낫지 않으면 칼만 부분만 버린다(카드의 반증 조건).</p>
+
+<h2 class="pb">8. 체결 데이터 + 칼만 ("체결 칼만")</h2>
+<div class="key"><b>왜 잘 맞나:</b> 체결가는 매수호가·매도호가를 오가며 1호가씩 튄다. 칼만은 이 튐을 "잡음"으로 보고 걸러 그 밑의 "진짜 가격"을 추정한다. 체결이 불규칙하게 들어와도 "지난 체결 뒤 흐른 시간만큼 불확실성을 키우는" 식으로 자연스럽게 처리한다(이동평균은 못 함).</div>
+
+<h3>정의 (고정값 — 결과 보고 안 바꿈)</h3>
+<table>
+<tr><th>항목</th><th>정의</th><th>쉬운 말</th></tr>
+<tr><td>관측값</td><td>체결 i 의 로그 체결가 y<sub>i</sub></td><td>체결가 하나하나</td></tr>
+<tr><td>상태</td><td>진짜 로그가격 m (속도는 안 씀)</td><td>잡음 걷은 가격</td></tr>
+<tr><td>예측</td><td>m 그대로, 불확실성 P ← P + q × Δt (Δt = 지난 체결 뒤 초, 최대 60초로 자름)</td><td>체결 사이가 길수록 "모르는 정도"가 커짐 — VI 공백 뒤 첫 체결은 자연히 덜 놀라움으로 계산됨</td></tr>
+<tr><td>q</td><td>전 거래일 그 종목의 1초 로그수익 분산</td><td>평소 1초에 얼마나 움직이나</td></tr>
+<tr><td>R<sub>i</sub></td><td>(½호가 ÷ 가격)² × (그날 체결량 중앙값 ÷ 체결량<sub>i</sub>), 0.25~4배로 자름</td><td>호가 튐 크기가 기본 잡음. 큰 체결은 더 믿고 작은 체결은 덜 믿음 <span style="color:#8a5a00">[추론]</span></td></tr>
+<tr><td>놀람 점수</td><td>z<sub>i</sub> = (y<sub>i</sub> − m<sub>예측</sub>) ÷ √(P + R<sub>i</sub>)</td><td>"이번 체결이 평소 흔들림의 몇 배로 튀었나"</td></tr>
+<tr><td>시작</td><td>09:00 첫 체결에서 m = y, P = 큰 값. 처음 20체결은 신호 제외</td><td>처음엔 불안정</td></tr>
+</table>
+<p class="small">데이터: <code>tick_al</code>(통합 체결, 약 36거래일, 거래대금 상위 종목). 매수·매도 방향과 호가는 필요 없음(없어도 됨). KRX·NXT 체결이 섞여 두 거래소 가격 차도 잡음에 들어간다.</p>
+
+<h3>이 정의로 만든 두 조합</h3>
+<table>
+<tr><th>조합</th><th>규칙</th><th>왜</th><th>버리는 조건</th></tr>
+<tr><td><b>① 놀람 추격 금지</b><br>(H-001 변형 d, H-002 변형 e)</td><td>z ≥ +3 체결이 나오면 60초 동안 매수 신호 막기. VI 재개 첫 체결의 z 가 클수록 재돌파 기대 낮춤</td><td>사내 측정: <b>빨리 오른 직후일수록 이후 수익이 낮다</b>(가격 속도의 방향이 음수). 그래서 놀람은 "사라"가 아니라 "쫓지 마라" 신호로 쓴다</td><td>막힌 신호가 안 막힌 신호보다 나쁘지 않으면. 칼만 없이 "60초 가격 +x%" 로 막은 판보다 낫지 않으면 칼만 부분만</td></tr>
+<tr><td><b>② 진짜 스윕</b><br>(H-013 변형 c)</td><td>저점 스윕을 체결가가 아니라 <b>추정가 m</b> 기준으로 판정. m 자체가 저점 아래로 1호가 이상 밀렸다가 60초 안에 복귀하면 매수</td><td>체결가 한 건이 호가 튐으로 저점을 찍은 <b>가짜 스윕</b>을 걸러냄</td><td>진짜 스윕과 가짜 스윕의 15분 수익 차이가 없으면</td></tr>
+</table>
+<div class="warn"><b>하면 안 되는 것:</b> 체결 칼만만으로 초 단위 매매 — 초 단위 움직임은 1호가(0.05~0.25%) 안팎이라 비용 문턱 1.06% 에 한참 못 미친다. 체결만으로 매수·매도 방향을 가리는 시도도 이미 실패했다(H-009). "z 가 크면 매수"도 기존 측정과 반대 방향이라 하지 않는다.</div>
+
+<h2>9. 출처</h2>
+<ul class="small">
+<li><a href="https://www.cs.yale.edu/homes/hudak-paul/CS474S01/kalman.pdf">Welch &amp; Bishop, An Introduction to the Kalman Filter (UNC TR 95-041)</a> — 예측·보정 두 단계와 칼만 이득 식의 표준 입문 자료 (<a href="https://www.cs.utexas.edu/~pstone/Courses/393Rfall15/readings/Welch+Bishop-TR-95.pdf">사본</a>)</li>
+<li><a href="https://www.luxalgo.com/library/concept/kalman-filter/">LuxAlgo — Kalman Filter 개념</a> · <a href="https://www.luxalgo.com/library/indicator/kalman-filter/">지표 설명</a> — Q·R 의 뜻, 비율만 중요</li>
+<li><a href="https://www.mql5.com/en/articles/23016">MQL5 — 적응형 잡음 추정 칼만 가격 평활</a></li>
+<li><a href="https://www.quantstart.com/articles/Dynamic-Hedge-Ratio-Between-ETF-Pairs-Using-the-Kalman-Filter/">QuantStart — 칼만 동적 헤지비율</a> · <a href="https://bookdown.org/palomar/portfoliooptimizationbook/15.6-kalman-pairs-trading.html">Palomar — Kalman Filtering for Pairs Trading</a></li>
+<li><a href="https://kr.tradingview.com/scripts/kalman/">트레이딩뷰 kalman 스크립트 목록</a> · <a href="https://kr.tradingview.com/script/keVAuPgL-Joint-state-Kalman-Filter-Linear-Extended-Unscented/">Joint-state Kalman Filter</a></li>
+<li>참고(주장 과장 주의): <a href="https://medium.com/coding-nexus/why-the-kalman-filter-beats-moving-averages-in-trading-36d215a3f1b7">Why the Kalman Filter Beats Moving Averages (Medium)</a></li>
+<li>사내: <code>docs/ACCEL_INDEX_PREREGISTRATION.md</code>(가격 변화 속도 IC −0.036~−0.059, 매수비율 역방향), <code>studio/domain/conditions/tick.py</code>(VI 공백 검출·누수 VI 19%)</li>
+<li>3장 예시 계산과 "고정 설정 칼만 = EMA" 수렴값(K = 0.39)은 직접 계산: 정상상태 P = (Q + √(Q² + 4QR)) ÷ 2 = 2.56, K = P ÷ (P + R) = 0.39</li>
+</ul>
+
+</body>
+</html>

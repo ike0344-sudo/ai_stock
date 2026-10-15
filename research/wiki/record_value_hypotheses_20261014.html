@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>신고대금 종목 매매 가설 — 2026-10-14</title>
+<style>
+  @page { size: A4; margin: 14mm 13mm; }
+  body { font-family: "Malgun Gothic", "맑은 고딕", sans-serif; font-size: 10.5pt; line-height: 1.6; color: #222; max-width: 190mm; margin: 0 auto; }
+  h1 { font-size: 19pt; line-height: 1.4; margin: 0 0 4px; }
+  h2 { font-size: 14pt; line-height: 1.5; border-bottom: 2px solid #333; padding-bottom: 3px; margin-top: 24px; }
+  h3 { font-size: 12pt; line-height: 1.5; margin: 0 0 6px; }
+  table, .tag, .small, .sub { line-height: 1.55; }
+  .sub { color: #666; margin-bottom: 14px; }
+  table { border-collapse: collapse; width: 100%; font-size: 9.5pt; margin: 6px 0; }
+  th, td { border: 1px solid #bbb; padding: 4px 6px; vertical-align: top; }
+  th { background: #eee; }
+  .card { border: 1px solid #ccc; border-radius: 6px; padding: 10px 12px; margin: 12px 0; page-break-inside: avoid; }
+  .card dl { margin: 0; } .card dt { font-weight: bold; margin-top: 5px; color: #333; } .card dd { margin: 0 0 0 10px; }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 9pt; font-weight: bold; margin-left: 6px; }
+  .go { background: #d9f2d9; color: #1b6e1b; } .hold { background: #fff1c9; color: #7a5a00; } .no { background: #f8d7d7; color: #8a1c1c; }
+  .filter { background: #dde8f7; color: #1d4b8a; } .new { background: #e6e6e6; color: #333; }
+  .note { background: #f6f6f6; border: 1px solid #c8c8c8; border-radius: 4px; padding: 8px 10px; margin: 10px 0; }
+  .key { background: #eef6ee; border: 1px solid #9cc79c; border-radius: 4px; padding: 8px 10px; margin: 10px 0; }
+  .warn { background: #fff4f4; border: 1px solid #e0a3a3; border-radius: 4px; padding: 8px 10px; margin: 10px 0; }
+  .guess { color: #8a5a00; font-size: 9pt; }
+  .pb { page-break-before: always; }
+  .small { font-size: 9pt; color: #555; }
+  a { color: #1d4b8a; word-break: break-all; }
+</style>
+</head>
+<body>
+
+<h1>신고대금 종목 매매 가설</h1>
+<div class="sub">2026-10-14 · scalping-researcher · 새 카드 3장 + 기존 카드 변형 3건 · 실험·판정은 하지 않음(시험할 규칙 목록)</div>
+
+<div class="key"><b>한 줄 요약</b><br>
+신고대금(그날 거래대금이 직전 1년 최대를 넘은 1,000억+ 종목)은 <b>그날 사서 들고 가면 손해</b>다. 논문도 한국에서는 같은 결론이다.<br>
+그래서 "신고일에 사기"가 아니라 <b>① 다음 날 아침 털린 뒤 ② 고가 마감 종목의 전일 고가 돌파 ③ 며칠 뒤 거래가 식은 첫 눌림</b> — 이 세 자리에서 사는 규칙을 만들었다. 돈이 되는지는 아직 모른다.</div>
+
+<h2>1. 출발점 — 우리 자료가 말하는 것 (lead 측정, 2020~2026, 6,977건)</h2>
+<table>
+<tr><th>구간</th><th>평균</th><th>뜻</th><th>판정</th></tr>
+<tr><td>신고일 종가 매수 → 20일 보유</td><td>승률 36%</td><td>들고 가면 진다</td><td><span class="tag no">나쁨</span></td></tr>
+<tr><td>신고일 종가 → 다음 날 시가</td><td>+0.62%</td><td>밤사이 조금 오르지만 비용(문턱 1.06%)에 못 미침</td><td><span class="tag no">비용 미달</span></td></tr>
+<tr><td>위와 같되 상한가 마감만</td><td>+3.09%</td><td>폭은 충분. 단 상한가에서 실제로 살 수 있느냐가 문제</td><td><span class="tag hold">체결이 관건</span></td></tr>
+<tr><td>다음 날 시가 → 종가</td><td>−0.83%</td><td>다음 날 시가에 사면 진다</td><td><span class="tag no">나쁨</span></td></tr>
+<tr><td>다음 날 장중 고가 / 저가 (시가 대비)</td><td>+7.2% / −5.0%</td><td>하루 안의 흔들림은 매우 크다 → 자리를 잘 고르면 기회</td><td><span class="tag go">폭은 충분</span></td></tr>
+</table>
+
+<h2>2. 논문·실전 글이 말하는 것</h2>
+<table>
+<tr><th>자료</th><th>내용</th><th>우리에게 주는 뜻</th></tr>
+<tr><td><a href="https://onlinelibrary.wiley.com/doi/abs/10.1111/0022-1082.00349">Gervais 외 2001 (미국)</a></td><td>거래가 유난히 터진 종목은 그 뒤 한 달 오른다. 눈에 띄어 새 매수자가 생기기 때문</td><td>"관심이 대기 매수를 만든다"는 근거</td></tr>
+<tr><td><a href="https://www.sciencedirect.com/science/article/abs/pii/S0927538X1930160X">한국 저거래량 프리미엄 논문</a></td><td><b>한국은 반대</b> — 거래가 터진 종목이 덜 오른다. 개인 비중이 높고 거래량이 평소로 되돌아가기 때문 (초록만 확인)</td><td>우리 측정(승률 36%)과 같은 방향. "신고 직후엔 사지 마라"</td></tr>
+<tr><td><a href="https://www.cambridge.org/core/journals/journal-of-financial-and-quantitative-analysis/article/abs/paying-attention-overnight-returns-and-the-hidden-cost-of-buying-at-the-open/F9AAD159B512C651F09D5D52011D88E0">Berkman 외 2012</a></td><td>개인 관심을 끈 종목은 다음 날 시가가 높게 찍히고 낮에 되돌린다</td><td>다음 날 시가→종가 −0.83% 의 설명. "시가에 쫓아 사지 마라"</td></tr>
+<tr><td><a href="https://www.bauer.uh.edu/wu/Papers/JEF2007_Attention.pdf">Seasholes·Wu 2007 (상하이)</a></td><td>상한가 다음 날 개인이 몰려 사고, 전날 사 둔 쪽이 다음 날 팔아 이익. 가격은 1주일 안에 되돌림</td><td>상한가는 "다음 날 시가에 팔고 끝"</td></tr>
+<tr><td><a href="https://onlinelibrary.wiley.com/doi/abs/10.1111/j.1540-6261.1997.tb04827.x">Kim·Rhee 1997</a></td><td>가격제한은 그날 못 채운 수요를 다음 날로 넘긴다</td><td>고가 마감 = 수요가 덜 채워진 채 끝남</td></tr>
+<tr><td>실전 글(상따·눌림목)</td><td>상한가 다음 날 시가가 약하면 전량 매도, 눌림은 "재상승 확인 뒤" 진입 등 경험칙. <b>믿을 만한 통계는 없음</b></td><td>규칙의 모양만 참고, 숫자는 안 씀</td></tr>
+</table>
+
+<h2 class="pb">3. 새 가설 카드 3장</h2>
+
+<div class="card"><h3>H-020 다음 날 아침 — 털린 뒤 시가 재탈환 <span class="tag new">새 카드</span> <span class="tag go">해볼 만함</span></h3><dl>
+<dt>왜 되나</dt><dd>신고대금 다음 날은 개인 매수가 시가에 몰려 시가가 비싸게 찍힌다. 시가에 쫓아 산 사람들이 초반 하락에 손절하며 던진다(이들이 잃는다). 그 투매가 끝나고 가격이 시가를 다시 올라서면, 팔 사람은 이미 팔았고 전날 못 산 대기 매수가 남는다 <span class="guess">[추론]</span>.</dd>
+<dt>사는 규칙 (1분봉)</dt><dd>다음 날 09:00~10:00 사이 <b>시가 대비 −3% 이하로 한 번 밀린 뒤</b>, 1분 종가가 <b>시가 위로 다시 올라서는 첫 봉</b>(10:15 전) → 다음 봉에 매수. 하루 1번. 상한가 마감 종목은 제외.</dd>
+<dt>파는 규칙</dt><dd>손절 −2%, 10:30 에 정리(사용자 매매 시간).</dd>
+<dt>함께 재는 비교군</dt><dd>밀림 없이 시가 위에 머문 종목 / 신고대금이 아닌 일반 급등주에 같은 규칙.</dd>
+<dt>버리는 조건</dt><dd>평균이 +1.06% 미만 · 비교군보다 낫지 않음 · 재탈환 뒤 10분 안에 다시 시가 아래로 가는 경우가 60% 이상.</dd>
+<dt>데이터</dt><dd>1분봉이 있는 <b>2025년 7월 이후 사건만</b> 잴 수 있다(순서를 봐야 해서 일봉으로는 불가).</dd>
+</dl></div>
+
+<div class="card"><h3>H-021 고가 마감 신고대금 → 다음 날 전일 고가 돌파 <span class="tag new">새 카드</span> <span class="tag hold">보류</span></h3><dl>
+<dt>왜 되나</dt><dd>신고대금 전체는 사면 안 되지만, <b>어느 종류가 이어지는지</b>가 질문이다. 고가 근처에서 끝난 종목은 사려던 수요가 다 못 산 채 끝난 것이고, 윗꼬리로 끝난 종목은 그날 이미 큰손이 개인에게 넘긴 것이다 <span class="guess">[추론]</span>. 앞쪽이 다음 날 전일 고가를 넘으면 그 돌파를 탄다.</dd>
+<dt>사는 규칙</dt><dd>신고일에 +5% 이상, <b>종가가 그날 범위의 위쪽 20% 안</b>(고가 마감), 상한가 제외. 다음 날 시가 갭이 −2%~+5% 이고, 09:00~10:30 에 1분 종가가 <b>전일 고가를 넘는 첫 봉</b>(거래대금이 전날 같은 시각의 절반 이상) → 다음 봉 매수.</dd>
+<dt>파는 규칙</dt><dd>전일 고가 −1.5% 아래로 밀리면 손절, 10:30 정리.</dd>
+<dt>함께 재는 비교군</dt><dd><b>윗꼬리로 끝난</b> 신고대금에 같은 규칙 — 차이가 없으면 가설이 틀린 것.</dd>
+<dt>주의</dt><dd>이미 기각된 "장 초반 5분 돌파"(H-006)와 닮았다. 결과가 사실상 같으면 버린다. 일봉만으로 2020년부터 재는 근사판도 적어 둠.</dd>
+</dl></div>
+
+<div class="card"><h3>H-022 거래가 식은 첫 −8% 눌림 매수 (1~5일 보유) <span class="tag new">새 카드</span> <span class="tag go">해볼 만함</span></h3><dl>
+<dt>왜 되나</dt><dd>한국에선 거래가 터진 직후가 나쁘다 → <b>식을 때까지 기다린다</b>. 신고대금으로 종목이 눈에 띄어 "사고 싶지만 못 산" 대기 매수가 생기고, 급등 때 쫓아 산 사람이 며칠 뒤 눌림에서 손절하며 싸게 던진다(이들이 잃는다). 눌림 동안 거래가 줄었으면 큰손이 파는 게 아니라 얇은 매물뿐이다 <span class="guess">[추론]</span>.</dd>
+<dt>사는 규칙</dt><dd>신고일에 +10% 이상 양봉. 그 뒤 10거래일 안에 <b>고점 대비 −8% 에 처음 닿고</b>, 신고일 저가 위이며, <b>전날 거래대금이 신고일의 40% 이하</b>로 줄었을 때 → 매수(09:00~10:30 에 닿은 경우만).</dd>
+<dt>파는 규칙</dt><dd>손절 −3.5%, 익절 +8%(사용자 −8% 눌림 규칙의 값), 최대 5거래일.</dd>
+<dt>숫자의 뜻</dt><dd>이익 +8, 손실 −3.5 구조라 <b>이길 확률이 약 35% 만 넘으면 본전</b>이다. 비용보다 승률이 관건.</dd>
+<dt>함께 재는 비교군</dt><dd>거래가 안 식은 눌림 / 신고대금이 아닌 일반 +10% 양봉 뒤 눌림.</dd>
+<dt>데이터</dt><dd>일봉 근사판은 2020년부터 6,977건 전부 가능 — 셋 중 표본이 가장 많다.</dd>
+</dl></div>
+
+<h2>4. 기존 카드에 합친 것 3건</h2>
+<table>
+<tr><th>카드</th><th>합친 내용</th><th>판정</th></tr>
+<tr><td>H-003 상한가 → 다음 날 시가</td><td>대상을 "상한가 마감 + 신고대금"으로 좁힌 판. 평균 +3.09%(참고). 상하이 논문을 근거로 추가 — 다음 날 시가에 팔고 끝</td><td><span class="tag hold">체결이 관건</span> 상한가가 안 풀린 날은 못 산다</td></tr>
+<tr><td>H-004 시가 과잉 되돌림</td><td>변형 g: 전날이 신고대금이면 <b>09:00 시가 추격 매수 금지</b></td><td><span class="tag filter">필터</span></td></tr>
+<tr><td>H-005 종가 매수 → 다음 날 시가</td><td>신고대금 조건만으로는 +0.62% — 문턱 미달. 고가 마감 부분집합만 남은 질문</td><td><span class="tag no">비용 미달</span></td></tr>
+</table>
+
+<h2>5. 버린 것 · 한계</h2>
+<ul>
+<li><b>신고일 종가에 사서 보유</b> — 우리 측정과 한국 논문 모두 손해.</li>
+<li><b>신고 당일 장중 추격</b> — 이미 기각된 "거래 몰린 종목 초반 돌파"(H-006)와 같은 계열.</li>
+<li><b>분봉 규칙(H-020, H-021 본판)은 2025년 7월 이후 사건만</b> 잴 수 있어 표본이 전체보다 훨씬 적다(건수는 아직 안 셈).</li>
+<li>한국 저거래량 논문은 본문을 못 열어 초록 요약만 근거로 썼다.</li>
+<li>"고가 마감 = 수요 남음", "거래 식음 = 분배 아님"은 출처 없는 추론이다 — 그래서 비교군으로 직접 가리게 했다.</li>
+</ul>
+
+<h2>6. 파일 위치</h2>
+<table>
+<tr><th>무엇</th><th>경로</th></tr>
+<tr><td>새 카드</td><td><code>research/wiki/hypotheses/H-020-record-value-nextday-flush-reclaim.md</code><br><code>research/wiki/hypotheses/H-021-record-value-prior-high-break.md</code><br><code>research/wiki/hypotheses/H-022-record-value-first-pullback.md</code></td></tr>
+<tr><td>변형을 합친 카드</td><td><code>H-003-upper-limit-overnight.md</code> · <code>H-004-opening-auction-overreaction.md</code> · <code>H-005-close-to-open.md</code></td></tr>
+<tr><td>전체 목록</td><td><code>research/wiki/hypotheses/index.md</code> (22장)</td></tr>
+</table>
+
+<h2>7. 출처</h2>
+<ul class="small">
+<li><a href="https://onlinelibrary.wiley.com/doi/abs/10.1111/0022-1082.00349">Gervais·Kaniel·Mingelgrin 2001, The High-Volume Return Premium (Journal of Finance)</a></li>
+<li><a href="https://www.sciencedirect.com/science/article/abs/pii/S0927538X1930160X">Low-volume return premium in the Korean stock market</a></li>
+<li><a href="https://www.cambridge.org/core/journals/journal-of-financial-and-quantitative-analysis/article/abs/paying-attention-overnight-returns-and-the-hidden-cost-of-buying-at-the-open/F9AAD159B512C651F09D5D52011D88E0">Berkman 외 2012, Paying Attention (JFQA)</a></li>
+<li><a href="https://www.bauer.uh.edu/wu/Papers/JEF2007_Attention.pdf">Seasholes·Wu 2007, Predictable behavior, profits, and attention</a></li>
+<li><a href="https://onlinelibrary.wiley.com/doi/abs/10.1111/j.1540-6261.1997.tb04827.x">Kim·Rhee 1997, 가격제한 가격발견 지연</a></li>
+<li><a href="https://www.sciencedirect.com/science/article/abs/pii/S1544612323001526">How do investors react to overnight returns? Evidence from Korea</a></li>
+<li>실전 글(정의만 참고): <a href="https://f-daily.co.kr/%EC%A6%9D%EA%B6%8C/%EB%88%8C%EB%A6%BC%EB%AA%A9-%EB%A7%A4%EB%A7%A4-%EB%B0%A9%EB%B2%95/">눌림목 매매(f-daily)</a> · <a href="https://reloadkospi.com/guide/upper-limit">상따 기초(reloadkospi)</a> · <a href="https://namu.wiki/w/%EC%83%81%EB%94%B0">상따(나무위키)</a></li>
+<li>사내: lead 측정(2026-10-14, 신고대금 장부 6,977건, <code>backtesting/value_ledger.py</code>), 사용자 −8% 눌림 규칙(10-01), 돌파고 역추적(10-08)</li>
+</ul>
+
+</body>
+</html>
