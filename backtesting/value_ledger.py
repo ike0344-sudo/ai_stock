@@ -33,6 +33,28 @@ RREFS: dict[str, int] = {}  # events() 가 채운다 — 종목별 직전 1년 �
 COLS = ["날짜", "코드", "종목명", "거래대금_억", "직전52주최대_억", "배수", "평소20일대비", "등락률%", "종가", "누적횟수", "5일뒤%", "20일뒤%", "역대", "고점%", "고점일", "저점%", "저점일", "정규장_억", "정규장역대", "정규장추정", "정규_등락률%", "정규_종가", "정규_5일뒤%", "정규_20일뒤%", "정규_고점%", "정규_고점일", "정규_저점%", "정규_저점일", "전체신고", "정규직전최대_억", "정규누적", "정규평소20일대비", "전체저점%", "전체저점일", "정규_전체저점%", "정규_전체저점일"]
 
 
+DAILY_AL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "stocks", "daily_al")
+
+
+def daily_al_rows(code: str, base: str = DAILY_AL_DIR) -> list[list] | None:
+    """장부 화면 차트용(8765 /api/daily-al) — 통합 수정주가 일봉 [[YYYYMMDD, 시, 고, 저, 종, 거래량], ...]. 읽기만.
+    코드가 6자리(숫자·대문자)가 아니면 ValueError(경로 조작 방지), 파일이 없으면 None."""
+    if not (isinstance(code, str) and len(code) == 6 and code.isascii() and code.isalnum() and code == code.upper()):
+        raise ValueError("code 는 6자리")
+    p = os.path.join(base, f"{code}.csv")
+    if not os.path.isfile(p):
+        return None
+    import csv
+    out = []
+    with open(p, encoding="utf-8-sig", newline="") as fh:
+        for r in csv.DictReader(fh):
+            try:
+                out.append([r["date"], float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"]), float(r["volume"])])
+            except (KeyError, ValueError):
+                continue
+    return out
+
+
 def events() -> pd.DataFrame:
     names = json.load(open("data/stock_names.json", encoding="utf-8"))
     rows = []

@@ -33,6 +33,17 @@
   .tier { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: .72rem; font-weight: 700; white-space: nowrap; margin-left: 6px; vertical-align: 1px; }
   .tier-역대 { background: var(--up); color: #fff; }   /* 거래대금 폭발(burst.html)과 같은 표식 */
   .more-row td { text-align: center; color: var(--text-faint); padding: 16px; }
+  /* 줄 차트 — 신고가 후보(newhigh.html)의 마우스 오버 일봉과 같은 모양. 휴대폰은 줄을 탭하면 열리고 다시 탭·바깥 탭이면 닫힌다. id 를 hover-chart 로 쓰면 market.css 의 (hover: none) 숨김 규칙에 걸려 폰에서 안 보인다 */
+  #row-chart { position: fixed; z-index: 50; width: 640px; max-width: calc(100vw - 16px); background: var(--card-bg); border: 1px solid var(--card-border);
+    border-radius: 12px; box-shadow: 0 8px 28px rgba(20,20,30,.18); padding: 10px 12px 8px; pointer-events: none; }
+  #row-chart .hc-title { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 2px 10px; font-size: .86rem; margin-bottom: 4px; }
+  #row-chart .hc-title b { font-size: .95rem; }
+  #row-chart .hc-sub { color: var(--text-dim); font-size: .76rem; }
+  #row-chart svg { display: block; width: 100%; height: auto; }
+  #row-chart .hc-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: .72rem; color: var(--text-dim); margin-top: 2px; }
+  #row-chart .hc-legend i { display: inline-block; width: 14px; height: 0; border-top: 2px solid; vertical-align: middle; margin-right: 4px; }
+  #table-body tr[data-i] { cursor: pointer; }
+  #table-body tr.hc-on td { background: var(--accent-soft); }
   @media (max-width: 900px) { .month-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
   @media (max-width: 560px) { .year-row { grid-template-columns: 1fr; } .year-label { padding-top: 0; } .month-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 </style>
@@ -231,7 +242,8 @@
 
       const maxX = Math.max(3, ...list.map((r) => r.x));
       const shown = list.slice(0, 1500);
-      document.getElementById("table-body").innerHTML = shown.map((r) => `<tr>
+      SHOWN = shown; hideHc();
+      document.getElementById("table-body").innerHTML = shown.map((r, i) => `<tr data-i="${i}">
         <td class="col-name">${all ? r.d : r.d.slice(5)}</td>
         <td class="col-name"><span class="name-main">${esc(r.name)}${r.ath ? '<span class="tier tier-역대">역대</span>' : ""}</span><span class="name-code">${r.code}${r.live ? ' · <span class="first-tag" title="오늘 장중 누적 대금 — 밤 갱신 때 확정">장중</span>' : ""}${r.carry ? ` · <span class="first-tag" title="이 날은 기준 미만이지만 ${r.carry} 에 기준 이상 신고가 있었던 종목">${r.carry.slice(2).replace(/-/g, ".")} 이어짐</span>` : ""}</span></td>
         <td>${fmt(r.v)}${r.full ? ` <span class="name-code">${r.rest ? `<span class="first-tag">${r.rest === 2 ? "장후 포함" : "추정"}</span> ` : ""}전체 ${fmt(r.full)}</span>` : ""}</td>
@@ -391,6 +403,118 @@
       } catch (e) {
         errBox.textContent = "장부 데이터를 못 읽었습니다 (" + e.message + ") — python -m backtesting.value_ledger 로 만듭니다.";
         errBox.classList.remove("hidden");
+      }
+    }
+
+    // ---- 줄 차트 (lead 10-15, 사용자 "신고대금 장부도 차트 나오게 해줘")
+    // 모양은 newhigh.html 의 마우스 오버 일봉(candleSvg)과 같다. 그 줄의 신고일 앞 120거래일 ~ 뒤 40거래일(또는 오늘까지).
+    // 얹는 것: 신고일 봉 표시 · 그날 고가 점선.
+    // 일봉은 종목마다 그때그때 /api/daily-al?code= 로 받는다(통합 수정주가, 7년치를 한꺼번에 싣지 않는다).
+    let SHOWN = [];
+    const OHLC = new Map();                       // code → Promise<rows|null>
+    function loadOhlc(code) {
+      if (!OHLC.has(code)) OHLC.set(code, fetch(`/api/daily-al?code=${encodeURIComponent(code)}`).then((r) => r.ok ? r.json() : null)
+        .then((j) => (j && j.rows) || null).catch(() => { OHLC.delete(code); return null; }));
+      return OHLC.get(code);
+    }
+    const hc = document.createElement("div"); hc.id = "row-chart"; hc.hidden = true; document.body.appendChild(hc);
+    let hcRow = null;
+    function ma(arr, n) { const out = []; let s = 0; arr.forEach((v, i) => { s += v; if (i >= n) s -= arr[i - n]; out.push(i >= n - 1 ? s / n : null); }); return out; }
+    function candleSvg(rows, mark) {
+      const W = 616, H = 300, PH = 228, VH = 52, padR = 52, n = rows.length, cw = (W - padR) / n;
+      const hi = Math.max(...rows.map((r) => r[2])), lo = Math.min(...rows.map((r) => r[3]));
+      const pad = (hi - lo) * 0.04, top = hi + pad, bot = lo - pad;
+      const y = (v) => ((top - v) / (top - bot)) * PH;
+      const vmax = Math.max(...rows.map((r) => r[5])) || 1;
+      const closes = rows.map((r) => r[4]);
+      const line = (vals, color) => `<polyline fill="none" stroke="${color}" stroke-width="1.2" points="${vals.map((v, i) => v === null ? "" : `${(i + 0.5) * cw},${y(v).toFixed(1)}`).filter(Boolean).join(" ")}"/>`;
+      let g = "";
+      if (mark.sig >= 0) g += `<rect x="${(mark.sig * cw).toFixed(1)}" y="0" width="${cw.toFixed(1)}" height="${H}" fill="var(--accent)" opacity=".12"/>`;
+      for (let k = 0; k <= 4; k++) {
+        const v = bot + (top - bot) * k / 4, yy = y(v).toFixed(1);
+        g += `<line x1="0" x2="${W - padR}" y1="${yy}" y2="${yy}" stroke="var(--card-border)" stroke-width="1"/>`;
+        g += `<text x="${W - padR + 4}" y="${yy}" dy="3" font-size="10" fill="var(--text-faint)">${Math.round(v).toLocaleString("ko-KR")}</text>`;
+      }
+      rows.forEach((r, i) => {
+        const [_, o, h, l, c, v] = r, x = i * cw, cx = x + cw / 2, up = c >= o;
+        const col = up ? "var(--up)" : "var(--down)";
+        const bt = y(Math.max(o, c)), bh = Math.max(1, Math.abs(y(o) - y(c)));
+        g += `<line x1="${cx.toFixed(1)}" x2="${cx.toFixed(1)}" y1="${y(h).toFixed(1)}" y2="${y(l).toFixed(1)}" stroke="${col}" stroke-width="1"/>`;
+        g += `<rect x="${(x + cw * 0.15).toFixed(1)}" y="${bt.toFixed(1)}" width="${Math.max(1, cw * 0.7).toFixed(1)}" height="${bh.toFixed(1)}" fill="${col}"/>`;
+        const vh = (v / vmax) * (VH - 4);
+        g += `<rect x="${(x + cw * 0.15).toFixed(1)}" y="${(H - vh).toFixed(1)}" width="${Math.max(1, cw * 0.7).toFixed(1)}" height="${vh.toFixed(1)}" fill="${col}" opacity=".35"/>`;
+      });
+      g += line(ma(closes, 20), "#e0a500") + line(ma(closes, 60), "#7c5cff");
+      if (mark.sig >= 0) {                                   // 신고일 고가 점선
+        const yy = y(rows[mark.sig][2]).toFixed(1);
+        g += `<line x1="${(mark.sig * cw).toFixed(1)}" x2="${W - padR}" y1="${yy}" y2="${yy}" stroke="var(--up)" stroke-dasharray="4 3" stroke-width="1.2"/>`;
+        g += `<text x="${W - padR + 4}" y="${yy}" dy="3" font-size="10" font-weight="700" fill="var(--up)">${Math.round(rows[mark.sig][2]).toLocaleString("ko-KR")}</text>`;
+      }
+      const d = (s) => `${String(s).slice(2, 4)}.${String(s).slice(4, 6)}`;
+      [0, Math.floor(n / 4), Math.floor(n / 2), Math.floor(3 * n / 4), n - 1].forEach((i) => {
+        g += `<text x="${((i + 0.5) * cw).toFixed(1)}" y="${PH + 13}" font-size="10" text-anchor="middle" fill="var(--text-faint)">${d(rows[i][0])}</text>`;
+      });
+      return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="신고일 앞뒤 일봉">${g}</svg>`;
+    }
+    function placeHc(ev) {
+      const svg = hc.querySelector("svg");                   // 창이 화면보다 크면 차트를 줄여 아래 거래량까지 보이게
+      if (svg) { svg.style.maxHeight = ""; const over = hc.offsetHeight - (window.innerHeight - 16); if (over > 0) svg.style.maxHeight = Math.max(120, svg.getBoundingClientRect().height - over) + "px"; }
+      const pad = 16, w = hc.offsetWidth, h = hc.offsetHeight;
+      let x = ev.clientX + pad, yy = ev.clientY + pad;
+      if (x + w > window.innerWidth - 8) x = ev.clientX - w - pad;
+      if (yy + h > window.innerHeight - 8) yy = Math.max(8, window.innerHeight - h - 8);
+      hc.style.left = Math.max(8, Math.min(x, window.innerWidth - w - 8)) + "px"; hc.style.top = yy + "px";
+    }
+    function hideHc() {
+      hc.hidden = true; hc.dataset.key = "";
+      if (hcRow) hcRow.classList.remove("hc-on");
+      hcRow = null;
+    }
+    async function showHc(tr, ev) {
+      const r = SHOWN[Number(tr.dataset.i)];
+      if (!r) return;
+      if (hcRow) hcRow.classList.remove("hc-on");
+      hcRow = tr; tr.classList.add("hc-on");
+      const key = `${r.code}|${r.d}`;
+      hc.dataset.key = key; hc.hidden = false;
+      hc.innerHTML = `<div class="hc-title"><b>${esc(r.name)}</b><span class="hc-sub">불러오는 중…</span></div>`;
+      placeHc(ev);
+      const all = await loadOhlc(r.code);
+      if (hc.dataset.key !== key) return;                    // 그 사이 다른 줄로 옮겨 갔다
+      if (!all || all.length < 5) { hc.innerHTML = `<div class="hc-title"><b>${esc(r.name)}</b><span class="hc-sub">일봉 없음</span></div>`; placeHc(ev); return; }
+      const day = r.d.replace(/-/g, "");
+      let s = all.findIndex((x) => x[0] >= day);
+      const exact = s >= 0 && all[s][0] === day;
+      if (s < 0) s = all.length;                              // 장중 줄 — 오늘 봉이 아직 없다
+      const from = Math.max(0, s - 120), to = Math.min(all.length, s + 41);
+      const rows = all.slice(from, to);
+      const sig = exact ? s - from : -1;
+      const last = rows[rows.length - 1];
+      const ymd = (s8) => `${s8.slice(0, 4)}.${s8.slice(4, 6)}.${s8.slice(6)}`;
+      hc.innerHTML = `<div class="hc-title"><span><b>${esc(r.name)}</b> <span class="hc-sub">${r.code} · 신고일 ${r.d}${exact ? "" : "(일봉에 아직 없음)"} · ${rows.length}거래일</span></span>`
+        + `<span class="hc-sub">${ymd(String(last[0]))} 종가 ${Math.round(last[4]).toLocaleString("ko-KR")}`
+        + `</span></div>`
+        + candleSvg(rows, { sig })
+        + `<div class="hc-legend"><span><i style="border-color:#e0a500"></i>20일선</span><span><i style="border-color:#7c5cff"></i>60일선</span>`
+        + `<span><i style="border-color:var(--up);border-top-style:dashed"></i>신고일 고가</span>`
+        + `<span>옅은 띠 = 신고일 · 아래 막대 = 거래량 · 통합 수정주가</span></div>`;
+      placeHc(ev);
+    }
+    {
+      const body = document.getElementById("table-body");
+      const HOVER = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+      if (HOVER) {
+        body.addEventListener("mouseover", (ev) => { const tr = ev.target.closest("tr[data-i]"); if (tr && tr !== hcRow) showHc(tr, ev); });
+        body.addEventListener("mousemove", (ev) => { if (!hc.hidden) placeHc(ev); });
+        body.addEventListener("mouseleave", hideHc);
+      } else {                                                // 휴대폰: 탭하면 열고, 같은 줄 다시 탭·바깥 탭이면 닫는다
+        body.addEventListener("click", (ev) => {
+          const tr = ev.target.closest("tr[data-i]");
+          if (!tr) return;
+          ev.stopPropagation();
+          if (tr === hcRow) hideHc(); else showHc(tr, ev);
+        });
+        document.addEventListener("click", () => { if (hcRow) hideHc(); });
       }
     }
 

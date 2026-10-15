@@ -990,3 +990,15 @@ def test_run_dashboard_server_extra_host_failure_keeps_primary_serving(monkeypat
     monkeypatch.setattr(ds.ThreadingHTTPServer, "serve_forever", lambda self, *a: time.sleep(0.3))  # 추가 스레드가 돌 시간
     ds.run_dashboard_server(port=0, host="127.0.0.1,203.0.113.9")
     assert built and "바인딩 실패" in capsys.readouterr().out
+
+
+def test_get_api_daily_al_serves_one_code_read_only(running_server):
+    """신고대금 장부 줄 차트(10-15): 종목 하나의 통합 일봉. 코드 6자리 검증, 없는 종목은 404."""
+    response, body = running_server.get("/api/daily-al?code=222800")
+    assert response.status == 200
+    rows = json.loads(body)["rows"]
+    assert len(rows) > 1000 and len(rows[0]) == 6 and rows[0][0] < rows[-1][0]      # [YYYYMMDD, 시, 고, 저, 종, 거래량] 오름차순
+    assert all(r[3] <= r[1] <= r[2] and r[3] <= r[4] <= r[2] for r in rows[-50:])
+    for bad in ("..%2F..%2F.env", "22280", "abc123", ""):
+        assert running_server.get(f"/api/daily-al?code={bad}")[0].status == 400
+    assert running_server.get("/api/daily-al?code=ZZZZZZ")[0].status == 404

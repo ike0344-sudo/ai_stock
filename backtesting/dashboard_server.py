@@ -409,6 +409,18 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._send_static("ledger.html")
         elif parsed.path == "/newhigh_ledger.json":
             self._send_static("newhigh_ledger.json")
+        elif parsed.path == "/api/daily-al":            # 신고대금 장부 줄 차트(10-15) — 종목 하나의 통합 일봉, 읽기 전용
+            from .value_ledger import daily_al_rows
+            code = (query.get("code") or [""])[0]
+            try:
+                rows = daily_al_rows(code)
+            except ValueError:
+                self._send_json({"error": "code 는 6자리"}, status=400)
+                return
+            if rows is None:
+                self._send_json({"error": "일봉 없음"}, status=404)
+            else:
+                self._send_json({"code": code, "rows": rows})
         elif parsed.path in ("/burst.html", "/value_burst.json", "/value_burst_ohlc.json", "/market-mobile.js",
                              "/value_ledger.html", "/value_ledger.json"):
             self._send_static(parsed.path[1:])
