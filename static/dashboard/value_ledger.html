@@ -163,6 +163,8 @@
     function lsSet(key, v) { try { localStorage.setItem(key, v); } catch (e) {} }
 
     let ALL = [], ROWS = [], BY_MONTH = new Map(), FIRST = "", LAST = "";
+    // 매매 데스크(8790)로 보내기 — 종목 + 기준일(신고일)이 한 번에 들어간다(10-19 사용자). 같은 주소(로컬·Tailscale)의 8790 포트
+    const deskHref = (rows) => `${location.protocol}//${location.hostname}:8790/?add=${rows.map((r) => r.code + ":" + r.d.replace(/-/g, "")).join(",")}`;
     const state = {
       month: lsGet(LS.month, ""), scope: lsGet(LS.scope, "month"), min: Number(lsGet(LS.min, "0")), chg: Number(lsGet(LS.chg, "-999")), first: lsGet(LS.first, "0"), ath: lsGet(LS.ath, "0"), reg: lsGet(LS.reg, "0"),
       sortKey: lsGet(LS.sortKey, "d"), sortDir: Number(lsGet(LS.sortDir, "1")), q: "",
@@ -238,6 +240,12 @@
         stat("20일뒤 중앙값", pct(med("d20")) || "-", cls(med("d20"))) +
         stat("고점 중앙값", pct(med("pk")) || "-", cls(med("pk"))) +
         stat("MDD 중앙값", pct(med("dd")) || "-", cls(med("dd"))) : "";
+      {   // 가장 최근 신고일에 +7% 이상 오른 종목을 데스크로 한 번에(같은 종목은 한 번만)
+        const last = ROWS.reduce((m, r) => r.d > m ? r.d : m, ""), seen = new Set();
+        const hot = ROWS.filter((r) => r.d === last && r.chg >= 7 && !seen.has(r.code) && seen.add(r.code));
+        if (hot.length) document.getElementById("sel-stats").insertAdjacentHTML("beforeend",
+          `<a href="${deskHref(hot)}" style="color:var(--accent,#4c8dff)" target="_blank" rel="noopener" title="${esc(hot.map((r) => r.name).join(", "))}">${last.slice(5).replace("-", ".")} +7% 이상 ${hot.length}종목 데스크로 ↗</a>`);
+      }
       document.getElementById("row-count").textContent = fmt(list.length);
 
       const maxX = Math.max(3, ...list.map((r) => r.x));

@@ -48,6 +48,30 @@ def ladder_orders(base: float, levels: list, amount: int) -> list[dict]:
     return out
 
 
+def keep_until(keep: dict, now: datetime, is_trading) -> str | None:
+    """예약 매수를 언제까지 다시 걸지(마지막 날 ISO). None = 취소할 때까지.
+
+    keep: {"mode": "today"} | {"mode": "days", "days": N} | {"mode": "until", "until": "YYYY-MM-DD"} | {"mode": "forever"}.
+    '첫날'은 오늘이 거래일이고 15:20 전이면 오늘, 아니면 다음 거래일 — 장 끝나고 걸어도 '오늘만'이 내일 하루가 된다."""
+    from datetime import timedelta
+    mode = (keep or {}).get("mode", "today")
+    if mode == "forever":
+        return None
+    if mode == "until":
+        return str(keep.get("until") or "")[:10] or None
+    d = now.date()
+    if not (is_trading(d) and now.hour * 60 + now.minute < 15 * 60 + 20):
+        d += timedelta(days=1)
+        while not is_trading(d):
+            d += timedelta(days=1)
+    n = max(1, int(_num(keep.get("days"), 1) or 1)) if mode == "days" else 1
+    for _ in range(n - 1):
+        d += timedelta(days=1)
+        while not is_trading(d):
+            d += timedelta(days=1)
+    return d.isoformat()
+
+
 def _hm(text: str) -> int:
     h, m = str(text).split(":")[:2]
     return int(h) * 60 + int(m)

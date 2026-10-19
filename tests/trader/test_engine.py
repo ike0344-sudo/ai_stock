@@ -101,6 +101,17 @@ def test_compute_matches_rule():
     assert f["big"]["break52"] == round((12_100 / 10_100 - 1) * 100, 2) and f["market"] == "코스닥"
 
 
+def test_keep_until():
+    from datetime import date as _d
+    trading = lambda d: d.weekday() < 5 and d != _d(2026, 10, 21)               # 수요일 하루 쉰다고 치고
+    mon_am, mon_pm = datetime(2026, 10, 19, 10, 0), datetime(2026, 10, 19, 16, 0)
+    assert e.keep_until({"mode": "today"}, mon_am, trading) == "2026-10-19"
+    assert e.keep_until({"mode": "today"}, mon_pm, trading) == "2026-10-20"       # 장 끝나고 걸면 다음 거래일 하루
+    assert e.keep_until({"mode": "days", "days": "3"}, mon_am, trading) == "2026-10-22"   # 월·화·(수 휴장)·목
+    assert e.keep_until({"mode": "until", "until": "2026-10-30"}, mon_am, trading) == "2026-10-30"
+    assert e.keep_until({"mode": "forever"}, mon_am, trading) is None
+
+
 def test_feed_parsers():
     q = feed.parse_quote({"10": "-9700", "12": "-3.00", "14": "5000", "17": "+10600"})
     assert q["px"] == 9700 and q["chg"] == -3.0 and q["value"] == 5_000_000_000 and q["high"] == 10600

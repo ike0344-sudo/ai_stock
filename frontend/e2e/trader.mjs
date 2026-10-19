@@ -21,7 +21,9 @@ for (const [name, vp] of [['pc', { width: 1600, height: 1000 }], ['phone', { wid
   page.on('pageerror', (e) => errors.push(`${name} ${e}`))
   page.on('console', (m) => { if (m.type() === 'error' && !/favicon|503|Service Unavailable/.test(m.text() + (m.location()?.url ?? ''))) errors.push(`${name} ${m.text()}`) })
   await page.setViewport(vp)
-  await page.goto(BASE, { waitUntil: 'networkidle0', timeout: 60000 })
+  await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 60000 })   // 실시간 연결(SSE)이 늘 열려 있어 networkidle 은 안 온다
+  await page.waitForSelector('#wlist', { timeout: 30000 })
+  await sleep(1500)
   await page.type('#add', '005930')
   await page.keyboard.press('Enter')
   await page.waitForFunction(() => document.querySelector('#wlist [data-pick="005930"]'), { timeout: 15000 })
@@ -31,15 +33,20 @@ for (const [name, vp] of [['pc', { width: 1600, height: 1000 }], ['phone', { wid
     order: document.getElementById('oName').textContent, book: document.getElementById('book').textContent.trim().length > 0,
     tabs: document.querySelectorAll('#tabs [data-t]').length, ladder: document.querySelectorAll('#ladRows .lad').length,
   }))
-  if (!c.watch || !c.charts || !c.order.includes('삼성') || !c.book || c.tabs !== 4 || !c.ladder) fail(`${name} 매매 화면 ${JSON.stringify(c)}`)
+  if (!c.watch || !c.charts || !c.order.includes('삼성') || !c.book || c.tabs !== 6 || !c.ladder) fail(`${name} 매매 화면 ${JSON.stringify(c)}`)
   await page.screenshot({ path: path.join(OUT, `${name}.png`), fullPage: true })
   await page.click('#toRules')
   await page.waitForSelector('#rulesView .cond, #rulesView #cAdd', { timeout: 10000 })
+  const times = await page.$$eval('#rulesView input[type=time]', (x) => x.length)
+  if (times < 4) fail(` 시간 구간 ${times}`)
+  const nBuy = await page.$$eval('#rulesView [data-rsel]', (x) => x.length)
+  await page.click('#rulesView [data-xsel]')                 // 청산 규칙은 따로(10-19) — 눌러야 분할 익절 칸이 나온다
+  await sleep(300)
   const r = await page.evaluate(() => ({
     rules: document.querySelectorAll('#rulesView .rl').length, times: document.querySelectorAll('#rulesView input[type=time]').length,
     takes: document.querySelectorAll('#rulesView [data-tkp]').length, safety: document.querySelectorAll('#rulesView [data-sf]').length,
   }))
-  if (r.rules < 2 || r.times < 4 || r.takes < 2 || r.safety !== 4) fail(`${name} 규칙 화면 ${JSON.stringify(r)}`)
+  if (nBuy < 1 || r.rules < 2 || r.takes < 2 || r.safety !== 6) fail(`${name} 규칙 화면 ${JSON.stringify(r)}`)
   await page.screenshot({ path: path.join(OUT, `${name}_rules.png`), fullPage: true })
   const w = await page.evaluate(() => document.documentElement.scrollWidth)
   if (w > vp.width) fail(`${name} 가로 넘침 ${w}`)

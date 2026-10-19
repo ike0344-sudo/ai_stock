@@ -5,7 +5,7 @@
 프로토콜(LOGIN → REG → PING 되돌려 보내기, refresh="0" 교체)은 backtesting/board_ticks.py 와 같다.
 
 FID 번호는 키움 REST 실시간 문서 기준이고 **10-19 현재 이 앱으로는 실측 전**이다. 첫 장에서 raw 를 보고 확정할 것.
-  0B: 10 현재가 · 12 등락률 · 14 누적거래대금(백만원) · 17 고가 · 20 체결시간 · 228 체결강도
+  0B: 10 현재가 · 12 등락률 · 13 누적거래량 · 14 누적거래대금(백만원) · 17 고가 · 20 체결시간 · 228 체결강도
   0D: 41~50 매도호가1~10 · 51~60 매수호가1~10 · 61~70 매도잔량 · 71~80 매수잔량 · 121 매도총잔량 · 125 매수총잔량
   00: 9203 주문번호 · 9001 종목코드 · 905 주문구분(+매수/−매도) · 913 주문상태 · 900 주문수량 · 901 주문가격 · 902 미체결 · 910 체결가 · 911 체결량
 """
@@ -52,7 +52,7 @@ def parse_quote(values: dict) -> dict | None:
         return None
     return {"px": px, "chg": _float(values.get("12")), "high": abs(_int(values.get("17"))),
             "value": abs(_int(values.get("14"))) * 1_000_000,
-            "strength": abs(_float(values.get("228"))), "t": time.time()}
+            "strength": abs(_float(values.get("228"))), "cum": abs(_int(values.get("13"))), "t": time.time()}
 
 
 def parse_book(values: dict) -> dict | None:
