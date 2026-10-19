@@ -1,0 +1,663 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>매매 데스크</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root { --bg:#0a0d12; --card:#10141b; --line:#1e2530; --line2:#27303c; --chip:#1a212b; --text:#e8ebf0; --dim:#8d96a5;
+  --up:#ff5c63; --dn:#4d8dff; --acc:#6d9bff; --acc-soft:#16213a; --acc-line:#3a4a6b; --gold:#e2b65a; --ok:#3ccf7e; --tag:#dfe4ec;
+  --mono:'JetBrains Mono',ui-monospace,monospace; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 'IBM Plex Sans KR', system-ui, sans-serif; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+a { color: var(--acc); }
+.mono { font-family: var(--mono); }
+.dim { color: var(--dim); }
+.up { color: var(--up); } .dn { color: var(--dn); }
+.wrap { padding: 12px; display: flex; flex-direction: column; gap: 10px; min-height: 100vh; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+.row { display: flex; gap: 10px; align-items: center; }
+.btn { min-height: 36px; padding: 0 12px; background: var(--chip); border: 1px solid var(--line2); border-radius: 7px; }
+.btn:hover { border-color: var(--acc-line); }
+.btn.ghost { background: transparent; color: var(--acc); border: 1px dashed #2a3a5c; }
+.btn.red { background: var(--up); color: var(--bg); border: 0; font-weight: 700; }
+.btn.blue { background: var(--dn); color: var(--bg); border: 0; font-weight: 700; }
+.btn.warn { background: transparent; color: var(--up); border-color: #6b2a2e; font-weight: 700; }
+.btn.x { width: 32px; min-height: 32px; padding: 0; background: transparent; color: var(--dim); }
+.in { height: 36px; background: var(--bg); border: 1px solid var(--line2); border-radius: 7px; padding: 0 10px; min-width: 0; }
+.in.num { font-family: var(--mono); text-align: right; }
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3px; background: var(--bg); border: 1px solid var(--line2); border-radius: 8px; padding: 3px; }
+.seg button { min-height: 38px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--dim); font-weight: 600; }
+.seg button[aria-pressed="true"].b { background: var(--up); color: var(--bg); }
+.seg button[aria-pressed="true"].s { background: var(--dn); color: var(--bg); }
+.seg button[aria-pressed="true"].g { background: #2a2210; border-color: #5a4a22; color: var(--gold); }
+.lbl { color: var(--dim); font-size: 12px; }
+header.card { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22px; padding: 10px 16px; }
+.kpi { display: flex; flex-direction: column; gap: 2px; } .kpi b { font: 600 14px var(--mono); }
+.live { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); }
+.live i { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); } .live.on i { background: var(--ok); }
+.banner { border-radius: 10px; padding: 10px 14px; background: #2a1416; border: 1px solid #6b2a2e; color: #ffb3b6; }
+.banner.info { background: #2a2210; border-color: #5a4a22; color: var(--gold); }
+.main { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; }
+#left { flex: 1 1 220px; max-width: 250px; display: flex; flex-direction: column; gap: 8px; }
+#center { flex: 999 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+#bookcol { flex: 0 1 270px; min-width: 250px; }
+#order { flex: 1 1 290px; max-width: 330px; display: flex; flex-direction: column; gap: 12px; }
+.w { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; border: 1px solid transparent; }
+.w.on { background: var(--acc-soft); border-color: var(--acc-line); }
+.w > button.pick { flex: 1; min-width: 0; display: grid; grid-template-columns: 1fr auto; gap: 1px 8px; background: none; border: 0; padding: 0; text-align: left; }
+.w .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.w .sub { grid-column: 1 / -1; font: 11px var(--mono); color: var(--dim); }
+.st { font-size: 11px; } .st.보유 { color: var(--ok); } .st.주문중 { color: var(--gold); } .st.대기 { color: var(--dim); }
+#charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.ch { display: flex; flex-direction: column; gap: 6px; min-width: 0; cursor: default; }
+.ch.on { border-color: var(--acc-line); }
+.ch .hd { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.ch .tfs button { font-size: 11px; padding: 2px 8px; border-radius: 5px; border: 0; background: transparent; color: var(--dim); }
+.ch .tfs button[aria-pressed="true"] { background: var(--chip); color: var(--text); }
+.ch svg { width: 100%; height: 250px; display: block; }
+.empty { display: grid; place-items: center; height: 250px; color: var(--dim); }
+table { width: 100%; border-collapse: collapse; }
+th { font-weight: 500; color: var(--dim); font-size: 12px; padding: 6px 8px; text-align: right; }
+td { padding: 7px 8px; text-align: right; border-top: 1px solid var(--line); font-family: var(--mono); }
+th:first-child, td:first-child { text-align: left; } td:first-child { font-family: inherit; font-weight: 600; }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+.tabs button { min-height: 34px; padding: 0 14px; border-radius: 7px; border: 1px solid var(--line2); background: transparent; color: var(--dim); }
+.tabs button[aria-pressed="true"] { background: var(--acc-soft); border-color: var(--acc-line); color: var(--text); }
+.scroll { overflow-x: auto; }
+.bk { display: grid; grid-template-columns: 1fr 72px 54px 1fr; gap: 6px; align-items: center; height: 19px; font: 12px var(--mono); }
+.bk .bar { position: relative; height: 15px; } .bk .bar i { position: absolute; top: 0; bottom: 0; border-radius: 2px; opacity: .18; }
+.bk .bar span { position: relative; color: var(--dim); padding: 0 4px; }
+.bk button { height: 18px; padding: 0; border: 0; border-radius: 3px; background: transparent; font: 12px var(--mono); }
+.bk button.cur { background: var(--tag); color: var(--bg); }
+.bk button.sel { outline: 1px solid var(--acc); }
+fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 0; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+legend { color: var(--dim); font-size: 12px; padding: 0 4px; }
+.grid2 { display: grid; grid-template-columns: 76px 1fr; gap: 8px 10px; align-items: center; }
+.lad { display: grid; grid-template-columns: 62px minmax(0,1fr) minmax(0,1fr) 30px; gap: 6px; align-items: center; }
+.msgs { font-size: 12px; display: flex; flex-direction: column; gap: 3px; max-height: 220px; overflow: auto; }
+.msgs .error { color: #ffb3b6; } .msgs .warn { color: var(--gold); }
+dialog { background: var(--card); color: var(--text); border: 1px solid var(--line2); border-radius: 12px; padding: 18px; max-width: 380px; }
+dialog::backdrop { background: rgba(0,0,0,.55); }
+/* 규칙 화면 */
+#rulesView { display: none; } body.rules #deskView { display: none; } body.rules #rulesView { display: flex; }
+.rl { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 8px; border: 1px solid transparent; }
+.rl.on { background: var(--acc-soft); border-color: var(--acc-line); }
+.sw { position: relative; width: 40px; height: 24px; flex: none; border-radius: 12px; border: 0; padding: 0; background: var(--line2); }
+.sw[aria-pressed="true"] { background: var(--ok); }
+.sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--text); transition: left .15s; }
+.sw[aria-pressed="true"]::after { left: 19px; }
+.cond { display: grid; grid-template-columns: 28px minmax(0,2.2fr) minmax(0,1.2fr) minmax(0,1fr) 40px; gap: 8px; align-items: center; }
+.ex { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); }
+.ex.on { border-color: #2a3a5c; background: #10182a; }
+.prob { color: var(--gold); font-size: 12px; }
+@media (max-width: 760px) { #left, #order, #bookcol { max-width: none; flex-basis: 100%; } #charts { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="card">
+    <div class="row"><strong style="font-size:16px">매매 데스크</strong><span id="live" class="live"><i></i><span>연결 확인 중</span></span></div>
+    <div class="row" style="flex:1 1 auto;flex-wrap:wrap;gap:22px">
+      <div class="kpi"><span class="lbl">예수금</span><b id="kDep">—</b></div>
+      <div class="kpi"><span class="lbl">평가금액</span><b id="kEq">—</b></div>
+      <div class="kpi"><span class="lbl">평가손익</span><b id="kEval">—</b></div>
+      <div class="kpi"><span class="lbl">오늘 실현손익</span><b id="kReal">—</b></div>
+      <div class="kpi"><span class="lbl">일일 손실 한도</span><b id="kLim">—</b></div>
+    </div>
+    <button class="btn" id="toRules" type="button">매수·청산 규칙</button>
+    <button class="btn warn" id="liq" type="button">전체 청산</button>
+  </header>
+  <div id="banner"></div>
+
+  <div id="deskView" class="main">
+    <section id="left" class="card" aria-label="내가 고른 종목">
+      <div class="row" style="justify-content:space-between"><strong style="font-size:14px">내가 고른 종목</strong><span class="dim" id="wCount"></span></div>
+      <div class="row" style="gap:6px">
+        <label for="add" class="dim" style="position:absolute;width:1px;height:1px;overflow:hidden">종목 추가</label>
+        <input id="add" class="in" list="addList" placeholder="종목명·코드" style="flex:1" autocomplete="off">
+        <datalist id="addList"></datalist>
+        <button class="btn" id="addBtn" type="button">추가</button>
+      </div>
+      <div id="wlist" style="display:flex;flex-direction:column;gap:2px"></div>
+      <div style="border-top:1px solid var(--line);padding-top:10px;display:flex;flex-direction:column;gap:6px">
+        <span class="lbl">체크한 <b id="ckN">0</b>종목</span>
+        <button class="btn blue" id="sellChecked" type="button" style="min-height:44px">일괄 매도</button>
+        <span class="dim" style="font-size:11px">체크한 종목의 보유 수량을 전부 매도</span>
+      </div>
+    </section>
+
+    <div id="center">
+      <section id="charts" aria-label="차트"></section>
+      <section class="card" aria-label="잔고와 주문">
+        <div class="tabs" id="tabs">
+          <button type="button" data-t="pos" aria-pressed="true">보유 <span id="nPos"></span></button>
+          <button type="button" data-t="open" aria-pressed="false">미체결 <span id="nOpen"></span></button>
+          <button type="button" data-t="fill" aria-pressed="false">오늘 체결</button>
+          <button type="button" data-t="log" aria-pressed="false">알림</button>
+        </div>
+        <div class="scroll" id="tabBody"></div>
+      </section>
+    </div>
+
+    <section id="bookcol" class="card" aria-label="호가">
+      <div class="row" style="gap:8px;margin-bottom:6px"><strong style="font-size:14px">호가</strong><span class="dim" id="bkName"></span><span class="dim" style="margin-left:auto;font-size:11px">가격 누르면 주문가로</span></div>
+      <div class="bk dim" style="font-size:11px"><span style="text-align:right">매도 잔량</span><span style="text-align:center">10호가</span><span style="text-align:right">등락률</span><span>매수 잔량</span></div>
+      <div id="book"></div>
+    </section>
+
+    <section id="order" class="card" aria-label="주문">
+      <div class="row" style="gap:8px;align-items:baseline"><strong style="font-size:16px" id="oName">종목을 고르세요</strong><span class="mono" id="oPx" style="font-size:15px"></span><span id="oChg" class="mono"></span></div>
+      <div class="seg"><button type="button" class="b" id="sBuy" aria-pressed="true">매수</button><button type="button" class="s" id="sSell" aria-pressed="false">매도</button></div>
+      <div class="grid2">
+        <label for="oType" class="lbl">주문 방식</label>
+        <select id="oType" class="in"><option value="limit">지정가</option><option value="market">시장가</option></select>
+        <label for="oPrice" class="lbl">가격</label><input id="oPrice" class="in num" inputmode="numeric">
+        <label for="oQty" class="lbl">수량</label><input id="oQty" class="in num" inputmode="numeric" value="0">
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px" id="pcts">
+        <button type="button" class="btn" data-p="10">10%</button><button type="button" class="btn" data-p="25">25%</button>
+        <button type="button" class="btn" data-p="50">50%</button><button type="button" class="btn" data-p="100">최대</button>
+      </div>
+      <div class="row" style="justify-content:space-between"><span class="lbl">예상 주문금액</span><b class="mono" id="oAmt">—</b></div>
+      <button type="button" class="btn red" id="oSubmit" style="min-height:48px;font-size:15px">매수</button>
+
+      <fieldset style="border-color:#3a2a2e">
+        <legend style="color:var(--up);font-weight:600">기준가 대비 매수 (지정가로 미리 걸기)</legend>
+        <div class="seg"><button type="button" class="g" id="bReg" aria-pressed="false"><span style="font-size:11px">정규장 종가</span><br><span class="mono" id="vReg">—</span></button>
+          <button type="button" class="g" id="bAft" aria-pressed="true"><span style="font-size:11px">애프터 종가</span><br><span class="mono" id="vAft">—</span></button></div>
+        <div class="lad dim" style="font-size:11px"><span>기준 대비</span><span style="text-align:right">주문 가격</span><span style="text-align:right">금액(원)</span><span></span></div>
+        <div id="ladRows" style="display:flex;flex-direction:column;gap:6px"></div>
+        <div class="row" style="gap:6px"><button type="button" class="btn ghost" id="ladAdd">+ 단계</button><button type="button" class="btn red" id="ladGo" style="flex:1">걸기</button></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>자동 청산 (이 화면에서 산 종목에 체결 즉시)</legend>
+        <div class="row" style="justify-content:space-between"><label for="manRule" class="lbl">적용 규칙</label>
+          <select id="manRule" class="in" style="flex:1;max-width:190px"></select></div>
+        <div id="exitSum" class="dim" style="font-size:12px;line-height:1.6"></div>
+        <a href="#" id="toRules2" style="font-size:12px">규칙 설정에서 바꾸기 →</a>
+      </fieldset>
+    </section>
+  </div>
+
+  <div id="rulesView" class="main"></div>
+</div>
+
+<dialog id="dlg"><p id="dlgText" style="margin:0 0 16px;white-space:pre-line"></p>
+  <div class="row" style="justify-content:flex-end"><button class="btn" id="dlgNo" type="button">취소</button><button class="btn red" id="dlgYes" type="button">확인</button></div></dialog>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => n == null || isNaN(n) ? "—" : Math.round(n).toLocaleString("ko-KR");
+const fp = (n) => n ? fmt(n) : "—";
+const pct = (n) => n == null || isNaN(n) ? "" : (n > 0 ? "+" : n < 0 ? "−" : "") + Math.abs(n).toFixed(2) + "%";
+const cls = (n) => n > 0 ? "up" : n < 0 ? "dn" : "dim";
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const TICKS = [[2000, 1], [5000, 5], [20000, 10], [50000, 50], [200000, 100], [500000, 500]];
+const tick = (p) => (TICKS.find(([b]) => p < b) || [0, 1000])[1];
+const floorTick = (p) => Math.floor(p / tick(p) + 1e-9) * tick(p);
+const ceilTick = (p) => Math.ceil(p / tick(p) - 1e-9) * tick(p);
+const store = { get(k, d) { try { return JSON.parse(localStorage.getItem("td_" + k)) ?? d; } catch { return d; } },
+                set(k, v) { try { localStorage.setItem("td_" + k, JSON.stringify(v)); } catch {} } };
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || r.statusText);
+  return j;
+}
+function ask(text) {
+  return new Promise((res) => { $("dlgText").textContent = text; const d = $("dlg"); d.showModal();
+    $("dlgYes").onclick = () => { d.close(); res(true); }; $("dlgNo").onclick = () => { d.close(); res(false); }; });
+}
+
+let S = null, RULES = null, active = store.get("active", null), side = "buy", base = store.get("base", "aft"), userPx = null, tab = "pos";
+const checked = new Set(store.get("checked", []));
+let ladder = store.get("ladder", [{ pct: "-3", amt: "" }, { pct: "-5", amt: "" }]);
+const tfOf = store.get("tf", {});
+const chartData = {}, inflight = new Set();
+
+// ── 상태 ────────────────────────────────────────────
+async function poll() {
+  try { S = await api("/api/state" + (active ? "?code=" + active : "")); render(); }
+  catch (e) { $("banner").innerHTML = `<div class="banner">서버 연결 실패 — ${esc(e.message)}</div>`; }
+}
+function render() {
+  const a = S.account;
+  $("kDep").textContent = fmt(a.deposit?.deposit_krw);
+  $("kEq").textContent = fmt(a.equity);
+  $("kEval").textContent = fmt(a.pnl_eval); $("kEval").className = cls(a.pnl_eval);
+  $("kReal").textContent = fmt(a.pnl_realized); $("kReal").className = cls(a.pnl_realized);
+  $("kLim").textContent = a.loss_limit ? `${fmt(a.day_pnl)} / −${fmt(a.loss_limit)}` : "한도 없음";
+  const live = $("live"); live.classList.toggle("on", S.feed.connected);
+  live.lastElementChild.textContent = S.feed.connected ? `실시간 연결 · ${S.feed.codes}종목` : (S.feed.err || "실시간 꺼짐(장 시간 08:00~20:00)");
+  const ban = [];
+  if (S.ready) ban.push(`<div class="banner info">${esc(S.ready)}</div>`);
+  if (S.facts?.err) ban.push(`<div class="banner info">일봉 조건(시장·테마·52주·장대양봉) 계산 불가 — ${esc(S.facts.err)}</div>`);
+  if (a.halted && !S.ready) ban.push(`<div class="banner">새 매수 멈춤 — ${esc(a.halted)} ${a.halted.includes("전체 청산") ? '<button class="btn" type="button" id="resume">다시 켜기</button>' : ""}</div>`);
+  $("banner").innerHTML = ban.join("");
+  if ($("resume")) $("resume").onclick = async () => { await api("/api/resume", { method: "POST" }); poll(); };
+  if (!active && S.watch.length) setActive(S.watch[0].code);
+  renderWatch(); renderCharts(); renderTabs(); renderBook(); renderOrder();
+}
+
+// ── 종목 목록 ─────────────────────────────────────────
+function renderWatch() {
+  $("wCount").textContent = S.watch.length + "종목";
+  $("wlist").innerHTML = S.watch.map((w) => `<div class="w ${w.code === active ? "on" : ""}">
+    <input type="checkbox" aria-label="${esc(w.name)} 일괄 매도에 포함" data-ck="${w.code}" ${checked.has(w.code) ? "checked" : ""} style="width:16px;height:16px;accent-color:var(--acc);margin:0">
+    <button class="pick" type="button" data-pick="${w.code}"><span class="nm">${esc(w.name)}</span><span class="mono">${fp(w.px)}</span>
+      <span class="st ${w.status}">${w.status}</span><span class="mono ${cls(w.chg)}" style="font-size:12px;text-align:right">${pct(w.chg)}</span>
+      <span class="sub">종가 ${fp(w.reg)} · 애프터 <span style="color:var(--gold)">${fp(w.aft)}</span></span></button>
+    <button class="btn x" type="button" aria-label="${esc(w.name)} 빼기" data-del="${w.code}">✕</button></div>`).join("")
+    || `<div class="dim" style="padding:10px 4px">위 칸에 종목을 넣어 주세요</div>`;
+  $("ckN").textContent = [...checked].filter((c) => S.watch.some((w) => w.code === c)).length;
+}
+$("wlist").addEventListener("click", async (e) => {
+  const p = e.target.closest("[data-pick]"), d = e.target.closest("[data-del]");
+  if (p) setActive(p.dataset.pick);
+  if (d) { await api("/api/watch/" + d.dataset.del, { method: "DELETE" }); if (active === d.dataset.del) active = null; poll(); }
+});
+$("wlist").addEventListener("change", (e) => {
+  const c = e.target.dataset.ck; if (!c) return;
+  e.target.checked ? checked.add(c) : checked.delete(c); store.set("checked", [...checked]); renderWatch();
+});
+let searchT;
+$("add").addEventListener("input", () => {
+  clearTimeout(searchT);
+  searchT = setTimeout(async () => {
+    const q = $("add").value.trim(); if (!q) return;
+    const rows = await api("/api/search?q=" + encodeURIComponent(q)).catch(() => []);
+    $("addList").innerHTML = rows.map((r) => `<option value="${r.code}">${esc(r.name)}</option>`).join("");
+  }, 200);
+});
+async function addCode() {
+  let q = $("add").value.trim(); if (!q) return;
+  if (!/^[0-9A-Z]{6}$/i.test(q)) { const rows = await api("/api/search?q=" + encodeURIComponent(q)); if (!rows.length) return; q = rows[0].code; }
+  await api("/api/watch", { method: "POST", body: { code: q } }).catch((e) => alertMsg(e.message));
+  $("add").value = ""; setActive(q.toUpperCase()); poll();
+}
+$("addBtn").onclick = addCode;
+$("add").addEventListener("keydown", (e) => { if (e.key === "Enter") addCode(); });
+$("sellChecked").onclick = async () => {
+  const codes = [...checked].filter((c) => S.holdings.some((h) => h.code === c));
+  if (!codes.length) return alertMsg("체크한 종목 중 보유한 것이 없습니다");
+  const names = codes.map((c) => S.holdings.find((h) => h.code === c).name).join(", ");
+  if (!(await ask(`${names}\n보유 수량 전부를 매도합니다.`))) return;
+  const r = await api("/api/sell_all", { method: "POST", body: { codes } }); alertMsg(`일괄 매도 ${r.n}종목 ${r.ok ? "접수" : "일부 실패 — 알림 탭 확인"}`); poll();
+};
+$("liq").onclick = async () => {
+  if (!S.holdings.length) return alertMsg("보유 종목이 없습니다");
+  if (!(await ask(`보유 ${S.holdings.length}종목을 전부 매도하고, 오늘 새 매수를 멈춥니다.`))) return;
+  await api("/api/liquidate", { method: "POST" }); poll();
+};
+function alertMsg(t) { S && S.msgs.unshift({ t: new Date().toTimeString().slice(0, 8), text: t, level: "warn" }); tab = "log"; renderTabs(); }
+
+function setActive(code) {
+  if (active !== code) userPx = null;
+  active = code; store.set("active", code); poll();
+}
+
+// ── 차트 ────────────────────────────────────────────
+function chartCodes() {
+  const list = S.watch.map((w) => w.code);
+  const rest = list.filter((c) => c !== active);
+  return (active && list.includes(active) ? [active, ...rest] : list).slice(0, 4);
+}
+async function loadChart(code, force) {
+  const tf = tfOf[code] || "5", k = code + tf, hit = chartData[k];
+  if (!force && hit && Date.now() - hit.at < (tf === "D" ? 300000 : 15000)) return;
+  if (inflight.has(k)) return;
+  inflight.add(k);
+  chartData[k] = hit ? { ...hit, at: Date.now() } : undefined;
+  try { chartData[k] = { at: Date.now(), bars: await api(`/api/chart?code=${code}&tf=${tf}`) }; }
+  catch (e) { chartData[k] = { at: Date.now(), bars: [], err: e.message }; }
+  inflight.delete(k);
+  renderCharts();
+}
+function renderCharts() {
+  const codes = chartCodes();
+  $("charts").innerHTML = codes.map((c) => {
+    const w = S.watch.find((x) => x.code === c) || { name: c }, tf = tfOf[c] || "5", h = S.holdings.find((x) => x.code === c);
+    return `<div class="card ch ${c === active ? "on" : ""}" data-chart="${c}">
+      <div class="hd"><button type="button" data-pick="${c}" style="background:none;border:0;padding:0;font-weight:700;font-size:14px">${esc(w.name)}</button>
+        <span class="mono" style="font-size:14px">${fp(w.px)}</span><span class="mono ${cls(w.chg)}" style="font-size:12px">${pct(w.chg)}</span>
+        <span class="dim" style="margin-left:auto;font-size:11px">${h ? "보유 " + fmt(h.quantity) + "주" : ""}</span></div>
+      <div class="hd" style="font-size:12px;gap:14px"><span class="dim">정규장 종가 <b class="mono" style="color:var(--text)">${fp(w.reg)}</b></span>
+        <span class="dim">애프터 종가 <b class="mono" style="color:var(--gold)">${fp(w.aft)}</b> <span class="mono ${cls(w.aft - w.reg)}" style="font-size:11px">${w.reg && w.aft ? "(" + pct((w.aft / w.reg - 1) * 100) + ")" : ""}</span></span></div>
+      <div class="tfs" role="group" aria-label="봉 단위">${[["1", "1분"], ["5", "5분"], ["D", "일"]].map(([v, t]) => `<button type="button" data-tf="${v}" aria-pressed="${tf === v}">${t}</button>`).join("")}</div>
+      ${svgChart(c)}</div>`;
+  }).join("") || `<div class="card empty" style="grid-column:1/-1">종목을 넣으면 차트가 여기 나옵니다</div>`;
+  codes.forEach((c) => loadChart(c));
+}
+$("charts").addEventListener("click", (e) => {
+  const t = e.target.closest("[data-tf]"), p = e.target.closest("[data-pick]");
+  if (t) { const c = t.closest("[data-chart]").dataset.chart; tfOf[c] = t.dataset.tf; store.set("tf", tfOf); loadChart(c, true); renderCharts(); }
+  else if (p) setActive(p.dataset.pick);
+});
+function svgChart(code) {
+  const tf = tfOf[code] || "5", d = chartData[code + tf];
+  if (!d) return `<div class="empty">차트 불러오는 중</div>`;
+  if (!d.bars.length) return `<div class="empty">${esc(d.err || "봉이 없습니다")}</div>`;
+  const bars = d.bars.slice(-90).map((b) => ({ ...b })), w = S.watch.find((x) => x.code === code);
+  const last = bars[bars.length - 1];
+  if (w && w.px && tf !== "D") { last.c = w.px; last.h = Math.max(last.h, w.px); last.l = Math.min(last.l, w.px); }
+  const h = S.holdings.find((x) => x.code === code);
+  const lines = [];                                   // [가격, 색, 점선?, 글]
+  if (h) {
+    lines.push([h.avg_price, "#dfe4ec", true, "평단 " + fmt(h.avg_price)]);
+    if (h.stop) lines.push([h.stop, "var(--dn)", false, (h.breakeven ? "본전 손절 " : "손절 ") + fmt(h.stop)]);
+    h.takes.forEach((p, i) => lines.push([p, "var(--up)", false, `${i + 1}차 익절 ${fmt(p)}`]));
+  }
+  S.pending.filter((p) => p.code === code).forEach((p) => lines.push([p.price, p.side === "buy" ? "var(--up)" : "var(--dn)", true, `${p.side === "buy" ? "매수" : "매도"} 대기 ${fmt(p.price)}`]));
+  if (code === active && side === "buy") ladderPlan().forEach((o) => o.price && lines.push([o.price, "var(--up)", true, `계획 ${o.pct}% ${fmt(o.price)}`]));
+  const W = 600, H = 250, VH = 40, PH = H - VH - 6, n = bars.length, bw = W / Math.max(n, 30);
+  let hi = Math.max(...bars.map((b) => b.h), ...lines.map((l) => l[0])), lo = Math.min(...bars.map((b) => b.l), ...lines.map((l) => l[0]).filter(Boolean));
+  const pad = (hi - lo) * 0.06 || hi * 0.01; hi += pad; lo -= pad;
+  const y = (v) => ((hi - v) / (hi - lo)) * PH, vmax = Math.max(...bars.map((b) => b.v)) || 1;
+  let s = "";
+  bars.forEach((b, i) => {
+    const x = i * bw + bw / 2, col = b.c >= b.o ? "var(--up)" : "var(--dn)", top = y(Math.max(b.o, b.c)), bh = Math.max(1, y(Math.min(b.o, b.c)) - top);
+    s += `<line x1="${x}" x2="${x}" y1="${y(b.h)}" y2="${y(b.l)}" stroke="${col}" stroke-width="1"/>`;
+    s += `<rect x="${x - bw * 0.32}" width="${bw * 0.64}" y="${top}" height="${bh}" fill="${col}" rx="1"/>`;
+    s += `<rect x="${x - bw * 0.32}" width="${bw * 0.64}" y="${H - (b.v / vmax) * VH}" height="${(b.v / vmax) * VH}" fill="${col}" opacity=".35"/>`;
+  });
+  lines.forEach(([p, col, dash, txt]) => { if (p < lo || p > hi) return;
+    s += `<line x1="0" x2="${W}" y1="${y(p)}" y2="${y(p)}" stroke="${col}" stroke-width="1" ${dash ? 'stroke-dasharray="4 3"' : ""} opacity=".8"/>`;
+    s += `<text x="4" y="${y(p) - 3}" fill="${col}" font-size="10" font-weight="600">${esc(txt)}</text>`; });
+  // 오늘 체결 표시 — 체결 시각과 가장 가까운 봉
+  const stamp = (b) => tf === "D" ? b.t.slice(0, 8) : b.t.slice(0, 12);
+  S.fills.filter((f) => f.code === code).forEach((f) => {
+    const dt = new Date(f.t * 1000), key = tf === "D" ? dt.toISOString().slice(0, 10).replaceAll("-", "")
+      : `${dt.getFullYear()}${String(dt.getMonth() + 1).padStart(2, "0")}${String(dt.getDate()).padStart(2, "0")}${String(dt.getHours()).padStart(2, "0")}${String(dt.getMinutes()).padStart(2, "0")}`;
+    let i = bars.findIndex((b) => stamp(b) >= key); if (i < 0) i = n - 1;
+    const x = i * bw + bw / 2, b = f.side === "buy", col = b ? "var(--up)" : "var(--dn)", yy = y(f.fill_px);
+    s += `<circle cx="${x}" cy="${yy}" r="4" fill="${col}" stroke="var(--card)" stroke-width="2"/>`;
+    s += `<text x="${x}" y="${b ? yy + 15 : yy - 8}" text-anchor="middle" fill="${col}" font-size="10" font-weight="700">${b ? "매수" : "매도"} ${fmt(f.fill_px)}</text>`;
+  });
+  const ly = y(last.c);
+  s += `<line x1="0" x2="${W}" y1="${ly}" y2="${ly}" stroke="#dfe4ec" stroke-dasharray="2 3" opacity=".5"/>`;
+  s += `<rect x="${W - 62}" y="${ly - 8}" width="62" height="16" rx="3" fill="#dfe4ec"/><text x="${W - 31}" y="${ly + 4}" text-anchor="middle" font-size="11" fill="#0a0d12" font-family="JetBrains Mono">${fmt(last.c)}</text>`;
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(w?.name || code)} 차트">${s}</svg>`;
+}
+
+// ── 잔고·미체결·체결·알림 ───────────────────────────────
+$("tabs").addEventListener("click", (e) => { const b = e.target.closest("[data-t]"); if (b) { tab = b.dataset.t; renderTabs(); } });
+function renderTabs() {
+  document.querySelectorAll("#tabs [data-t]").forEach((b) => b.setAttribute("aria-pressed", b.dataset.t === tab));
+  $("nPos").textContent = S.holdings.length; $("nOpen").textContent = S.pending.length;
+  const ruleOpts = (sel) => `<option value="">자동 청산 안 함</option>` + S.rules.map((r) => `<option value="${r.id}" ${r.id === sel ? "selected" : ""}>${esc(r.name)}</option>`).join("");
+  let html = "";
+  if (tab === "pos") html = S.holdings.length ? `<table style="min-width:820px"><thead><tr><th>종목</th><th>수량</th><th>평균가</th><th>현재가</th><th>손익</th><th>수익률</th><th>손절가</th><th>익절가</th><th>청산 규칙</th><th></th></tr></thead><tbody>${
+    S.holdings.map((h) => `<tr><td>${esc(h.name)}</td><td>${fmt(h.quantity)}</td><td>${fmt(h.avg_price)}</td><td>${fmt(h.px)}</td>
+      <td class="${cls(h.pl_amount)}">${fmt(h.pl_amount)}</td><td class="${cls(h.pl_pct)}">${pct(h.pl_pct)}</td>
+      <td class="dn">${fmt(h.stop)}</td><td class="up">${h.takes.map(fmt).join(" / ") || "—"}</td>
+      <td><select class="in" data-prule="${h.code}" style="height:32px;font-family:inherit">${ruleOpts(h.rule)}</select></td>
+      <td><button class="btn" type="button" data-exit="${h.code}" style="min-height:32px">청산</button></td></tr>`).join("")}</tbody></table>` : `<div class="dim" style="padding:12px">보유 종목이 없습니다</div>`;
+  if (tab === "open") html = S.pending.length ? `<table style="min-width:640px"><thead><tr><th>종목</th><th>구분</th><th>주문가</th><th>주문</th><th>미체결</th><th>메모</th><th></th></tr></thead><tbody>${
+    S.pending.map((p) => `<tr><td>${esc(p.name)}</td><td class="${p.side === "buy" ? "up" : "dn"}">${p.side === "buy" ? "매수" : "매도"}</td><td>${fmt(p.price)}</td>
+      <td>${fmt(p.qty)}</td><td>${fmt(p.left)}</td><td style="font-family:inherit" class="dim">${esc(p.mine || (p.ord_no ? "다른 곳에서 낸 주문" : ""))}</td>
+      <td><button class="btn" type="button" data-cancel="${p.ord_no}" data-code="${p.code}" style="min-height:32px">취소</button></td></tr>`).join("")}</tbody></table>` : `<div class="dim" style="padding:12px">미체결 주문이 없습니다</div>`;
+  if (tab === "fill") html = S.fills.length ? `<table><thead><tr><th>종목</th><th>구분</th><th>체결가</th><th>수량</th><th>시각</th></tr></thead><tbody>${
+    S.fills.slice().reverse().map((f) => `<tr><td>${esc(S.watch.find((w) => w.code === f.code)?.name || f.code)}</td><td class="${f.side === "buy" ? "up" : "dn"}">${f.side === "buy" ? "매수" : "매도"}</td>
+      <td>${fmt(f.fill_px)}</td><td>${fmt(f.fill_qty)}</td><td>${new Date(f.t * 1000).toTimeString().slice(0, 8)}</td></tr>`).join("")}</tbody></table>`
+    : `<div class="dim" style="padding:12px">오늘(이 프로그램이 켜진 뒤) 체결이 없습니다</div>`;
+  if (tab === "log") html = `<div class="msgs">${S.msgs.map((m) => `<div class="${m.level}"><span class="mono dim">${m.t}</span> ${esc(m.text)}</div>`).join("") || '<span class="dim">알림 없음</span>'}</div>`;
+  $("tabBody").innerHTML = html;
+}
+$("tabBody").addEventListener("click", async (e) => {
+  const x = e.target.closest("[data-exit]"), c = e.target.closest("[data-cancel]");
+  if (x) { const h = S.holdings.find((v) => v.code === x.dataset.exit);
+    if (await ask(`${h.name} ${fmt(h.quantity)}주 전부 매도합니다.`)) { await api("/api/sell_all", { method: "POST", body: { codes: [h.code] } }); poll(); } }
+  if (c) { if (await ask(`주문 ${c.dataset.cancel} 을 취소합니다.`)) { await api("/api/cancel", { method: "POST", body: { ord_no: c.dataset.cancel, code: c.dataset.code } }); poll(); } }
+});
+$("tabBody").addEventListener("change", async (e) => {
+  const c = e.target.dataset.prule; if (!c) return;
+  await api("/api/position_rule", { method: "POST", body: { code: c, rule: e.target.value || null } }); poll();
+});
+
+// ── 호가 ────────────────────────────────────────────
+function renderBook() {
+  const b = S.book, a = S.active;
+  $("bkName").textContent = a ? a.name : "";
+  if (!b) { $("book").innerHTML = `<div class="dim" style="padding:20px 4px">${S.feed.connected ? "호가 기다리는 중" : "실시간이 켜지면 호가가 나옵니다"}</div>`; return; }
+  const reg = a?.reg, op = orderPrice(), mx = Math.max(...b.asks.map((x) => x[1]), ...b.bids.map((x) => x[1]), 1);
+  const row = (p, q, isAsk) => {
+    const r = reg && p ? (p / reg - 1) * 100 : null, w = (q / mx) * 100;
+    return `<div class="bk"><div class="bar">${isAsk ? `<i style="right:0;width:${w}%;background:var(--dn)"></i><span style="float:right">${fmt(q)}</span>` : ""}</div>
+      <button type="button" data-px="${p}" class="${p === a?.px ? "cur" : ""} ${p === op ? "sel" : ""}" style="${p === a?.px ? "" : `color:var(--${isAsk ? "dn" : "up"})`}">${fmt(p)}</button>
+      <span style="text-align:right;font-size:11px" class="${cls(r)}">${pct(r)}</span>
+      <div class="bar">${isAsk ? "" : `<i style="left:0;width:${w}%;background:var(--up)"></i><span>${fmt(q)}</span>`}</div></div>`;
+  };
+  $("book").innerHTML = b.asks.slice().reverse().map(([p, q]) => row(p, q, true)).join("") + b.bids.map(([p, q]) => row(p, q, false)).join("")
+    + `<div class="bk" style="border-top:1px solid var(--line);padding-top:4px;height:auto"><span style="text-align:right;color:var(--dn)">${fmt(b.ask_total)}</span><span class="dim" style="text-align:center;font:11px 'IBM Plex Sans KR'">총잔량</span><span></span><span style="color:var(--up)">${fmt(b.bid_total)}</span></div>`;
+}
+$("book").addEventListener("click", (e) => { const b = e.target.closest("[data-px]"); if (b) { userPx = +b.dataset.px; $("oType").value = "limit"; renderOrder(); renderBook(); } });
+
+// ── 주문 ────────────────────────────────────────────
+const orderPrice = () => userPx || S?.active?.px || 0;
+function renderOrder() {
+  const a = S.active;
+  $("oName").textContent = a ? a.name : "종목을 고르세요";
+  $("oPx").textContent = a ? fp(a.px) : ""; $("oChg").textContent = a ? pct(a.chg) : ""; $("oChg").className = "mono " + cls(a?.chg);
+  if (document.activeElement !== $("oPrice")) $("oPrice").value = orderPrice() ? fmt(orderPrice()) : "";
+  $("oPrice").disabled = $("oType").value === "market";
+  $("sBuy").setAttribute("aria-pressed", side === "buy"); $("sSell").setAttribute("aria-pressed", side === "sell");
+  const q = +($("oQty").value.replace(/[^0-9]/g, "")) || 0;
+  $("oAmt").textContent = fmt(q * orderPrice()) + "원";
+  const sub = $("oSubmit"); sub.className = "btn " + (side === "buy" ? "red" : "blue");
+  sub.textContent = a ? `${a.name} ${fmt(q)}주 ${side === "buy" ? "매수" : "매도"}` : (side === "buy" ? "매수" : "매도");
+  $("vReg").textContent = fp(a?.reg); $("vAft").textContent = fp(a?.aft);
+  $("bReg").setAttribute("aria-pressed", base === "reg"); $("bAft").setAttribute("aria-pressed", base === "aft");
+  const plan = ladderPlan();
+  const ladRows = $("ladRows");
+  if (!ladRows.contains(document.activeElement)) ladRows.innerHTML = ladder.map((l, i) => `<div class="lad">
+      <div class="row" style="gap:2px"><input class="in num" data-lp="${i}" value="${esc(l.pct)}" aria-label="기준 대비 %" style="width:100%;color:var(--up);height:34px"><span class="dim">%</span></div>
+      <span class="mono" style="text-align:right;display:flex;flex-direction:column"><span data-lpx="${i}">${fp(plan[i]?.price)}</span><span class="dim" style="font-size:10px" data-lq="${i}">${plan[i]?.qty ? fmt(plan[i].qty) + "주" : "—"}</span></span>
+      <input class="in num" data-la="${i}" value="${esc(l.amt)}" placeholder="금액" aria-label="이 단계 금액" style="height:34px">
+      <button class="btn x" type="button" data-ld="${i}" aria-label="단계 삭제">✕</button></div>`).join("");
+  else plan.forEach((p, i) => { const e1 = ladRows.querySelector(`[data-lpx="${i}"]`), e2 = ladRows.querySelector(`[data-lq="${i}"]`);
+    if (e1) e1.textContent = fp(p.price); if (e2) e2.textContent = p.qty ? fmt(p.qty) + "주" : "—"; });
+  $("ladGo").textContent = a ? `${a.name} ${plan.filter((p) => p.qty).length}단계 걸기` : "걸기";
+  const mr = $("manRule");
+  if (document.activeElement !== mr) mr.innerHTML = `<option value="">자동 청산 안 함</option>` + S.rules.map((r) => `<option value="${r.id}" ${r.id === S.manual_rule ? "selected" : ""}>${esc(r.name)}</option>`).join("");
+  $("exitSum").innerHTML = exitSummary(S.manual_rule);
+}
+function ladderPlan() {
+  const a = S?.active, bp = a ? (base === "reg" ? a.reg : a.aft) : 0;
+  return ladder.map((l) => { const p = parseFloat(l.pct), amt = +String(l.amt).replace(/[^0-9]/g, "");
+    const price = bp && !isNaN(p) ? floorTick(bp * (1 + p / 100)) : 0; return { pct: l.pct, price, qty: price && amt ? Math.floor(amt / price) : 0, amt }; });
+}
+function exitSummary(rid) {
+  const r = RULES?.rules.find((x) => x.id === rid);
+  if (!r) return "이 화면에서 산 종목에 자동 청산을 걸지 않습니다.";
+  const e = r.exits, out = [];
+  if (e.stop[0]) out.push(`손절 −${esc(e.stop[1])}%`);
+  if (e.take[0]) out.push("분할 익절 " + e.take[1].map((t) => `+${esc(t[0])}%에 ${esc(t[1])}%`).join(", "));
+  if (e.breakeven?.[0]) out.push("1차 익절 뒤 본전 손절");
+  if (e.trail[0]) out.push(`고점 대비 −${esc(e.trail[1])}%`);
+  if (e.days[0]) out.push(`최대 ${esc(e.days[1])}일`);
+  if (e.close[0]) out.push(`${esc(e.close[1])} 청산`);
+  return out.join(" · ") || "청산 규칙이 비어 있습니다";
+}
+$("sBuy").onclick = () => { side = "buy"; renderOrder(); renderCharts(); };
+$("sSell").onclick = () => { side = "sell"; renderOrder(); renderCharts(); };
+$("oType").onchange = renderOrder;
+$("oQty").oninput = renderOrder;
+$("oPrice").oninput = () => { userPx = +$("oPrice").value.replace(/[^0-9]/g, "") || null; renderOrder(); };
+$("oPrice").onblur = renderOrder;
+$("pcts").onclick = (e) => {
+  const b = e.target.closest("[data-p]"); if (!b || !S.active) return;
+  const p = +b.dataset.p / 100, h = S.holdings.find((x) => x.code === active);
+  const q = side === "sell" ? Math.floor((h?.quantity || 0) * p) : Math.floor(((S.account.deposit?.order_available_krw || 0) * p) / (orderPrice() || 1));
+  $("oQty").value = q; renderOrder();
+};
+$("oSubmit").onclick = async () => {
+  const a = S.active; if (!a) return;
+  const qty = +$("oQty").value.replace(/[^0-9]/g, ""), market = $("oType").value === "market", price = orderPrice();
+  if (!qty) return alertMsg("수량을 넣어 주세요");
+  if (!market && price !== floorTick(price)) return alertMsg(`호가 단위(${tick(price)}원)에 맞지 않습니다`);
+  const text = `${a.name} ${fmt(qty)}주 ${market ? "시장가" : fmt(price) + "원"} ${side === "buy" ? "매수" : "매도"}\n예상 금액 ${fmt(qty * price)}원${side === "buy" ? "\n자동 청산: " + exitSummary(S.manual_rule).replace(/<[^>]+>/g, "") : ""}`;
+  if ((RULES?.safety.confirm_real ?? true) && !(await ask(text))) return;
+  const r = await api("/api/order", { method: "POST", body: { code: a.code, side, qty, price: market ? 0 : price, market } }).catch((e) => ({ ok: false, msg: e.message }));
+  alertMsg(r.ok ? "주문 접수" : "주문 실패 — " + r.msg); poll();
+};
+$("bReg").onclick = () => { base = "reg"; store.set("base", base); renderOrder(); renderCharts(); };
+$("bAft").onclick = () => { base = "aft"; store.set("base", base); renderOrder(); renderCharts(); };
+$("ladRows").addEventListener("input", (e) => {
+  const i = e.target.dataset.lp ?? e.target.dataset.la; if (i == null) return;
+  ladder[+i][e.target.dataset.lp != null ? "pct" : "amt"] = e.target.value; store.set("ladder", ladder); renderOrder(); renderCharts();
+});
+$("ladRows").addEventListener("click", (e) => { const d = e.target.closest("[data-ld]"); if (d) { ladder.splice(+d.dataset.ld, 1); store.set("ladder", ladder); $("ladRows").innerHTML = ""; renderOrder(); } });
+$("ladAdd").onclick = () => { ladder.push({ pct: "-7", amt: "" }); store.set("ladder", ladder); $("ladRows").innerHTML = ""; renderOrder(); };
+$("ladGo").onclick = async () => {
+  const a = S.active, plan = ladderPlan().filter((p) => p.qty); if (!a || !plan.length) return alertMsg("기준가와 단계 금액을 확인해 주세요");
+  const text = `${a.name} ${base === "reg" ? "정규장" : "애프터"} 종가 ${fmt(base === "reg" ? a.reg : a.aft)} 기준\n` + plan.map((p) => `${p.pct}% ${fmt(p.price)}원 × ${fmt(p.qty)}주`).join("\n") + "\n지정가 매수를 겁니다.";
+  if (!(await ask(text))) return;
+  for (const p of plan) await api("/api/order", { method: "POST", body: { code: a.code, side: "buy", qty: p.qty, price: p.price, market: false } }).catch((e) => alertMsg(e.message));
+  poll();
+};
+$("manRule").onchange = async () => { await saveRules({ ...RULES, manual_rule: $("manRule").value || null }); };
+$("toRules").onclick = $("toRules2").onclick = (e) => { e.preventDefault(); document.body.classList.toggle("rules"); $("toRules").textContent = document.body.classList.contains("rules") ? "← 매매 화면" : "매수·청산 규칙"; renderRules(); };
+
+// ── 규칙 화면 ──────────────────────────────────────────
+const FIELDS = ["정규장 종가 대비", "애프터 종가 대비", "최근 장대양봉 고가 대비", "장대양봉일 52주 고가 돌파폭", "같은 테마 장대양봉 종목 수", "시장", "52주 신고가 대비", "고점 대비 하락률(첫 도달)", "등락률", "거래대금", "체결강도", "시가총액"];
+const OPS = ["이상", "이하", "같음", "아님"];
+const HELP = { "정규장 종가 대비": "%", "애프터 종가 대비": "%", "최근 장대양봉 고가 대비": "% · 5거래일 안 장대양봉(고가+20%·종가+15%·대금1,500억), 아직 −8% 안 닿은 것", "장대양봉일 52주 고가 돌파폭": "% · 장대양봉 고가 ÷ 그 전 52주 고가", "같은 테마 장대양봉 종목 수": "개 · 80종목 이하 테마에서 10거래일 안 +10% 마감한 다른 종목", "시장": "코스닥 / 코스피", "52주 신고가 대비": "% · 현재가(오늘 고가) ÷ 어제까지 52주 고가", "고점 대비 하락률(첫 도달)": "% · 오늘 고가 대비", "등락률": "% · 정규장 종가 대비", "거래대금": "억원 · 오늘 누적", "체결강도": "실시간 체결강도", "시가총액": "억원" };
+let rSel = 0, draft = null, dirty = false;
+async function loadRules() { RULES = await api("/api/rules"); if (!dirty) draft = JSON.parse(JSON.stringify(RULES)); }
+async function saveRules(body) { RULES = await api("/api/rules", { method: "PUT", body }); draft = JSON.parse(JSON.stringify(RULES)); dirty = false; poll(); renderRules(); }
+function renderRules() {
+  if (!document.body.classList.contains("rules") || !draft) return;
+  const rs = draft.rules, r = rs[rSel] || rs[0]; if (!r) return;
+  const prob = RULES.problems?.[r.id] || [], sf = draft.safety;
+  const field = (v) => FIELDS.map((f) => `<option ${f === v ? "selected" : ""}>${f}</option>`).join("");
+  const exRow = (key, name, help, unit, val) => `<div class="ex ${r.exits[key][0] ? "on" : ""}"><label class="row" style="flex:1;gap:8px;min-width:0">
+      <input type="checkbox" data-ex="${key}" ${r.exits[key][0] ? "checked" : ""} style="width:16px;height:16px;accent-color:var(--acc);margin:0">
+      <span style="display:flex;flex-direction:column"><b style="font-weight:600">${name}</b><span class="dim" style="font-size:11px">${help}</span></span></label>
+      ${val ? `<input class="in num" data-exv="${key}" value="${esc(r.exits[key][1])}" aria-label="${name} 값" style="width:86px"><span class="dim" style="width:22px">${unit}</span>` : ""}</div>`;
+  $("rulesView").innerHTML = `
+  <section class="card" style="flex:1 1 240px;max-width:280px;display:flex;flex-direction:column;gap:6px">
+    <strong style="font-size:14px">내 규칙</strong>
+    ${rs.map((x, i) => `<div class="rl ${i === rSel ? "on" : ""}"><button type="button" data-rsel="${i}" style="flex:1;background:none;border:0;padding:0;text-align:left;display:flex;flex-direction:column">
+      <b style="font-weight:600">${esc(x.name)}</b><span class="dim" style="font-size:11px">${esc(x.desc || "")}</span></button>
+      <button type="button" class="sw" data-ron="${i}" aria-pressed="${!!x.on}" aria-label="${esc(x.name)} 켜기/끄기"></button></div>`).join("")}
+    <button type="button" class="btn ghost" id="rNew">+ 새 규칙</button>
+    <p class="dim" style="font-size:11px;margin:6px 0 0">켜 둔 규칙은 '내가 고른 종목' 중 조건이 맞는 종목을 시간 구간 안에서 자동으로 삽니다. 일봉 조건은 직전 거래일 통합 일봉 기준 · 체결강도는 실시간 · 시가총액은 상장주식수 × 현재가.</p>
+  </section>
+  <div style="flex:999 1 560px;min-width:0;display:flex;flex-direction:column;gap:10px">
+    ${prob.length ? `<div class="banner info">이 규칙은 켜도 자동매수를 하지 않습니다 — ${prob.map(esc).join(" · ")}</div>` : ""}
+    <section class="card" style="display:flex;flex-direction:column;gap:10px">
+      <div class="row"><label class="lbl" for="rName">이름</label><input id="rName" class="in" value="${esc(r.name)}" style="flex:1"><input id="rDesc" class="in" value="${esc(r.desc || "")}" placeholder="설명" style="flex:1"></div>
+      <div class="row" style="align-items:baseline"><strong style="font-size:15px;color:var(--up)">매수 규칙</strong><span class="dim" style="font-size:12px">아래 조건을 <b style="color:var(--text)">모두</b> 만족하면 삽니다 (값은 %, 거래대금은 억원)</span></div>
+      ${r.conds.map((c, i) => `<div class="cond"><span class="dim mono" style="text-align:center">${i + 1}</span>
+        <select class="in" data-cf="${i}" aria-label="지표">${field(c[0])}</select>
+        <select class="in" data-co="${i}" aria-label="비교">${OPS.map((o) => `<option ${o === c[1] ? "selected" : ""}>${o}</option>`).join("")}</select>
+        <input class="in num" data-cv="${i}" value="${esc(c[2])}" aria-label="값"><button type="button" class="btn x" data-cd="${i}" aria-label="조건 삭제">✕</button><span class="dim" style="grid-column:2/-1;font-size:11px;margin-top:-4px">${esc(HELP[c[0]] || "")}</span></div>`).join("")}
+      <button type="button" class="btn ghost" id="cAdd" style="align-self:flex-start">+ 조건 추가</button>
+      <div style="border:1px solid ${r.ladder.on ? "#3a2a2e" : "var(--line)"};border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px">
+        <label class="row" style="gap:8px;font-weight:600"><input type="checkbox" id="lOn" ${r.ladder.on ? "checked" : ""} style="width:16px;height:16px;accent-color:var(--up);margin:0">종가 기준 분할 매수 <span class="dim" style="font-weight:400;font-size:12px">조건이 맞은 종목에 지정가를 미리 걸어 둡니다 · 안 닿으면 그날 장 끝에 자동 취소</span></label>
+        <div class="row" style="gap:8px"><span class="lbl">기준</span><div class="seg" style="width:260px"><button type="button" class="g" data-lb="reg" aria-pressed="${r.ladder.base === "reg"}">정규장 종가</button><button type="button" class="g" data-lb="aft" aria-pressed="${r.ladder.base === "aft"}">애프터 종가</button></div></div>
+        ${r.ladder.levels.map((l, i) => `<div class="row" style="gap:8px"><span class="lbl" style="width:56px">${i + 1}차 매수</span>
+          <input class="in num" data-llp="${i}" value="${esc(l[0])}" style="width:90px;color:var(--up)" aria-label="기준 대비 %"><span class="dim">%</span>
+          <input class="in num" data-llr="${i}" value="${esc(l[1])}" style="width:90px" aria-label="금액 비율"><span class="dim">% 금액</span>
+          <button type="button" class="btn x" data-lld="${i}" aria-label="단계 삭제">✕</button></div>`).join("")}
+        <div class="row"><button type="button" class="btn ghost" id="llAdd">+ 단계</button><span class="dim" style="font-size:12px">금액 비율 합계 ${r.ladder.levels.reduce((s, l) => s + (+l[1] || 0), 0)}%</span></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px"><span class="lbl">주문 가능 시간 (여러 구간 · 구간 밖에서는 새 매수만 안 함, 청산은 언제나)</span>
+        <div class="row" style="flex-wrap:wrap;gap:8px">${r.times.map((t, i) => `<div class="row" style="gap:6px;background:var(--bg);border:1px solid var(--line2);border-radius:8px;padding:4px 6px 4px 10px">
+          <input type="time" class="mono" data-tf="${i}" value="${esc(t[0])}" aria-label="${i + 1}구간 시작" style="background:none;border:0;height:30px"><span class="dim">~</span>
+          <input type="time" class="mono" data-tt="${i}" value="${esc(t[1])}" aria-label="${i + 1}구간 끝" style="background:none;border:0;height:30px">
+          <button type="button" class="btn x" data-td="${i}" aria-label="구간 삭제">✕</button></div>`).join("")}<button type="button" class="btn ghost" id="tAdd">+ 시간 구간</button></div></div>
+      <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px">
+        <label style="display:flex;flex-direction:column;gap:6px"><span class="lbl">1종목당 금액(원)</span><input id="rAmt" class="in num" value="${esc(r.amount || "")}"></label>
+        <label style="display:flex;flex-direction:column;gap:6px"><span class="lbl">주문 방식 (분할 매수가 꺼져 있을 때)</span><select id="rHow" class="in"><option value="limit" ${r.how !== "market" ? "selected" : ""}>현재가 지정가</option><option value="market" ${r.how === "market" ? "selected" : ""}>시장가</option></select></label>
+        <label class="row" style="gap:8px;align-self:end;min-height:36px"><input type="checkbox" id="rOnce" ${r.once_per_day ? "checked" : ""} style="width:16px;height:16px;margin:0">같은 종목은 하루 한 번만</label>
+      </div>
+    </section>
+    <section class="card" style="display:flex;flex-direction:column;gap:10px">
+      <div class="row" style="align-items:baseline"><strong style="font-size:15px;color:var(--dn)">청산 규칙</strong><span class="dim" style="font-size:12px">켜 둔 것 중 <b style="color:var(--text)">먼저 닿는 것</b>으로 팝니다 · 익절은 체결 즉시 지정가로 걸어 둡니다</span></div>
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">
+        ${exRow("stop", "손절", "산 값보다 이만큼 내리면 전량", "−%", true)}
+        ${exRow("breakeven", "1차 익절 뒤 본전 손절", "첫 익절이 체결되면 손절선을 산 값으로", "", false)}
+        ${exRow("trail", "고점 대비 되밀림", "산 뒤 가장 높았던 값에서 이만큼 빠지면", "−%", true)}
+        ${exRow("days", "최대 보유 기간", "이 날수가 지나면 그날 15:15 이후", "일", true)}
+        ${exRow("close", "장 마감 전 청산", "이 시각에 남은 것 전부", "", true)}
+      </div>
+      <div class="ex ${r.exits.take[0] ? "on" : ""}" style="flex-direction:column;align-items:stretch;gap:8px">
+        <label class="row" style="gap:8px"><input type="checkbox" data-ex="take" ${r.exits.take[0] ? "checked" : ""} style="width:16px;height:16px;margin:0"><b style="font-weight:600">분할 익절</b><span class="dim" style="font-size:12px">산 값 대비 % 에 처음 산 수량의 % 를 지정가로</span></label>
+        ${r.exits.take[1].map((t, i) => `<div class="row" style="gap:8px"><span class="lbl" style="width:56px">${i + 1}차</span><span class="dim">+</span>
+          <input class="in num" data-tkp="${i}" value="${esc(t[0])}" style="width:80px;color:var(--up)" aria-label="익절 %"><span class="dim">%에 보유량의</span>
+          <input class="in num" data-tkr="${i}" value="${esc(t[1])}" style="width:80px" aria-label="매도 비율"><span class="dim">%</span>
+          <button type="button" class="btn x" data-tkd="${i}" aria-label="익절 단계 삭제">✕</button></div>`).join("")}
+        <div class="row"><button type="button" class="btn ghost" id="tkAdd">+ 익절 단계</button><span class="${r.exits.take[1].reduce((s, t) => s + (+t[1] || 0), 0) === 100 ? "dim" : "prob"}" style="font-size:12px">합계 ${r.exits.take[1].reduce((s, t) => s + (+t[1] || 0), 0)}% (마지막 단계는 남은 수량 전부)</span></div>
+      </div>
+    </section>
+  </div>
+  <div style="flex:1 1 290px;max-width:340px;display:flex;flex-direction:column;gap:10px">
+    <section class="card" style="display:flex;flex-direction:column;gap:10px">
+      <strong style="font-size:15px">안전장치</strong><span class="dim" style="font-size:12px;margin-top:-4px">모든 규칙·수동 매수에 공통 · 넘으면 그날 새 매수를 멈춥니다(청산은 계속)</span>
+      <div class="grid2" style="grid-template-columns:1fr 112px">
+        <label class="lbl" for="s1" style="color:var(--text)">하루 최대 손실(원)</label><input id="s1" data-sf="max_daily_loss" class="in num" value="${esc(sf.max_daily_loss)}">
+        <label class="lbl" for="s2" style="color:var(--text)">종목당 최대 비중(%)</label><input id="s2" data-sf="max_weight_pct" class="in num" value="${esc(sf.max_weight_pct)}">
+        <label class="lbl" for="s3" style="color:var(--text)">동시 보유 최대(종목)</label><input id="s3" data-sf="max_positions" class="in num" value="${esc(sf.max_positions)}">
+        <label class="lbl" for="s4" style="color:var(--text)">하루 최대 매수 주문(건)</label><input id="s4" data-sf="max_orders" class="in num" value="${esc(sf.max_orders)}">
+      </div>
+      <label class="row" style="gap:8px"><input type="checkbox" data-sfc="confirm_real" ${sf.confirm_real ? "checked" : ""} style="width:16px;height:16px;margin:0">손으로 낸 주문은 확인창 띄우기</label>
+      <label class="row" style="gap:8px"><input type="checkbox" data-sfc="halt_on_disconnect" ${sf.halt_on_disconnect ? "checked" : ""} style="width:16px;height:16px;margin:0">실시간이 끊기면 새 매수 멈추기</label>
+    </section>
+    <button type="button" class="btn" id="rSave" style="min-height:48px;background:var(--acc);color:var(--bg);border:0;font-weight:700">${dirty ? "저장 (바뀐 것 있음)" : "저장"}</button>
+    <button type="button" class="btn" id="rDel" style="color:var(--up)">이 규칙 지우기</button>
+  </div>`;
+}
+const R = () => draft.rules[rSel];
+const touch = (rerender = true) => { dirty = true; if (rerender) renderRules(); else $("rSave").textContent = "저장 (바뀐 것 있음)"; };
+$("rulesView").addEventListener("click", (e) => {
+  const t = e.target.closest("button"); if (!t) return;
+  const d = t.dataset, r = R();
+  if (d.rsel != null) { rSel = +d.rsel; renderRules(); }
+  else if (d.ron != null) { draft.rules[+d.ron].on = !draft.rules[+d.ron].on; touch(); }
+  else if (t.id === "rNew") { draft.rules.push({ id: "r" + Date.now().toString(36), name: "새 규칙", desc: "", on: false, conds: [], times: [["09:00", "15:20"]], amount: "", how: "limit", once_per_day: true,
+      ladder: { on: false, base: "aft", levels: [["-3", "100"]] }, exits: { stop: [true, "3.5"], take: [true, [["5", "50"], ["8", "50"]]], trail: [false, ""], days: [false, ""], close: [false, "15:15"], breakeven: [true] } });
+    rSel = draft.rules.length - 1; touch(); }
+  else if (t.id === "cAdd") { r.conds.push(["거래대금", "이상", ""]); touch(); }
+  else if (d.cd != null) { r.conds.splice(+d.cd, 1); touch(); }
+  else if (d.lb) { r.ladder.base = d.lb; touch(); }
+  else if (t.id === "llAdd") { r.ladder.levels.push(["-7", "0"]); touch(); }
+  else if (d.lld != null) { r.ladder.levels.splice(+d.lld, 1); touch(); }
+  else if (t.id === "tAdd") { r.times.push(["13:00", "14:00"]); touch(); }
+  else if (d.td != null) { r.times.splice(+d.td, 1); touch(); }
+  else if (t.id === "tkAdd") { r.exits.take[1].push(["12", "0"]); touch(); }
+  else if (d.tkd != null) { r.exits.take[1].splice(+d.tkd, 1); touch(); }
+  else if (t.id === "rSave") saveRules(draft);
+  else if (t.id === "rDel") { ask(`'${r.name}' 규칙을 지웁니다.`).then((ok) => { if (ok) { draft.rules.splice(rSel, 1); rSel = 0; touch(); } }); }
+});
+$("rulesView").addEventListener("input", (e) => {
+  const el = e.target, d = el.dataset, r = R(), v = el.type === "checkbox" ? el.checked : el.value;
+  if (el.id === "rName") r.name = v; else if (el.id === "rDesc") r.desc = v; else if (el.id === "rAmt") r.amount = v;
+  else if (d.cv != null) r.conds[+d.cv][2] = v; else if (d.llp != null) r.ladder.levels[+d.llp][0] = v; else if (d.llr != null) r.ladder.levels[+d.llr][1] = v;
+  else if (d.tf != null) r.times[+d.tf][0] = v; else if (d.tt != null) r.times[+d.tt][1] = v;
+  else if (d.exv) r.exits[d.exv][1] = v; else if (d.tkp != null) r.exits.take[1][+d.tkp][0] = v; else if (d.tkr != null) r.exits.take[1][+d.tkr][1] = v;
+  else if (d.sf) draft.safety[d.sf] = v; else return;
+  touch(false);
+});
+$("rulesView").addEventListener("change", (e) => {
+  const el = e.target, d = el.dataset, r = R();
+  if (d.cf != null) r.conds[+d.cf][0] = el.value; else if (d.co != null) r.conds[+d.co][1] = el.value;
+  else if (d.ex) r.exits[d.ex][0] = el.checked; else if (el.id === "lOn") r.ladder.on = el.checked;
+  else if (el.id === "rHow") r.how = el.value; else if (el.id === "rOnce") r.once_per_day = el.checked;
+  else if (d.sfc) draft.safety[d.sfc] = el.checked; else return;
+  touch();
+});
+window.addEventListener("beforeunload", (e) => { if (dirty) e.preventDefault(); });
+
+loadRules().then(() => { poll(); setInterval(poll, 1000); setInterval(loadRules, 30000); });
+</script>
+</body>
+</html>
