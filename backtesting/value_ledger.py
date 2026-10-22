@@ -7,7 +7,8 @@
 (value_burst 의 '1년' 등급과 같은 정의 · 245거래일이 안 찬 종목·날은 판정 안 함 — 상장 초기엔 아무 날이나 신고가 된다).
 대금은 data/stocks/daily_al(value_mw, 백만원) — KRX 일봉은 NXT 가 빠져 2025-03 뒤로 반 토막이라 쓰지 않는다.
 저장 하한 1,000억(10-09 사용자). 정규장_억(10-13 사용자) = 그날 대금 중 09:00~15:30 몫이 직전 245거래일의 정규장 대금 최대를 넘은 날에만 채운다(1,000억+). 몫을 구하는 차례:
-①통합 분봉(2026-08-24~, 없으면 체결 틱)으로 잰다 ②NXT 거래가 없는 날은 1분봉(2025-07~)으로 잰다
+①통합 분봉(2026-08-24~, 없으면 체결 틱)으로 잰다 ①'분봉이 아직 없는 날은 소피증권 순위 기록(rank_tape, 10-02~)으로 잰다
+②NXT 거래가 없는 날은 1분봉(2025-07~)으로 잰다
 ③그 밖은 추정(정규장추정=1): KRX 몫 × 1분봉 정규장 비중 + NXT 몫 × 0.644 — 1,000억+ 983종목일에서 오차 중앙 1.9%·90%가 ±8% 안
 ④NXT 개장(2025-03-04) 전은 하루 전체와 같다(정규장추정=2 — 분봉이 없어 KRX 장후 시간외 거래를 못 뗀다, 보통 1% 안팎).
 정규_* 칸 = 등락·뒤 수익·고점·MDD 를 정규장 가격(1분봉의 15:30 종가·정규장 고저, 없으면 KRX 일봉)으로 잰 값 — 일봉 종가·고가엔 장전·장후 가격이 들어 있다.
@@ -57,6 +58,8 @@ def daily_al_rows(code: str, base: str = DAILY_AL_DIR) -> list[list] | None:
 
 def events() -> pd.DataFrame:
     names = json.load(open("data/stock_names.json", encoding="utf-8"))
+    TAPE.clear()
+    TAPE.update(tape_regular())
     rows = []
     for p in glob.glob("data/stocks/daily_al/*.csv"):
         d = pd.read_csv(p, dtype={"date": str})
@@ -78,10 +81,12 @@ def events() -> pd.DataFrame:
         recent = bool((val[d.date >= MIN_FROM] >= MIN_EOK).any())
         md = (minute_days(code) if recent else MD_EMPTY).reindex(d.date).reset_index(drop=True)
         md.loc[~md.close.between(d.low, d.high), ["high", "low", "close"]] = np.nan  # 분봉은 수정주가가 아니다 — 통합 일봉 범위를 벗어난 날(액면분할·감자 앞)은 버린다
-        # 정규장 대금 = 대금 × 정규장 몫. 몫은 ①통합 분봉·틱(잰 값) ②NXT 거래 없는 날의 1분봉(잰 값)
+        # 정규장 대금 = 대금 × 정규장 몫. 몫은 ①통합 분봉·틱(잰 값) ①'소피 순위 기록(잰 값) ②NXT 거래 없는 날의 1분봉(잰 값)
         # ③KRX 몫 × 1분봉 정규장 비중 + NXT 몫 × NXT_REG(추정) ④NXT 개장 전은 1(장후 시간외를 못 뗀다)
         pre = d.date < NXT_OPEN.replace("-", "")
-        exact = (al_shares(code, d, val) if recent else pd.Series(np.nan, index=d.index)).fillna(md.rk.where(kr >= 1))
+        tape = pd.Series([(TAPE.get(x) or {}).get(code) for x in d.date], index=d.index, dtype=float)
+        exact = (al_shares(code, d, val) if recent else pd.Series(np.nan, index=d.index)).fillna(
+            (tape / val.replace(0, np.nan)).clip(upper=1)).fillna(md.rk.where(kr >= 1))
         share = exact.fillna(kr * md.rk.fillna(1) + NXT_REG * (1 - kr)).mask(pre, 1.0)
         est = (exact.isna() & kr.notna()).astype(int).mask(pre, 2)  # 1 추정 · 2 장후 시간외 포함
         reg = val * share
@@ -144,6 +149,37 @@ def al_shares(code: str, d: pd.DataFrame, val: pd.Series) -> pd.Series:
             v, t = x.cur_prc.abs() * x.trde_qty.abs(), x.time.str[:2].astype(int) * 60 + x.time.str[2:4].astype(int)
             sh.iat[i] = v[(t >= 540) & (t <= 930)].sum() / v.sum() if v.sum() else np.nan
     return sh
+
+
+TAPE: dict[str, dict[str, float]] = {}  # events() 가 채운다 — tape_regular()
+TAPE_DIR = "kospi-theme-engine/dist/logs/rank_tape"
+
+
+def tape_regular(root: str = TAPE_DIR) -> dict[str, dict[str, float]]:
+    """소피증권 순위 기록(logs/rank_tape/YYYY-MM-DD.jsonl, 10-02~ 대금 상위 ~230종목)에서 날짜별 정규장 대금(억) —
+    15:30 까지 마지막 완전한 응답의 통합 누적 − 09:00 직전 장전 누적. {YYYYMMDD: {코드: 억}}.
+    분봉을 아직 못 받은 날(밤 보관소 채우기 전) 추정이 장후 시간외를 못 떼 크게 틀렸다
+    (10-21 푸드나무: 추정 1,024억, 기록 831억 — 10-22 사용자). 소피 폭발 화면(app/reference/burst.tape_regular)과 같은 규칙."""
+    out: dict[str, dict[str, float]] = {}
+    for p in sorted(glob.glob(os.path.join(root, "*.jsonl"))):
+        pre: dict[str, float] = {}
+        last: dict[str, float] = {}
+        try:
+            with open(p, encoding="utf-8") as fh:
+                for ln in fh:
+                    j = json.loads(ln)
+                    if j.get("t") == "baseline":
+                        for c, v in (j.get("tv") or {}).items():
+                            if v is not None and v > pre.get(c, 0.0):
+                                pre[c] = v
+                    elif j.get("t") == "minute" and str(j.get("hm", "")) <= "15:30" and j.get("pages") == j.get("want"):
+                        # 마지막 완전한 응답만 — 낮에 순위에서 밀려난 종목의 옛 누적을 그날 값으로 쓰면 작게 나온다
+                        last = {r[0]: r[1] for r in j.get("rows") or () if r[1] is not None}
+        except (OSError, ValueError, IndexError, TypeError):
+            continue
+        if pre:                                  # 장전 기준이 없는 날은 장전 몫을 못 뗀다 — 안 쓴다
+            out[os.path.basename(p)[:10].replace("-", "")] = {c: max(0.0, v - pre.get(c, 0.0)) / 1e8 for c, v in last.items()}
+    return out
 
 
 REG_FROM = "2026-08-24"  # 통합 분봉 보관소가 시작된 날 — 그 앞은 정규장 몫을 잴 수 없다(추정)
