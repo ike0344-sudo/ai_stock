@@ -39,6 +39,13 @@ def targets(all_codes: bool) -> list[str]:
         shown = {r["코드"] for r in json.load(open(os.path.join(ROOT, "static/dashboard/value_burst.json"), encoding="utf-8"))["rows"]}
     except (OSError, ValueError, KeyError):
         pass
+    # 소피증권 폭발 40거래일 목록은 등급·대금 상관없이 다(10-27 사용자) — 빠지면 그 종목 통합 일봉이 멈춰 20일선이
+    # 옛 값이 된다(10-27 포스코인터내셔널 10-06 에 멈춤). 폭발 전 기간(80거래일, 500여 종목)은 너무 많다(사용자)
+    try:
+        d = json.load(open(os.path.join(ROOT, "kospi-theme-engine/dist/data/reference/burst.json"), encoding="utf-8"))
+        shown |= {r["코드"] for r in d["rows"] + (d.get("reg") or {}).get("rows", []) if 40 in (r.get("wins") or ())}
+    except (OSError, ValueError, KeyError):
+        pass
     out = []
     for p in sorted(daily.glob("*.csv")):
         if all_codes:
