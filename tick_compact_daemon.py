@@ -174,4 +174,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import contextlib
+    import sys
+    # 허브 압축 단계(--once)는 수집이 잠금을 푼 뒤에 돈다 — 관문 밖이라 '장부 없는 쓰기'로 잡혔다(10-28). 상시 데몬은 잠금을 쥐고 있으면 수집을 막으므로 그대로
+    if "--once" in sys.argv:
+        from datahub import write
+        ctx = write("tick_al", writer="tick_compact_daemon")
+    else:
+        ctx = contextlib.nullcontext()
+    with ctx:
+        main()
