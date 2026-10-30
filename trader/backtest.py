@@ -112,14 +112,25 @@ def _disk(name: str, make):
     return v
 
 
+def _src_mtime(code: str) -> float:
+    """그 종목 분봉·일봉 파일 중 가장 늦게 바뀐 시각 — 낮에 분봉을 더 받으면(10-30 한국콜마 7월분) 캐시를 다시 만들게."""
+    from backtesting.value_ledger import DAILY_AL_DIR, MINUTE_AL_ARCHIVE_DIR, MINUTE_AL_CACHE_DIR, MINUTE_KRX_DIR
+    fs = (os.path.join(MINUTE_AL_ARCHIVE_DIR, code + ".parquet"), os.path.join(MINUTE_AL_CACHE_DIR, code + ".csv"),
+          os.path.join(MINUTE_KRX_DIR, code + ".csv"), os.path.join(MINUTE_KRX_DIR, code + ".parquet"), os.path.join(DAILY_AL_DIR, code + ".csv"))
+    return max((os.path.getmtime(f) for f in fs if os.path.isfile(f)), default=0.0)
+
+
 def _per_code(kind: str, code: str, make):
     """종목 하나씩 하루 디스크 캐시 — 조건(상승률·기간)이 바뀌어 대상 묶음이 달라도 한 번 읽은 종목은 다시 안 읽는다(10-20: 첫 실행 123초 중 118초가 CSV 읽기)."""
     import pickle
     import shutil
     day = f"{date.today():%Y%m%d}"
     p = CACHE / "codes" / day / kind / f"{code}.pkl"
+    mt = _src_mtime(code)
     try:
-        return pickle.loads(p.read_bytes())
+        hit = pickle.loads(p.read_bytes())
+        if isinstance(hit, tuple) and len(hit) == 2 and hit[0] == ("mt", mt):
+            return hit[1]                                           # 파일이 그대로면 저장본(바뀌었으면 아래에서 새로)
     except Exception:                                               # noqa: BLE001 — 없거나 깨졌으면 새로
         pass
     if not getattr(_per_code, "swept", False):                      # 지난 날짜 폴더는 지운다(밤마다 데이터가 갱신된다)
@@ -128,10 +139,12 @@ def _per_code(kind: str, code: str, make):
             if old.name != day:
                 shutil.rmtree(old, ignore_errors=True)
     v = make()
+    if v is None:
+        return v                                                    # 없음은 남기지 않는다 — 낮에 받은 새 종목 분봉(10-30 엘리스 보충)을 그날 바로 쓰게
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(f".{os.getpid()}.tmp")
     try:
-        tmp.write_bytes(pickle.dumps(v, protocol=pickle.HIGHEST_PROTOCOL))
+        tmp.write_bytes(pickle.dumps((("mt", mt), v), protocol=pickle.HIGHEST_PROTOCOL))
         os.replace(tmp, p)
     except OSError:
         tmp.unlink(missing_ok=True)
@@ -229,6 +242,23 @@ def ma_range(m: float, pct: float, band: float) -> tuple[float, float]:
     return cen * (1 - band / 100), cen * (1 + band / 100)
 
 
+def _code_c15(c: str, src: str):
+    """15분봉 시작 시각(ns)과 종가 누적합(앞에 0) — '60선 꺾이면 끝'을 데스크처럼(지금가 포함 60선 vs 전 거래일 마지막 60선) 보려고(10-30). 없으면 None."""
+    import numpy as np
+    from backtesting.value_ledger import _load_minute
+    raw = _load_minute(c, "regular" if src == "reg" else "all")[0]
+    if raw is None or raw.empty:
+        return None
+    s15 = raw[[x for x in raw.columns if x.lower() == "close"][0]].resample("15min").last().dropna()
+    return s15.index.as_unit("ns").asi8.copy(), np.concatenate([[0.0], np.cumsum(s15.to_numpy(np.float64))])
+
+
+def load_c15(codes: list[str], src: str) -> dict:
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(8) as ex:
+        return dict(zip(codes, ex.map(lambda c: _per_code("c15-" + src, c, lambda: _code_c15(c, src)), codes)))
+
+
 def load_ma(codes: list[str], src: str) -> dict:
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(8) as ex:
@@ -236,7 +266,10 @@ def load_ma(codes: list[str], src: str) -> dict:
 
 
 def load_bars(codes: list[str], evs: list, session: str, until: str) -> list[tuple]:
-    key = (tuple(codes), tuple(e[:2] for e in evs), session, until)
+    from backtesting.value_ledger import MINUTE_AL_ARCHIVE_DIR, MINUTE_AL_CACHE_DIR, MINUTE_KRX_DIR
+    dirs = ((MINUTE_AL_ARCHIVE_DIR, ".parquet"), (MINUTE_AL_CACHE_DIR, ".csv")) if session == "all" else ((MINUTE_KRX_DIR, ".csv"), (MINUTE_KRX_DIR, ".parquet"))
+    have = tuple((c, _src_mtime(c)) for c in codes if any(os.path.isfile(os.path.join(d, c + x)) for d, x in dirs))   # 분봉 파일이 생기거나 바뀌면 캐시 키가 바뀐다(10-30)
+    key = (tuple(codes), tuple(e[:2] for e in evs), session, until, have)
     if key not in _BARS:
         _BARS.clear()
         _BARS[key] = _disk("bars" + repr(key), lambda: _load_bars(codes, evs, session, until))
@@ -468,9 +501,11 @@ def simulate(rule: dict, exits: dict, safety: dict, capital: float, start: str, 
     # 15분봉 60선(매수 60선 단계 · 60선 엔벨로프 손절) — 매수는 규칙의 기준(정규장/애프터), 손절은 청산 규칙에 고른 봉
     ma_buy = L.get("base", "reg") if any(o["band"] is not None for *_, o in levels) else None
     mt_src = L.get("base", "reg") if (L.get("ma_turn") or {}).get("on") else None   # 60선 꺾이면 끝(10-21 사용자)
+    mt_pause = (L.get("ma_turn") or {}).get("mode") == "pause"     # 꺾인 동안만 멈춤(10-30)
     magap_on = any(c[0] == "60선 차이(애프터−정규장)" for c in use_conds)
     ma_srcs = ({"reg", "aft"} if magap_on else set()) | {ma_buy, mt_src} | {o["src"] for *_, o in levels if o["band"] is not None and o["src"]} | {(x.get("ma_env") + [None, None])[2] or "reg" for x in (exits, fexits) if x and (x.get("ma_env") or [False])[0]}
     MA = {src: load_ma(codes, src) for src in ma_srcs if src}
+    C15 = load_c15(codes, mt_src) if mt_src else {}
 
     def ma_at(c, src, ts):
         """그 봉이 시작될 때 알 수 있던 60선(끝난 5분봉까지) — 없으면 0."""
@@ -480,13 +515,21 @@ def simulate(rule: dict, exits: dict, safety: dict, capital: float, start: str, 
         i = int(a[0].searchsorted(ts.value, "right")) - 1
         return float(a[1][i]) if i >= 0 else 0
 
-    def ma_ago(c, src, ts):
-        """그 봉이 시작될 때 알던 60선의 하루(15분봉 26개 = 5분 값 78개) 전 값 — 없으면 0."""
-        a = MA.get(src, {}).get(c)
+    def ma_live(c, ts, px):
+        """그 봉 시작 때 데스크가 보는 60선 — 앞 15분봉 59개 종가 + 지금가(px)(만드는 중인 봉도 지금가로, 데스크 ma60_15 와 같다). 없으면 0."""
+        a = C15.get(c)
         if not a:
             return 0
-        i = int(a[0].searchsorted(ts.value, "right")) - 1 - 78
-        return float(a[1][i]) if i >= 0 else 0
+        k = int(a[0].searchsorted((ts.value // (15 * 60 * 10 ** 9)) * (15 * 60 * 10 ** 9), "left"))
+        return (a[1][k] - a[1][k - 59] + px) / 60 if k >= 59 else 0
+
+    def ma_prevday(c, ts):
+        """전 거래일 마지막 60선 — 오늘 전 마지막 15분봉 60개 평균(데스크 ma60_15_prev 와 같다). 없으면 0."""
+        a = C15.get(c)
+        if not a:
+            return 0
+        k = int(a[0].searchsorted(ts.normalize().value, "left"))
+        return (a[1][k] - a[1][k - 60]) / 60 if k >= 60 else 0
     if facts:
         facts.preload(codes)
     starts: dict[str, list] = {}
@@ -526,7 +569,9 @@ def simulate(rule: dict, exits: dict, safety: dict, capital: float, start: str, 
     rebuy_n = int(engine._num((L.get("rebuy") or {}).get("n"), 1) or 1) if (L.get("rebuy") or {}).get("on") else 0   # 손절 뒤 다시 사기(10-21)
     ms_pct = abs(engine._num((L.get("ma_stop") or {}).get("pct"), 6) or 6) / 100 if (L.get("ma_stop") or {}).get("on") and ma_buy else None
     cn_full = (L.get("c_near") or {}).get("full")
-    cf_n = max(1, int(engine._num((L.get("ma_confirm") or {}).get("n"), 3) or 3)) if (L.get("ma_confirm") or {}).get("on") and ma_buy else 0   # 60선 위 마감 N개(10-30)
+    cf_n = max(1, int(engine._num((L.get("ma_confirm") or {}).get("n"), 3) or 3)) if (L.get("ma_confirm") or {}).get("on") and ma_buy else 0   # 60선 위에서 N개 버팀(10-30)
+    _hp = engine._num((L.get("ma_confirm") or {}).get("hold"), 2)
+    cf_hold = 1 + abs(2 if _hp is None else _hp) / 100
     cn_pct = abs(engine._num((L.get("c_near") or {}).get("pct"), 3) if engine._num((L.get("c_near") or {}).get("pct"), 3) is not None else 3) / 100 if (L.get("c_near") or {}).get("on") and ma_buy else None   # C −N% 위에서만 60선 매수(10-30)
     for k, (ts, c, o, h, l, cl) in enumerate(bars):
         dh = tstr.get(ts)
@@ -599,8 +644,10 @@ def simulate(rule: dict, exits: dict, safety: dict, capital: float, start: str, 
                 p["closed"] = True
                 skipped["guard"] += 1
         if mt_src and not p["closed"] and d != p["rd"].replace("-", ""):
-            m, m0 = ma_at(c, mt_src, ts), ma_ago(c, mt_src, ts)
-            if m and m0 and m < m0:
+            m, m0 = ma_live(c, ts, o), ma_prevday(c, ts)       # 지금 60선(이 봉 시가 포함) vs 전날 마지막 60선(10-30)
+            if mt_pause:
+                p["mt_down"] = bool(m and m0 and m < m0)           # 꺾인 동안만 안 삼(데스크와 같다)
+            elif m and m0 and m < m0:
                 p["closed"] = True                                 # 60선 꺾임 — 재매수 금지(데스크와 같다)
                 skipped["ma_turn"] = skipped.get("ma_turn", 0) + 1
         if p.get("pk_ref") and p["pk_ref"] != p["rd"] and not p.get("pk_set"):
@@ -623,16 +670,18 @@ def simulate(rule: dict, exits: dict, safety: dict, capital: float, start: str, 
         if cf_n:
             bk = (d, int(hm[:2]) * 4 + int(hm[2:]) // 15)          # 15분봉
             if p.get("cb") is not None and bk != p["cb"]:
-                for s_ in p["stages"]:                             # 방금 끝난 15분봉 — 60선 위 마감이면 하나 셈, 아래면 처음부터(데스크와 같다)
-                    if s_["band"] is None or s_["done"] or not s_.get("arm"):
+                for s_ in p["stages"]:                             # 방금 끝난 15분봉 — 60선 위 0~hold% 마감이면 하나 셈(데스크와 같다)
+                    if s_["band"] is None or s_["done"]:
                         continue
                     m_ = ma_at(c, s_["src"], ts)
-                    if m_ and p["cc"] > m_:
+                    if not m_ or p["cc"] <= m_:
+                        s_["cnt"], s_["go"] = 0, None              # 60선 아래 마감 — 걸린 주문 거두고 처음부터
+                    elif p["cc"] <= m_ * cf_hold:
                         s_["cnt"] = s_.get("cnt", 0) + 1
                         if s_["cnt"] >= cf_n:
-                            s_["go"], s_["cnt"], s_["arm"] = k, 0, False   # 이 봉 시가에 산다
+                            s_["go"] = p["cc"]                     # 그 봉 종가에 지정가(더 버티면 새 종가로)
                     else:
-                        s_["cnt"], s_["arm"] = 0, False
+                        s_["cnt"] = 0                              # 60선에서 멀어짐 — 걸린 주문은 그대로
             p["cb"], p["cc"] = bk, cl
         if not p["ok"]:
             # 데스크는 주문 가능 시간 안에서 조건이 맞는 순간 예약을 만든다 — 맞은 다음 봉부터 산다
@@ -655,7 +704,7 @@ def simulate(rule: dict, exits: dict, safety: dict, capital: float, start: str, 
                 p["ma_dead"] = True
                 skipped["ma_stop"] = skipped.get("ma_stop", 0) + 1
         in_win = not times or any(a <= hm <= b for a, b in times)   # 매수 규칙 주문 가능 시간 — 조건 없는 규칙도(데스크 _plan_window 와 같다, 10-22 "9시 30분부터")
-        if d in p["live"] and ("0800" <= hm <= "1530" or "1540" <= hm < "2000") and in_win and not p["closed"] and not gap_skip and not halt and not new_today and p.get("rb_day") != d:
+        if d in p["live"] and ("0800" <= hm <= "1530" or "1540" <= hm < "2000") and in_win and not p["closed"] and not p.get("mt_down") and not gap_skip and not halt and not new_today and p.get("rb_day") != d:
             order = list(p["stages"])                              # 놓친 단계가 뒤에 덧붙는다(아래 catch)
             while order:
                 s = order.pop(0)
@@ -678,11 +727,9 @@ def simulate(rule: dict, exits: dict, safety: dict, capital: float, start: str, 
                         continue
                     lo, hi = ma_range(m, s["pct"], s["band"])
                     if cf_n:
-                        if s.get("go") != k:
-                            if not (l > hi or h < lo):
-                                s["arm"] = True                    # 60선 범위에 닿음 — 이 봉부터 마감 확인
-                            continue
-                        lim = px = o                               # 확인된 다음 봉 시가(데스크는 지금가 +0.3% 지정가)
+                        if not s.get("go") or l > s["go"]:
+                            continue                               # 버팀 확인 전이거나 그 종가까지 안 내려옴
+                        lim = engine.floor_tick(s["go"]); px = min(o, lim)
                     elif l > hi or h < lo:
                         continue
                     else:
@@ -880,7 +927,7 @@ def to_studio(rule: dict, exit_rule: dict, safety: dict, capital: float, start: 
              + (" (시가가 마지막 단계보다 아래로 갭 하락한 날은 안 삼)" if (L.get("gap") or {}).get("on") else "")
              + (f" (15분봉 60선 −{(L.get('ma_stop') or {}).get('pct', 6)}% 아래로 깨면 60선 단계는 그만 삼)" if (L.get("ma_stop") or {}).get("on") else "")
              + (f" (60선 사는 값이 기준일 종가 −{(L.get('c_near') or {}).get('pct', 3)}% 이상일 때만 삼" + (" · 그 선 위면 남은 단계 합쳐 한 번에" if (L.get("c_near") or {}).get("full") else "") + ")" if (L.get("c_near") or {}).get("on") else "")
-             + (f" (60선에 닿은 뒤 15분봉이 60선 위로 {(L.get('ma_confirm') or {}).get('n', 3)}개 연달아 마감하면 다음 봉 시가에 삼)" if (L.get("ma_confirm") or {}).get("on") else "")
+             + (f" (15분봉이 60선 위 0~{(L.get('ma_confirm') or {}).get('hold', 2)}% 안에서 {(L.get('ma_confirm') or {}).get('n', 3)}개 연달아 마감하면 그 봉 종가에 삼, 60선 아래 마감이면 처음부터)" if (L.get("ma_confirm") or {}).get("on") else "")
              + (f" (손절로 다 팔리면 다음 거래일부터 같은 단계로 다시 삼, 최대 {(L.get('rebuy') or {}).get('n', 1)}번)" if (L.get("rebuy") or {}).get("on") else "")
              + (" (안 산 채 고점이 새로 나면 기준가를 그날 종가로 옮기고 유지 기간을 다시 셈" + (" · 판 뒤엔 다시 안 따라감" if (L.get("follow_high") or {}).get("once") else " · 판 뒤에도 따라가 다시 삼")
                   + (" · 고점 = 기준일 뒤 최고가 돌파" if (L.get("follow_high") or {}).get("def") == "run" else " · 고점 = 전날 고가 돌파")
@@ -926,7 +973,7 @@ def main() -> None:
         exit_rule = next((x for x in rules.get("exits", []) if x["id"] == eid), None)
         if not exit_rule:
             raise ValueError("청산 규칙이 없습니다")
-        start = max(a.start, AL_FROM) if a.session == "all" else a.start
+        start = a.start                                             # 통합 분봉이 없는 날은 봉이 없어 그날만 못 산다 — 08-24 전에 받아 둔 종목(10-30 한국콜마)도 쓰게 자르지 않는다
         fx = next((x["exits"] for x in rules.get("exits", []) if x["id"] == ((rule["ladder"].get("follow_high") or {}).get("exit"))), None)
         evs, codes, trades, eq, skipped = simulate(rule, exit_rule["exits"], rules["safety"], a.capital, start, a.end, mc, a.session,
                                                    a.universe, fx)

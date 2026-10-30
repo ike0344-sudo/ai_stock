@@ -51,6 +51,10 @@ header.card { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22p
 #order { flex: 1 1 290px; max-width: 330px; display: flex; flex-direction: column; gap: 12px; }
 .w { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; border: 1px solid transparent; }
 .w.on { background: var(--acc-soft); border-color: var(--acc-line); }
+.w .wh { cursor: grab; color: var(--dim); padding: 8px 4px; font-size: 16px; line-height: 1; user-select: none; }
+.w.dragging { opacity: .4; }
+.w.dropup { box-shadow: inset 0 3px 0 var(--acc-line); }
+.w.dropdn { box-shadow: inset 0 -3px 0 var(--acc-line); }
 .w > button.pick { flex: 1; min-width: 0; display: grid; grid-template-columns: 1fr auto; gap: 1px 8px; background: none; border: 0; padding: 0; text-align: left; }
 .w .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .w .sub { grid-column: 1 / -1; font: 11px var(--mono); color: var(--dim); }
@@ -130,6 +134,7 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
 .rl.dragging { opacity: .4; }
 .rl.dropup { box-shadow: inset 0 3px 0 var(--acc-line); }
 .rl.dropdn { box-shadow: inset 0 -3px 0 var(--acc-line); }
+.in:disabled { opacity: .35; cursor: not-allowed; }
 .tk { border-radius: 6px; }
 .tk.dragging { opacity: .4; }
 .tk.dropup { box-shadow: inset 0 3px 0 var(--acc-line); }
@@ -432,7 +437,8 @@ function renderWatch() {
     // 시세만 바뀌면 글자만 고친다 — 줄을 통째로 갈면 누르는 사이 버튼이 바뀌어 클릭·✕가 씹혔다(10-23 사용자 "클릭·삭제 너무 느려")
     S.watch.forEach((w, i) => { const [px, ch] = rows[i]._v; px.textContent = fp(w.px); ch.textContent = pct(w.chg); ch.className = `mono ${cls(w.chg)}`; });
   } else {
-  L.innerHTML = S.watch.map((w) => `<div class="w ${w.code === active ? "on" : ""}">
+  L.innerHTML = S.watch.map((w, i) => `<div class="w ${w.code === active ? "on" : ""}" data-wi="${i}">
+    <span class="wh" draggable="true" title="끌어서 순서 바꾸기" aria-label="${esc(w.name)} 끌어서 순서 바꾸기">⠿</span>
     <input type="checkbox" aria-label="${esc(w.name)} 일괄 매도에 포함" data-ck="${w.code}" ${checked.has(w.code) ? "checked" : ""} style="width:16px;height:16px;accent-color:var(--acc);margin:0">
     <button class="pick" type="button" data-pick="${w.code}"><span class="nm">${esc(w.name)}${w.warn ? ` <b class="mk" style="color:var(--up);border-color:var(--up)">${esc(w.warn)}</b>` : ""}</span><span class="mono">${fp(w.px)}</span>
       <span class="st ${w.status}">${w.status}</span><span class="mono ${cls(w.chg)}" style="font-size:12px;text-align:right">${pct(w.chg)}</span>
@@ -462,6 +468,29 @@ $("wlist").addEventListener("click", async (e) => {
     api("/api/watch/" + c, { method: "DELETE" }).catch((x) => alertMsg(x.message)).finally(poll);
   }
 });
+let wDrag = null;                                                   // 고른 종목 끌어서 순서 바꾸기(10-30 사용자)
+$("wlist").addEventListener("dragstart", (e) => {
+  const el = e.target.closest?.("[data-wi]"); if (!el || !e.target.classList?.contains("wh")) return;
+  wDrag = +el.dataset.wi; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", ""); el.classList.add("dragging");
+});
+$("wlist").addEventListener("dragover", (e) => {
+  const el = e.target.closest?.("[data-wi]"); if (wDrag == null || !el) return;
+  e.preventDefault();
+  $("wlist").querySelectorAll(".dropup,.dropdn").forEach((x) => x.classList.remove("dropup", "dropdn"));
+  if (+el.dataset.wi !== wDrag) el.classList.add(+el.dataset.wi < wDrag ? "dropup" : "dropdn");
+});
+$("wlist").addEventListener("drop", (e) => {
+  const el = e.target.closest?.("[data-wi]"); if (wDrag == null || !el) return;
+  e.preventDefault();
+  const from = wDrag, to = +el.dataset.wi; wDrag = null;
+  if (from !== to) {
+    S.watch.splice(to, 0, S.watch.splice(from, 1)[0]);
+    api("/api/watch/order", { method: "POST", body: { codes: S.watch.map((w) => w.code) } }).catch((x) => alertMsg(x.message)).finally(poll);
+  }
+  [...$("wlist").children].forEach((x) => { x._k = null; });          // 줄을 다시 그리게
+  renderWatch();
+});
+$("wlist").addEventListener("dragend", () => { if (wDrag != null) { wDrag = null; [...$("wlist").children].forEach((x) => { x._k = null; }); renderWatch(); } });
 $("wlist").addEventListener("change", (e) => {
   const c = e.target.dataset.ck; if (!c) return;
   e.target.checked ? checked.add(c) : checked.delete(c); store.set("checked", [...checked]); renderWatch();
@@ -1192,7 +1221,7 @@ function buySum(r) {
     if (ps.on) re.push(`<b>재매수 금지</b>: 고가가 기준일 ${by} +${ps.pct}%${ps.big?.cap && ps.big?.pct ? `(시총 ${ps.big.cap}억↑ +${ps.big.pct}%)` : ""} 넘으면 그 흐름 끝${ps.first ? ` · 처음 신고대금 날 기준(${ps.first_days || 21}일 안${ps.first_min_chg ? `, +${ps.first_min_chg}% 이상 신고대금만` : ""} 같은 흐름)` : ""}`);
   }
   const no = !on ? [] : [l.guard?.on && `다음 날 ${l.guard.until} 전 −${l.guard.pct}% 급락이면 버림`, l.gap?.on && "마지막 단계 아래로 갭 하락한 날 안 삼",
-    l.drop?.on && `전날 종가 −${l.drop.pct}% 이하면 버림`, l.ma_turn?.on && "60선 꺾이면 끝", l.ma_stop?.on && `60선 −${l.ma_stop.pct}% 깨지면 60선 단계 멈춤`, l.c_near?.on && `60선은 C −${l.c_near.pct}% 이상일 때만${l.c_near.full ? " · 그 위면 한 번에 100%" : ""}`, l.ma_confirm?.on && `60선 위 마감 ${l.ma_confirm.n}개 확인 뒤 삼`].filter(Boolean);
+    l.drop?.on && `전날 종가 −${l.drop.pct}% 이하면 버림`, l.ma_turn?.on && (l.ma_turn.mode === "pause" ? "60선 꺾인 동안 멈춤" : "60선 꺾이면 끝"), l.ma_stop?.on && `60선 −${l.ma_stop.pct}% 깨지면 60선 단계 멈춤`, l.c_near?.on && `60선은 C −${l.c_near.pct}% 이상일 때만${l.c_near.full ? " · 그 위면 한 번에 100%" : ""}`, l.ma_confirm?.on && `60선 위 0~${l.ma_confirm.hold || 2}%에서 ${l.ma_confirm.n}개 버티면 종가에 삼`, l.slice?.on && "Jev 가 호가 보고 나눠 삼"].filter(Boolean);
   const x = (draft?.exits || []).find((e) => e.id === r.exit);
   const row = (t, v) => `<span>${t}</span><span>${v}</span>`;
   return row("① 진입 종류", entry) + row("② 진입 조건", cond) + row("③ 재진입", re.join(" · ")) + row("④ 안 사는 경우", no.join(" · ") || "없음")
@@ -1224,15 +1253,15 @@ function buyEditor(r) {
         ${L ? `        <div class="row" style="gap:8px"><span class="lbl">기준</span><div class="seg" style="width:260px"><button type="button" class="g" data-lb="reg" aria-pressed="${r.ladder.base === "reg"}">정규장 종가</button><button type="button" class="g" data-lb="aft" aria-pressed="${r.ladder.base === "aft"}">애프터 종가</button></div></div>
         ${r.ladder.levels.map((l, i) => `<div class="row" style="gap:8px;flex-wrap:wrap"><span class="lbl" style="width:56px">${i + 1}차 매수</span>
           <select class="in" data-lma="${i}" aria-label="${i + 1}차 매수 가격 방식"><option value="pct">기준 종가</option><option value="ma" ${lvMa(l) ? "selected" : ""}>15분봉 60선</option></select>
-          <input class="in num" data-llp="${i}" value="${esc(l[0])}" style="width:70px;color:var(--up)" aria-label="${lvMa(l) ? "60선 대비 %" : "기준 대비 %"}"><span class="dim">%</span>
+          <input class="in num" data-llp="${i}" value="${esc(l[0])}" ${lvMa(l) && r.ladder.ma_confirm?.on ? "disabled title='60선 위에서 버티면 삼이 켜져 있어 안 씀'" : ""} style="width:70px;color:var(--up)" aria-label="${lvMa(l) ? "60선 대비 %" : "기준 대비 %"}"><span class="dim">%</span>
           ${lvMa(l) ? `<select class="in" data-lsrc="${i}" aria-label="${i + 1}차 60선 봉" style="width:auto">${[["", "규칙 기준 봉"], ["reg", "정규장 봉"], ["aft", "애프터(통합) 봉"]].map(([v, t]) => `<option value="${v}" ${(l[2].src || "") === v ? "selected" : ""}>${t}</option>`).join("")}</select>` : ""}
-          ${lvMa(l) ? `<span class="dim">±</span><input class="in num" data-lmp="${i}" value="${esc(l[2].ma || "1")}" style="width:52px;color:var(--up)" aria-label="60선 근접 %"><span class="dim">% 안</span>` : ""}
+          ${lvMa(l) ? `<span class="dim">±</span><input class="in num" data-lmp="${i}" value="${esc(l[2].ma || "1")}" ${r.ladder.ma_confirm?.on ? "disabled title='60선 위에서 버티면 삼이 켜져 있어 안 씀'" : ""} style="width:52px;color:var(--up)" aria-label="60선 근접 %"><span class="dim">% 안</span>` : ""}
           <input class="in num" data-llr="${i}" value="${esc(l[1])}" style="width:90px" aria-label="금액 비율"><span class="dim">% 금액</span>
           <span class="dim">시각</span><input type="time" class="in mono" data-lt0="${i}" value="${esc(l[2]?.from || "")}" style="color-scheme:dark" aria-label="${i + 1}차 매수 시작 시각"><span class="dim">~</span>
           <input type="time" class="in mono" data-lt1="${i}" value="${esc(l[2]?.to || "")}" style="color-scheme:dark" aria-label="${i + 1}차 매수 끝 시각">
           <button type="button" class="btn x" data-lld="${i}" aria-label="단계 삭제">✕</button>
           ${l[2]?.from || l[2]?.to ? `<span class="dim" style="font-size:12px;flex-basis:100%">${esc(l[2].from || "처음")}부터 ${esc(l[2].to || "끝")}${l[2].to ? " 전" : ""}까지만 이 단계를 삼 · 그 시각까지 안 채워진 주문은 거둠 · 비우면 ⑤ '주문 가능 시간' 그대로</span>` : ""}
-          ${lvMa(l) ? `<span class="dim" style="font-size:12px;flex-basis:100%">지금가가 15분봉 60선${+l[0] >= 0 ? "+" : ""}${esc(l[0])}% 자리의 위·아래 ${esc(l[2].ma || "1")}% 안에 들어오면 바로 삼(그 범위 위쪽 끝 지정가) · ①의 '기준'이 정규장이면 정규장 15분봉(09:00~15:30), 애프터면 통합 15분봉(08~20시) — 차트 15분 60선과 같은 값</span>` : ""}</div>`).join("")}
+          ${lvMa(l) && r.ladder.ma_confirm?.on ? `<span class="dim" style="font-size:12px;flex-basis:100%">④ '60선 위에서 버티면 삼'이 켜져 있어 '60선 대비 %'·'± % 안'은 안 씀 — 15분봉이 60선 위 0~${esc(r.ladder.ma_confirm.hold || "2")}% 안에서 ${esc(r.ladder.ma_confirm.n || "3")}개 버티면 그 종가에 삼 · 60선 봉·금액·시각은 그대로 씀</span>` : lvMa(l) ? `<span class="dim" style="font-size:12px;flex-basis:100%">지금가가 15분봉 60선${+l[0] >= 0 ? "+" : ""}${esc(l[0])}% 자리의 위·아래 ${esc(l[2].ma || "1")}% 안에 들어오면 바로 삼(그 범위 위쪽 끝 지정가) · ①의 '기준'이 정규장이면 정규장 15분봉(09:00~15:30), 애프터면 통합 15분봉(08~20시) — 차트 15분 60선과 같은 값</span>` : ""}</div>`).join("")}
         <div class="row"><button type="button" class="btn ghost" id="llAdd">+ 단계</button><span class="dim" style="font-size:12px">금액 비율 합계 ${r.ladder.levels.reduce((s, l) => s + (+l[1] || 0), 0)}%</span></div>
         <div class="row" style="gap:8px;flex-wrap:wrap"><label class="row" style="gap:6px"><input type="checkbox" data-lwo="1" ${r.ladder.warn?.on ? "checked" : ""} style="width:16px;height:16px;margin:0">시장경보</label>
           ${["투자주의", "투자경고", "투자위험"].map((k) => `<label class="row" style="gap:4px"><input type="checkbox" data-lwk="${k}" ${(r.ladder.warn?.kinds || ["투자경고"]).includes(k) ? "checked" : ""} style="width:14px;height:14px;margin:0">${k}</label>`).join("")}
@@ -1286,15 +1315,18 @@ function buyEditor(r) {
           <span class="dim">그날 시가가 마지막 단계 가격보다 아래면 그날은 안 삼 (다음 날 다시 봄)</span></div>
         <div class="row" style="gap:8px;flex-wrap:wrap"><label class="row" style="gap:6px"><input type="checkbox" data-ldrop="1" ${r.ladder.drop?.on ? "checked" : ""} style="width:16px;height:16px;margin:0">계속 빠지면 버리기</label>
           <span class="dim">아직 하나도 안 샀는데 전날 종가가 기준가 −</span><input class="in num" data-ldropp="1" value="${esc(r.ladder.drop?.pct || "5")}" style="width:52px" aria-label="버리는 %"><span class="dim">% 이하면 그 예약을 버림</span></div>
-        <div class="row" style="gap:8px;flex-wrap:wrap"><label class="row" style="gap:6px"><input type="checkbox" data-lmt="1" ${r.ladder.ma_turn?.on ? "checked" : ""} style="width:16px;height:16px;margin:0">60선 꺾이면 끝</label>
-          <span class="dim">15분봉 60선(①의 '기준' 봉)이 하루 전(15분봉 26개 전)보다 낮아지면 하락추세로 보고 그 예약은 끝 · 걸린 매수도 거둠 · 기준일 다음 날부터 봄</span></div>
+        <div class="row" style="gap:8px;flex-wrap:wrap"><label class="row" style="gap:6px"><input type="checkbox" data-lmt="1" ${r.ladder.ma_turn?.on ? "checked" : ""} style="width:16px;height:16px;margin:0">60선 꺾이면</label>
+          <select class="in" data-lmtm="1" aria-label="꺾였을 때"><option value="end" ${r.ladder.ma_turn?.mode !== "pause" ? "selected" : ""}>예약 끝</option><option value="pause" ${r.ladder.ma_turn?.mode === "pause" ? "selected" : ""}>꺾인 동안만 멈춤</option></select>
+          <span class="dim">15분봉 60선(①의 '기준' 봉, 지금가 포함)이 전 거래일 마지막 60선보다 낮아지면 꺾임 · 걸린 매수는 거둠 · 멈춤이면 60선이 전날 마지막 위로 돌아올 때 다시 삼 · 기준일 다음 날부터 봄</span></div>
         <div class="row" style="gap:8px;flex-wrap:wrap"><label class="row" style="gap:6px"><input type="checkbox" data-lms="1" ${r.ladder.ma_stop?.on ? "checked" : ""} style="width:16px;height:16px;margin:0">60선 깨지면 멈춤</label>
           <span class="dim">지금가가 15분봉 60선 −</span><input class="in num" data-lmsp="1" value="${esc(r.ladder.ma_stop?.pct || "6")}" style="width:52px" aria-label="60선 엔벨로프 하단 %"><span class="dim">%(엔벨로프 하단) 아래로 깨지면 그 예약의 60선 단계는 더 안 삼 · 걸린 60선 주문도 거둠 · 고점 따라가기로 기준이 옮겨지면 다시</span></div>
         <div class="row" style="gap:8px;flex-wrap:wrap"><label class="row" style="gap:6px"><input type="checkbox" data-lcn="1" ${r.ladder.c_near?.on ? "checked" : ""} style="width:16px;height:16px;margin:0">C −N% 위에서만 60선 매수</label>
           <span class="dim">60선 단계가 사는 값이 기준일(처음 신고대금 날) 종가 C −</span><input class="in num" data-lcnp="1" value="${esc(r.ladder.c_near?.pct || "3")}" style="width:52px" aria-label="C 아래 허용 %"><span class="dim">% 이상일 때만 삼 · C 는 고점 따라가기로 기준가가 옮겨져도 그대로 · 신고대금 당일은 종가가 없어 안 막음</span>
           <label class="row" style="gap:6px"><input type="checkbox" data-lcnf="1" ${r.ladder.c_near?.full ? "checked" : ""} style="width:16px;height:16px;margin:0">C −N% 위면 한 번에 100%</label><span class="dim">사는 값이 C −N% 이상이면 아직 안 산 단계 금액까지 합쳐 그 자리에서 다 삼</span></div>
-        <div class="row" style="gap:8px;flex-wrap:wrap"><label class="row" style="gap:6px"><input type="checkbox" data-lmc="1" ${r.ladder.ma_confirm?.on ? "checked" : ""} style="width:16px;height:16px;margin:0">60선 위 마감 확인 뒤 삼</label>
-          <span class="dim">60선 범위에 닿아도 바로 안 사고, 15분봉이 60선 위로</span><input class="in num" data-lmcn="1" value="${esc(r.ladder.ma_confirm?.n || "3")}" style="width:52px" aria-label="확인할 15분봉 수"><span class="dim">개 연달아 마감하면 그때 지금가 +0.3% 지정가로 삼 · 중간에 60선 아래 마감이면 처음부터</span></div>` : off)}
+        <div class="row" style="gap:8px;flex-wrap:wrap"><label class="row" style="gap:6px"><input type="checkbox" data-lmc="1" ${r.ladder.ma_confirm?.on ? "checked" : ""} style="width:16px;height:16px;margin:0">60선 위에서 버티면 삼</label>
+          <span class="dim">60선에 안 닿아도, 15분봉이 60선 위 0~</span><input class="in num" data-lmch="1" value="${esc(r.ladder.ma_confirm?.hold || "2")}" style="width:52px" aria-label="버팀 범위 %"><span class="dim">% 안에서</span><input class="in num" data-lmcn="1" value="${esc(r.ladder.ma_confirm?.n || "3")}" style="width:52px" aria-label="확인할 15분봉 수"><span class="dim">개 연달아 마감하면 그 봉 종가에 지정가로 삼 · 60선 아래 마감이면 주문 거두고 처음부터 · 켜면 60선 닿을 때 바로 사기는 안 함</span></div>
+        <div class="row" style="gap:8px;flex-wrap:wrap"><label class="row" style="gap:6px"><input type="checkbox" data-lsl="1" ${r.ladder.slice?.on ? "checked" : ""} style="width:16px;height:16px;margin:0">Jev 가 호가 보고 나눠 사기</label>
+          <span class="dim">살 자리에 오면 한 번에 안 내고, Jev 가 10호가를 보며 몇 호가까지·몇 %씩·몇 초 간격으로 조금씩 지정가로 삼 · 원래 주문 가격 위로는 절대 안 삼 · Jev 답 없으면 매도1호가 잔량 절반씩 · 10분 안에 못 다 사면 남은 몫을 원래 가격에 걸어 둠 · 백테스트엔 호가가 없어 반영 안 됨</span></div>` : off)}
       ${grp("⑤", "시간 · 금액", "", `
       <div style="display:flex;flex-direction:column;gap:6px"><span class="lbl">주문 가능 시간 (여러 구간 · 구간 밖에서는 새 매수만 안 함, 청산은 언제나)</span>
         <div class="row" style="flex-wrap:wrap;gap:8px">${r.times.map((t, i) => `<div class="row" style="gap:6px;background:var(--bg);border:1px solid var(--line2);border-radius:8px;padding:4px 6px 4px 10px">
@@ -1313,7 +1345,7 @@ function buyEditor(r) {
         <span class="dim">신고일 상승률: 규칙 것 그대로(${R()?.ladder?.ref_min_chg ? `+${esc(R().ladder.ref_min_chg)}% 이상` : "조건 없음"})</span>
         <label class="row" style="gap:4px"><span class="lbl">원금</span><input class="in num" data-btf="capital" value="${esc(bt.capital)}" style="width:120px"><span class="dim">원</span></label>
         <select class="in" data-btf="universe" aria-label="대상"><option value="ledger" ${bt.universe !== "journal" ? "selected" : ""}>대상: 장부의 신고 전부</option><option value="journal" ${bt.universe === "journal" ? "selected" : ""}>대상: 선정 일지에 고른 종목만</option></select>
-        <select class="in" data-btf="session" aria-label="데이터"><option value="reg" ${bt.session !== "all" ? "selected" : ""}>정규장 1분봉 (2025-07부터)</option><option value="all" ${bt.session === "all" ? "selected" : ""}>통합 분봉 (2026-08-24부터)</option></select>
+        <select class="in" data-btf="session" aria-label="데이터"><option value="reg" ${bt.session !== "all" ? "selected" : ""}>정규장 1분봉 (2025-07부터)</option><option value="all" ${bt.session === "all" ? "selected" : ""}>통합 분봉 (받아 둔 날부터 · 대부분 2026-08-24~)</option></select>
         <button type="button" class="btn red" data-btrun="1">백테스트 실행</button></div>
       <div id="btBox" class="dim" style="font-size:13px">${btHtml()}</div>
     </section>
@@ -1576,6 +1608,7 @@ $("rulesView").addEventListener("input", (e) => {
   else if (d.lmsp) { r.ladder.ma_stop = { on: false, ...(r.ladder.ma_stop || {}), pct: v }; }
   else if (d.lcnp) { r.ladder.c_near = { on: false, ...(r.ladder.c_near || {}), pct: v }; }
   else if (d.lmcn) { r.ladder.ma_confirm = { on: false, ...(r.ladder.ma_confirm || {}), n: v }; }
+  else if (d.lmch) { r.ladder.ma_confirm = { on: false, ...(r.ladder.ma_confirm || {}), hold: v }; }
   else if (d.lmp != null) { r.ladder.levels[+d.lmp][2].ma = v; }
   else return;
   touch(false);
@@ -1592,11 +1625,13 @@ $("rulesView").addEventListener("change", (e) => {
   else if (el.id === "rExit") r.exit = el.value || null;
   else if (d.lrd) r.ladder.ref_day = el.value;
   else if (d.lgap) r.ladder.gap = { on: el.checked };
-  else if (d.lmt) r.ladder.ma_turn = { on: el.checked };
+  else if (d.lmt) r.ladder.ma_turn = { ...(r.ladder.ma_turn || {}), on: el.checked };
+  else if (d.lmtm) r.ladder.ma_turn = { ...(r.ladder.ma_turn || {}), mode: el.value };
   else if (d.lpkf) r.ladder.peak_stop = { on: false, pct: "10", ...(r.ladder.peak_stop || {}), first: el.checked };
   else if (d.lpk) r.ladder.peak_stop = { pct: "10", ...(r.ladder.peak_stop || {}), on: el.checked };
   else if (d.lms) r.ladder.ma_stop = { pct: "6", ...(r.ladder.ma_stop || {}), on: el.checked };
   else if (d.lcn) r.ladder.c_near = { pct: "3", ...(r.ladder.c_near || {}), on: el.checked };
+  else if (d.lsl) r.ladder.slice = { on: el.checked };
   else if (d.lmc) r.ladder.ma_confirm = { n: "3", ...(r.ladder.ma_confirm || {}), on: el.checked };
   else if (d.lcnf) r.ladder.c_near = { on: false, pct: "3", ...(r.ladder.c_near || {}), full: el.checked };
   else if (d.lrb) r.ladder.rebuy = { n: "1", ...(r.ladder.rebuy || {}), on: el.checked };

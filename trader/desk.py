@@ -655,7 +655,7 @@ class Desk:
         return self._ma15_pair(code, base)[0]
 
     def ma60_15_prev(self, code: str, base: str) -> int:
-        """하루(15분봉 26개) 전 60선 — '60선 꺾이면 끝'(10-21 사용자). 못 구하면 0."""
+        """전 거래일 마지막 60선 — '60선 꺾이면 끝'(10-21 사용자, 10-30 '하루(15분봉 26개) 전' → '전날 마지막'). 못 구하면 0."""
         return self._ma15_pair(code, base)[1]
 
     def _ma15_pair(self, code: str, base: str) -> tuple:
@@ -675,38 +675,33 @@ class Desk:
             self.__dict__.setdefault("_b15", {})[(code, base)] = bars   # 마지막 = 만드는 중인 봉 — 60선 위 마감 확인용(10-30)
             closes = [b[1] for b in bars]
             if len(closes) >= 60:
-                v = (int(sum(closes[-60:]) / 60), int(sum(closes[-86:-26]) / 60) if len(closes) >= 86 else 0)
+                today = date.today().strftime("%Y%m%d")
+                i0 = next((i for i, b in enumerate(bars) if b[0][:8] >= today), len(bars))   # 오늘 첫 봉 — 그 앞 60개 = 전 거래일 마지막 60선
+                v = (int(sum(closes[-60:]) / 60), int(sum(closes[i0 - 60:i0]) / 60) if i0 >= 60 else 0)
         except Exception:                                           # noqa: BLE001 — 다음 분에 다시
             pass
         c[(code, base)] = (time.time(), v)
         return v
 
-    def _ma_confirmed(self, p: dict, s_: dict, mb: tuple, px: int) -> int:
-        """15분봉 60선 위 마감 N개 확인(10-30 사용자) — 60선 범위에 닿은 봉부터, 끝난 15분봉 종가가 그 봉까지의 60선 위로
-        N개 연달아 마감하면 지금가 +0.3% 지정가를 돌려준다. 하나라도 60선 아래 마감이면 처음부터(다시 닿기를 기다림). 아니면 0."""
+    def _ma_confirmed(self, p: dict, s_: dict) -> tuple[int, bool]:
+        """60선 위에서 버티면 삼(10-30 사용자) — 60선에 안 닿아도, 끝난 15분봉 종가가 그 봉까지의 60선 위 0~hold% 안에서
+        N개 연달아 마감했으면 (마지막 끝난 봉 종가, False). 마지막 끝난 봉이 60선 아래(같음 포함) 마감이면 (0, True) — 걸린 주문을 거둔다.
+        아직이면 (0, False). 끝난 봉만 본다(만드는 중인 봉은 안 셈)."""
         src = s_.get("src") or p["base"]
         self._ma15_pair(p["code"], src)
         bars = self.__dict__.get("_b15", {}).get((p["code"], src)) or []
-        if len(bars) < 61:
-            return 0
-        if not s_.get("arm"):
-            if mb[1] <= px <= mb[2]:
-                s_["arm"] = bars[-1][0]                             # 닿은 봉(만드는 중) — 이 봉부터 마감을 센다
-                self.note(f"{p['name']} 15분봉 60선 닿음 — 60선 위 마감 {p['ma_confirm']}개 확인 뒤 삼")
-            return 0
+        last = len(bars) - 2                                        # 마지막 끝난 봉
+        if last < 59:
+            return 0, False
         closes = [b[1] for b in bars]
-        n = 0
-        for j in range(len(bars) - 1):                              # 끝난 봉만
-            if bars[j][0] < s_["arm"]:
-                continue
-            if j < 59 or closes[j] <= sum(closes[j - 59:j + 1]) / 60:
-                s_.pop("arm")
-                self.note(f"{p['name']} 15분봉 종가 {closes[j]:,}가 60선 아래 마감 — 확인 처음부터")
-                return 0
-            n += 1
-            if n >= p["ma_confirm"]:
-                return engine.floor_tick(px * 1.003)
-        return 0
+        ma = lambda j: sum(closes[j - 59:j + 1]) / 60             # noqa: E731
+        hold = 1 + p.get("ma_hold", 2) / 100
+        if closes[last] <= ma(last):
+            return 0, True
+        n, j = 0, last
+        while j >= 59 and ma(j) < closes[j] <= ma(j) * hold:
+            n, j = n + 1, j - 1
+        return (closes[last], False) if n >= p["ma_confirm"] else (0, False)
 
     def buy_lev(self, code: str) -> tuple[float, str]:
         sf = self.rules["safety"]
@@ -903,7 +898,7 @@ class Desk:
                     rule: str | None = None, guard: dict | None = None, gap: dict | None = None, drop: dict | None = None,
                     follow: dict | None = None, ma_stop: dict | None = None, peak_stop: dict | None = None,
                     ma_turn: dict | None = None, rebuy: dict | None = None, c_near: dict | None = None,
-                    ma_confirm: dict | None = None) -> dict:
+                    ma_confirm: dict | None = None, slice_: dict | None = None) -> dict:
         r = self.ref(code, ref_day)
         bp = r.get(base) or 0
         if not bp:
@@ -954,8 +949,12 @@ class Desk:
             plan["drop_pct"] = abs(engine._num(drop.get("pct"), 5) or 5)   # 전날 종가가 기준가 −pct% 이하면 남은 예약 버림(10-19 사용자 A)
         if ma_stop and ma_stop.get("on") and any(s_.get("ma") for s_ in st):
             plan["ma_stop"] = abs(engine._num(ma_stop.get("pct"), 6) or 6)   # 60선 −pct%(엔벨로프 하단)을 깨면 60선 단계는 그만 산다(10-20 사용자)
+        if slice_ and slice_.get("on"):
+            plan["slice"] = True                                    # 살 자리에 오면 Jev 가 호가 보고 나눠 산다(10-30 사용자, trader/slicer.py)
         if ma_confirm and ma_confirm.get("on") and any(s_.get("ma") for s_ in st):
-            plan["ma_confirm"] = max(1, int(engine._num(ma_confirm.get("n"), 3) or 3))   # 60선 닿은 뒤 15분봉 60선 위 마감 N개 확인하고 삼(10-30 사용자)
+            plan["ma_confirm"] = max(1, int(engine._num(ma_confirm.get("n"), 3) or 3))   # 15분봉이 60선 위에서 N개 버티면 그 종가에 삼(10-30 사용자)
+            hp = engine._num(ma_confirm.get("hold"), 2)
+            plan["ma_hold"] = abs(2 if hp is None else hp)               # '버팀' = 60선 위 0~hold% 안 마감
         if c_near and c_near.get("on") and ref_day and any(s_.get("ma") for s_ in st):
             # 60선 단계는 사는 값이 기준일(처음 신고대금 날) 종가 C −pct% 이상일 때만(10-30 사용자 "C 위에 있거나 근접했을 때 60선에서").
             # C 는 고점 따라가기로 기준가가 옮겨져도 그대로 — 당일 예약은 종가가 나온 다음 거래일 아침(_fix_same_day)에 정한다
@@ -975,7 +974,7 @@ class Desk:
                                        engine._num(peak_stop.get("first_min_chg"), None))
                 plan["peak_ref"] = a.replace("-", "")
         if ma_turn and ma_turn.get("on") and ref_day:
-            plan["ma_turn"] = True                                  # 15분봉 60선이 하루 전보다 낮아지면(꺾임) 예약 끝(10-21 사용자, 7종목 시험)
+            plan["ma_turn"] = "pause" if ma_turn.get("mode") == "pause" else True   # 15분봉 60선이 전날 마지막보다 낮아지면(꺾임) 예약 끝(10-21) / 꺾인 동안만 멈춤(10-30)
         if rebuy and rebuy.get("on"):
             plan["rebuy"] = int(engine._num(rebuy.get("n"), 1) or 1)   # 손절로 다 팔리면 다음 거래일부터 같은 단계로 다시(최대 n번, 10-21 사용자 한국콜마)
         if gap and gap.get("on"):
@@ -1187,14 +1186,27 @@ class Desk:
                 continue
             if p.get("ma_turn") and not p.get("same_day"):
                 m, m0 = self.ma60_15(p["code"], p["base"]), self.ma60_15_prev(p["code"], p["base"])
-                if m and m0 and m < m0:
+                if p["ma_turn"] == "pause":
+                    down = bool(m and m0 and m < m0)
+                    if down != bool(p.get("mt_down")):
+                        # 꺾인 동안만 멈춤(10-30 사용자 라온시큐어 10-13·14) — 꺾이면 걸린 매수를 거두고 안 삼, 60선이 전날 마지막 위로 돌아오면 다시
+                        if down:
+                            mine = self._my_orders()
+                            for o in list(self.pending):
+                                if o["code"] == p["code"] and o["side"] == "buy" and str(mine.get(o["ord_no"], {}).get("tag", "")).startswith(f"예약:{p['id']}:"):
+                                    self.cancel(o["ord_no"], p["code"])
+                            for s_ in p["stages"]:
+                                s_.pop("day", None)                 # 거둔 단계는 다시 낼 수 있게
+                        p["mt_down"], changed = down, True
+                        self.note(f"{p['name']} 15분봉 60선 {'꺾임' if down else '다시 오름'} (전날 마지막 {m0:,} · 지금 {m:,}) — {'매수 멈춤' if down else '매수 다시'}")
+                elif m and m0 and m < m0:
                     # 60선이 꺾였다(하락추세로 바뀜) — 7종목: 꺾인 뒤 60선 매수는 손절이 대부분. 예약을 끝내고 걸린 매수도 거둔다
                     mine = self._my_orders()
                     for o in list(self.pending):
                         if o["code"] == p["code"] and o["side"] == "buy" and str(mine.get(o["ord_no"], {}).get("tag", "")).startswith(f"예약:{p['id']}:"):
                             self.cancel(o["ord_no"], p["code"])
                     p.update(active=False, status="15분봉 60선 꺾임 — 재매수 금지")
-                    self.note(f"{p['name']} 15분봉 60선이 하루 전({m0:,})보다 낮아짐({m:,}) — 예약 끝, 재매수 금지")
+                    self.note(f"{p['name']} 15분봉 60선이 전날 마지막({m0:,})보다 낮아짐({m:,}) — 예약 끝, 재매수 금지")
                     changed = True
                     continue
             # 당일 예약도 첫 신고대금 날이 더 앞이면 선을 이미 안다 — 그때도 본다(10-22: HT로보틱스 10-21 당일 예약이 10-14 기준 +24% 넘었는데 삼)
@@ -1257,6 +1269,15 @@ class Desk:
                     for o in list(self.pending):
                         if o["code"] == p["code"] and o["side"] == "buy" and str(mine.get(o["ord_no"], {}).get("tag", "")).startswith(f"예약:{p['id']}:{i} "):
                             self.cancel(o["ord_no"], p["code"])
+                if p.get("ma_confirm") and s_.get("ma") and s_.get("day") == today and s_["filled"] < s_["qty"] and self._ma_confirmed(p, s_)[1]:
+                    # 확인 뒤 건 주문인데 15분봉이 60선 아래로 마감 — 주문을 거두고 다시 버티기를 센다(10-30 사용자)
+                    mine = self._my_orders()
+                    for o in list(self.pending):
+                        if o["code"] == p["code"] and o["side"] == "buy" and str(mine.get(o["ord_no"], {}).get("tag", "")).startswith(f"예약:{p['id']}:{i} "):
+                            self.cancel(o["ord_no"], p["code"])
+                    s_.pop("day", None)
+                    changed = True
+                    self.note(f"{p['name']} 15분봉이 60선 아래 마감 — 버팀 매수 주문 거두고 처음부터")
                 if s_["filled"] >= s_["qty"] or s_.get("day") == today or time.time() < s_.get("wait", 0) or (s_.get("ma") and p.get("ma_dead")):
                     continue
                 if p.get("same_day") and not s_.get("ma"):
@@ -1265,6 +1286,8 @@ class Desk:
                     continue                                                # 이 단계를 살 수 있는 시각 밖
                 if in_aft and not p.get("nxt", True):
                     continue                                                # NXT 에서 안 사고파는 종목 — 애프터엔 못 삼
+                if p.get("mt_down"):
+                    continue                                                # 60선 꺾인 동안 — 안 삼(멈춤 방식)
                 if not self._plan_window(p, now, strict=in_aft):
                     continue                                                # 매수 규칙의 주문 가능 시간 밖 — 새 매수 안 함(예약을 만든 뒤 날에도, 10-22 사용자 "9시 30분부터 매수")
                 if s_.get("ma"):
@@ -1278,8 +1301,7 @@ class Desk:
                         s_.update(price=top, ma_px=mb[0], qty=max(s_["filled"], int(s_["amt"] // top)))
                         changed = True
                     if p.get("ma_confirm"):
-                        top = self._ma_confirmed(p, s_, mb, px)     # 확인되면 지금가 근처 지정가, 아니면 0
-                        changed = True
+                        top = self._ma_confirmed(p, s_)[0]          # 60선 위에서 N개 버텼으면 그 봉 종가 지정가(60선에 안 닿아도), 아니면 0
                         if not top:
                             continue
                         s_.update(price=top, qty=max(s_["filled"], int(s_["amt"] // top)))
@@ -1306,10 +1328,13 @@ class Desk:
                     continue
                 lab = (f"{'정규장' if (s_.get('src') or p['base']) == 'reg' else '애프터'} 15분봉 60선{s_['pct']:+g}% ±{s_.get('band', 0):g}%"
                        if s_.get("ma") else f"{s_['pct']:g}%")
-                r = self.buy(p["code"], left, s_["price"], False, f"예약:{p['id']}:{i} {p['tag']} {lab}", rule=self._plan_rule(p))
+                if p.get("slice"):                                          # 한 주문으로 다 내지 않고 Jev 가 호가 보고 나눠 산다(10-30 사용자)
+                    from . import slicer
+                    r = slicer.start(self, p, i, left, s_["price"], f"예약:{p['id']}:{i} {p['tag']} {lab}", self._plan_rule(p))
+                else:
+                    r = self.buy(p["code"], left, s_["price"], False, f"예약:{p['id']}:{i} {p['tag']} {lab}", rule=self._plan_rule(p))
                 if r["ok"]:
                     s_["day"] = today
-                    s_.pop("arm", None)                                 # 60선 위 마감 확인은 이 주문으로 끝
                     self.tg(f"근접 주문 · {p['name']} {lab} {s_['price']:,}원 × {left:,}주 (현재 {px:,}원)")
                     self._catch_missed(p, i, s_["price"], px, today, hm)
                 else:
@@ -1685,7 +1710,7 @@ class Desk:
                     stages = [{"pct": lv[0], "amt": amount * (engine._num(lv[1], 0) or 0) / 100, **_lv_ex(lv)}
                               for lv in self.levels_for(L, code)]
                     made = self.create_plan(code, L["base"], rd, stages,
-                                     L.get("keep") or {"mode": "today"}, rule["name"], rule.get("exit"), L.get("guard"), L.get("gap"), L.get("drop"), L.get("follow_high"), L.get("ma_stop"), L.get("peak_stop"), L.get("ma_turn"), L.get("rebuy"), L.get("c_near"), L.get("ma_confirm"))
+                                     L.get("keep") or {"mode": "today"}, rule["name"], rule.get("exit"), L.get("guard"), L.get("gap"), L.get("drop"), L.get("follow_high"), L.get("ma_stop"), L.get("peak_stop"), L.get("ma_turn"), L.get("rebuy"), L.get("c_near"), L.get("ma_confirm"), L.get("slice"))
                     if not made.get("ok"):                           # 기준 종가 조회 실패 등 — 그날 막혀 버리지 않게(10-23 점검)
                         self._undo_key(code, prev, key, f"{rule['name']} · {self.name(code)} 예약 못 만듦 — {made.get('msg', '')} · 1분 뒤 다시")
                         continue

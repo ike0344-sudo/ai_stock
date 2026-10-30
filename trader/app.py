@@ -57,6 +57,8 @@ def _code(code: str) -> str:
 def _start() -> None:
     D.start()
     shadow.start(D, _chart_fresh)
+    from . import slicer
+    slicer.run(D)                                                   # Jev 호가 보고 나눠 사기 일감 루프(10-30)
     tgcmd.start(D)                                                     # 텔레그램 말 명령(안전판 — 매도·청산 없음), TRADER_TG_BOT_TOKEN 있을 때만
     _warm(D.watch)
 
@@ -402,6 +404,15 @@ def watch_add(code: str = Body(..., embed=True)):
         feed.set_codes(D.sub_codes())
         _warm([c])
     _ready(c)
+    return {"ok": True}
+
+
+@app.post("/api/watch/order")
+def watch_order(codes: list[str] = Body(..., embed=True)):
+    """고른 종목 순서 바꾸기(10-30 사용자 '드래그해서 순서') — 보낸 순서대로, 빠진 종목은 뒤에 그대로."""
+    want = [c for c in dict.fromkeys(_code(x) for x in codes) if c in D.watch]
+    D.watch = want + [c for c in D.watch if c not in want]
+    desk_mod._write("watch.json", D.watch)
     return {"ok": True}
 
 
