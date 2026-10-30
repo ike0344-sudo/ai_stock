@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>온톨로지 관리</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root { --bg:#0a0d12; --card:#10141b; --line:#1e2530; --line2:#27303c; --chip:#1a212b; --text:#e8ebf0; --dim:#8d96a5;
+  --good:#3fb950; --warn:#e2b65a; --bad:#ff6b6b; --none:#5c6675; --acc:#9b7bff; --dn:#4dabf7; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 'IBM Plex Sans KR', system-ui, sans-serif; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 18px 16px 48px; }
+a { color: var(--dn); }
+.top { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+h1 { font-size: 22px; margin: 0; } h2 { font-size: 15px; margin: 0 0 8px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+h2 .dim { font-weight: 400; }
+.dim { color: var(--dim); font-size: 13px; }
+.mono { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
+.probs { margin-top: 14px; border: 1px solid #5c2328; background: #150b0d; border-radius: 10px; padding: 10px 14px; }
+.probs.ok { border-color: #1f4d2b; background: #0c1710; }
+.probs h2 { color: var(--bad); margin-bottom: 4px; } .probs.ok h2 { color: var(--good); }
+.probs ul { margin: 0; padding-left: 18px; }
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; margin-top: 14px; }
+@media (max-width: 900px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+section.wide { grid-column: 1 / -1; }
+.tbl { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { color: var(--dim); font-weight: 400; text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line2); white-space: nowrap; }
+td { padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+.pill { display: inline-block; min-width: 46px; text-align: center; border-radius: 999px; padding: 0 8px; font-size: 12px; font-weight: 600; border: 1px solid; }
+.pill.good { color: var(--good); border-color: var(--good); } .pill.warn { color: var(--warn); border-color: var(--warn); }
+.pill.bad { color: var(--bad); border-color: var(--bad); } .pill.none { color: var(--none); border-color: var(--none); }
+.bars { display: grid; grid-template-columns: 120px minmax(0, 1fr) 46px; gap: 6px 10px; align-items: center; font-size: 13px; }
+.bar { height: 8px; background: var(--chip); border-radius: 4px; overflow: hidden; }
+.bar i { display: block; height: 100%; }
+.names { margin-top: 8px; font-size: 13px; }
+.names a { margin-right: 8px; }
+.kv { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 4px 10px; font-size: 13px; }
+.arrow { color: var(--dim); }
+button { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line2); border-radius: 8px; padding: 4px 12px; cursor: pointer; }
+button:focus-visible { outline: 2px solid var(--acc); outline-offset: 1px; }
+.load { color: var(--dim); padding: 24px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div><h1>온톨로지 관리</h1><div class="dim">이어 놓은 선이 지금 살아 있는지 — 자료 신선도 · 테마 연결 · 고른 기록 · Jev · 허브 경보. 1분마다 새로 봅니다.</div></div>
+    <div class="dim"><span id="at"></span> · <button type="button" id="re">새로 보기</button> · <a href="/">← 매매 데스크</a> · <a href="/checklist">확인표</a> · <a href="https://claude.ai/artifact/N1URHBumXCgATTFzyASoV7" target="_blank" rel="noopener">설계도</a></div>
+  </div>
+  <div id="body"><p class="load">불러오는 중…</p></div>
+</div>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const W = { good: "좋음", warn: "주의", bad: "나쁨", none: "안 이음" };
+  const pill = (v) => `<span class="pill ${v}">${W[v] || v}</span>`;
+  const col = (p) => p >= 90 ? "var(--good)" : p >= 70 ? "var(--warn)" : "var(--bad)";
+  const bar = (label, p) => `<span>${label}</span><span class="bar"><i style="width:${p}%;background:${col(p)}"></i></span><span class="mono">${p}%</span>`;
+  const names = (xs, t) => xs.length ? `<div class="names"><span class="dim">${t}</span> ${xs.map((x) => `<a href="/card?code=${esc(x.code)}" target="_blank" rel="noopener">${esc(x.name)}</a>`).join("")}</div>` : "";
+  const cov = (c, title, sub) => `<section><h2>${title} <span class="dim">${sub}</span></h2>
+    <div class="bars">${bar("테마 (어느 쪽이든)", c.theme)}${bar("인포스탁 테마", c.info)}${bar("소피 테마", c.sophie)}${bar("섹터표", c.sector)}</div>
+    ${names(c.blank, "테마 빈칸 —")}${names(c.no_sector, "섹터표에 없음 —")}</section>`;
+
+  async function load() {
+    let R;
+    try { const r = await fetch("/api/ontology"); if (!r.ok) throw new Error(r.status); R = await r.json(); }
+    catch (e) { $("body").innerHTML = `<p class="load">못 불러옴 — ${esc(e.message)}</p>`; return; }
+    $("at").textContent = R.now.slice(11, 16) + " 기준";
+    const P = R.problems.length
+      ? `<div class="probs"><h2>지금 손볼 것 ${R.problems.length}건</h2><ul>${R.problems.map((p) => `<li>${esc(p)}</li>`).join("")}</ul></div>`
+      : `<div class="probs ok"><h2>손볼 것 없음 — 모든 선이 살아 있음</h2></div>`;
+    const links = `<section class="wide"><h2>선마다 상태 <span class="dim">설계도의 화살표 하나 = 한 줄</span></h2><div class="tbl"><table>
+      <thead><tr><th>상태</th><th>어디서</th><th></th><th>어디로</th><th>지금</th></tr></thead><tbody>${R.links.map((l) =>
+        `<tr><td>${pill(l.state)}</td><td>${esc(l.from)}</td><td class="arrow">→</td><td>${esc(l.to)}</td><td class="dim">${esc(l.note)}</td></tr>`).join("")}</tbody></table></div></section>`;
+    const src = `<section class="wide"><h2>자료 신선도 <span class="dim">거래일 달력 기준 — 그날 자료가 올라올 시각이 지났는데 없으면 늦음</span></h2><div class="tbl"><table>
+      <thead><tr><th>상태</th><th>자료</th><th>마지막</th><th>판정</th><th>쓰는 곳</th></tr></thead><tbody>${R.sources.map((s) =>
+        `<tr><td>${pill(s.verdict)}</td><td>${esc(s.name)}</td><td class="mono">${esc(s.last || "—")} <span class="dim">${esc(s.extra)}</span></td><td>${esc(s.why)}</td><td class="dim">${esc(s.used)}</td></tr>`).join("")}</tbody></table></div></section>`;
+    const C = R.coverage, J = R.journal, V = R.jev, H = R.hub;
+    const jr = `<section><h2>고른 기록 <span class="dim">최근 30일 ${J.n}건</span></h2><div class="bars">${bar("고를 때 테마", J.theme)}${bar("고른 이유", J.why)}</div>
+      ${J.why === 0 && J.n ? `<p class="dim" style="margin:8px 0 0">고른 이유는 데스크에 적는 칸이 아직 없습니다.</p>` : ""}</section>`;
+    const jv = `<section><h2>Jev 두 번 묻기 <span class="dim">매수 자리에서만 · 기록만</span></h2><div class="kv">
+      <span class="dim">물은 매수 자리</span><span class="mono">${V.asked}건 (배경 넣고 ${V.ctx_asked}건${V.ctx_err ? ` · 오류 ${V.ctx_err}` : ""})</span>
+      <span class="dim">채점 끝난 짝</span><span class="mono">${V.ctx_n} / ${V.need}</span>
+      <span class="dim">맞힌 수</span><span>${V.ctx_n ? `배경 넣은 Jev <b>${V.ctx}</b> · 그냥 Jev <b>${V.ctx_base}</b>${V.ctx_n >= V.need ? (V.ctx > V.ctx_base ? ` ${pill("good")} 배경이 도움 됨` : ` ${pill("bad")} 도움 안 됨`) : ` <span class="dim">— ${V.need}건부터 판정</span>`}` : `<span class="dim">아직 없음 — 매수 자리 30분 뒤 채점</span>`}</span>
+      ${V.err ? `<span class="dim">마지막 오류</span><span style="color:var(--bad)">${esc(V.err)}</span>` : ""}</div></section>`;
+    const hb = `<section class="wide"><h2>허브 경보 <span class="dim">텔레그램으로 가는 데이터 허브 경보 · 같은 건은 하루 한 번</span></h2><div class="kv">
+      <span class="dim">지금 울리는 중</span><span>${H.active.length ? H.active.map((a) => `${pill("bad")} ${esc(a.title)} <span class="dim">${esc(a.target)} · ${esc(a.since.slice(11, 16))}부터</span>`).join("<br>") : pill("good")}</span>
+      <span class="dim">오늘 수집 포기</span><span>${H.given_up.length ? H.given_up.map((g) => `${pill("bad")} ${esc(g.label)} ${g.tries}번 실패 <span class="dim">${esc(String(g.error).slice(0, 90))}</span>`).join("<br>") : pill("good")}</span>
+      <span class="dim">오늘 보낸 경보</span><span>${H.sent_today.length ? H.sent_today.map((s) => `<span class="mono">${esc(s.ts.slice(11, 16))}</span> ${esc(s.message)}`).join("<br>") : `<span class="dim">없음</span>`}</span></div></section>`;
+    $("body").innerHTML = P + `<div class="grid">${links}${src}
+      ${cov(C.mine, "관심·보유 종목", `${C.mine.n}종목`)}${cov(C.ledger, "최근 신고대금 종목", `${C.ledger.n}종목 · ${esc(C.ledger_since)} 이후 · 그날까지 테마`)}
+      ${jr}${jv}${hb}</div>`;
+  }
+  $("re").onclick = load;
+  load();
+  setInterval(() => { if (!document.hidden) load(); }, 60000);
+})();
+</script>
+</body>
+</html>

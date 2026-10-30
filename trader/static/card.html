@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>종목 한 장</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root { --bg:#0a0d12; --card:#10141b; --line:#1e2530; --line2:#27303c; --chip:#1a212b; --text:#e8ebf0; --dim:#8d96a5;
+  --up:#ff6b6b; --dn:#4dabf7; --gap:#9b7bff; --ok:#3fb950; --acc:#e2b65a; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 'IBM Plex Sans KR', system-ui, sans-serif; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 16px 16px 48px; }
+a { color: var(--dn); }
+.top { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
+h1 { font-size: 22px; margin: 0; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.code { font: 14px 'JetBrains Mono', monospace; color: var(--dim); }
+.mono, td.n { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
+.up { color: var(--up); } .dn { color: var(--dn); } .dim { color: var(--dim); font-size: 13px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
+.chip { border: 1px solid var(--line2); background: var(--chip); border-radius: 999px; padding: 2px 10px; font-size: 13px; }
+.chip b { font-weight: 600; } .chip.gap { border-color: var(--gap); color: var(--gap); background: transparent; border-style: dashed; }
+.chip.on { border-color: var(--acc); color: var(--acc); }
+.gaps { border: 1px dashed var(--gap); border-radius: 8px; padding: 8px 12px; margin: 10px 0 0; color: var(--gap); font-size: 13px; }
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; margin-top: 14px; }
+@media (max-width: 900px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+section.wide { grid-column: 1 / -1; }
+h2 { font-size: 15px; margin: 0 0 8px; display: flex; gap: 8px; align-items: baseline; }
+h2 .dim { font-weight: 400; }
+.tbl { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { color: var(--dim); font-weight: 400; text-align: right; padding: 3px 6px; border-bottom: 1px solid var(--line2); white-space: nowrap; }
+td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th:first-child, td:first-child, td.l, th.l { text-align: left; }
+.g-buy { color: var(--up); } .g-skip { color: var(--dim); }
+.empty { color: var(--dim); font-size: 13px; padding: 6px 0; }
+.trade { border-bottom: 1px solid var(--line); padding: 8px 0; } .trade:last-child { border-bottom: 0; }
+.trade .h { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+.trade ul { margin: 4px 0 0; padding-left: 18px; font-size: 13px; }
+.verdict { font-weight: 600; }
+.search { position: relative; }
+.search input { background: var(--card); color: var(--text); border: 1px solid var(--line2); border-radius: 8px; padding: 6px 10px; font: inherit; width: 220px; }
+.search input:focus, button:focus-visible { outline: 2px solid var(--acc); outline-offset: 1px; }
+#hits { position: absolute; right: 0; top: 38px; z-index: 5; background: var(--card); border: 1px solid var(--line2); border-radius: 8px; min-width: 220px; max-height: 300px; overflow: auto; }
+#hits button { display: block; width: 100%; text-align: left; background: none; border: 0; color: var(--text); padding: 6px 10px; font: inherit; cursor: pointer; }
+#hits button:hover, #hits button.sel { background: var(--chip); }
+.load { color: var(--dim); padding: 30px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <h1 id="title">종목 한 장</h1>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      <div class="search"><input id="q" type="search" placeholder="종목 이름·코드" aria-label="다른 종목 찾기" autocomplete="off"><div id="hits" hidden></div></div>
+      <a href="/" id="back">← 매매 데스크</a>
+    </div>
+  </div>
+  <div id="body"><p class="load">종목을 찾아 고르세요.</p></div>
+</div>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const won = (v) => v == null ? "—" : Math.round(v).toLocaleString("ko-KR");
+  const sgn = (v, d = 1) => v == null ? "—" : `<span class="${v > 0 ? "up" : v < 0 ? "dn" : ""}">${v > 0 ? "+" : ""}${(+v).toFixed(d)}%</span>`;
+  const frac = (v) => v == null ? "—" : sgn(v * 100);
+  const verdict = (v) => v == null ? "" : v > 0 ? `<span class="verdict up">좋음</span>` : v < 0 ? `<span class="verdict dn">나쁨</span>` : "본전";
+  const tm = (s) => (s || "").replace("T", " ").slice(5, 16);
+  const table = (head, rows) => rows.length ? `<div class="tbl"><table><thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>` : "";
+  let code = new URLSearchParams(location.search).get("code") || "";
+  if (window.top !== window) $("back").hidden = true;                 // 데스크 안에서 열렸으면 '데스크로' 링크는 필요 없다
+
+  async function load() {
+    if (!code) return;
+    $("body").innerHTML = `<p class="load">불러오는 중…</p>`;
+    let C;
+    try { const r = await fetch(`/api/card?code=${encodeURIComponent(code)}`); if (!r.ok) throw new Error((await r.json()).detail || r.status); C = await r.json(); }
+    catch (e) { $("body").innerHTML = `<p class="load">못 불러옴 — ${esc(e.message)}</p>`; return; }
+    document.title = `${C.name} · 종목 한 장`;
+    $("title").innerHTML = `${esc(C.name)} <span class="code">${esc(C.code)}</span>`
+      + (C.px ? ` <span class="mono" style="font-size:18px">${won(C.px)}</span> ${sgn(C.chg, 2)}` : "");
+    const th = C.theme || {};
+    const chips = [
+      C.sector ? `<span class="chip">섹터 <b>${esc(C.sector.sector)}</b> · ${esc(C.sector.sub)}</span>` : `<span class="chip gap">섹터 빈칸</span>`,
+      th.theme ? `<span class="chip">소피 테마 <b>${esc(th.theme)}</b>${th.sub ? " · " + esc(th.sub) : ""} <span class="dim">${esc(th.day)}</span></span>` : "",
+      ...(C.info_themes || []).slice(0, 4).map((t) => `<span class="chip">인포스탁 <b>${esc(t.theme)}</b> <span class="dim">${esc(t.last.slice(5))}${t.n > 1 ? " · " + t.n + "번" : ""}${t.kind === "table" ? " · 표" : ""}</span></span>`),
+      !th.theme && !(C.info_themes || []).length ? `<span class="chip gap">테마 빈칸</span>` : "",
+      C.holding ? `<span class="chip on">보유 ${won(C.holding.quantity)}주</span>` : "",
+      C.watch ? `<span class="chip on">데스크 관심</span>` : "",
+      C.pending.length ? `<span class="chip on">미체결 ${C.pending.length}건</span>` : "",
+    ].join("");
+    const gaps = C.gaps.length ? `<div class="gaps">이어지지 않은 곳 · ${C.gaps.map(esc).join(" · ")}</div>` : "";
+
+    // 신고대금 이력
+    const G = { buy: `<span class="g-buy">산다</span>`, skip: `<span class="g-skip">안 산다</span>` };
+    const led = table(["날짜", "대금(억)", "직전 최대", "배수", "등락", "정규장(억)", "5일 뒤", "20일 뒤", "내 판정"], C.ledger.map((r) =>
+      `<tr><td class="mono">${r.day}${r.full ? "" : ` <span class="dim">정규장만</span>`}</td><td class="n">${won(r.eok)}</td><td class="n">${won(r.prev)}</td>`
+      + `<td class="n">${r.x == null ? "—" : r.x.toFixed(2)}</td><td class="n">${sgn(r.chg)}</td><td class="n">${won(r.reg_eok)}</td>`
+      + `<td class="n">${sgn(r.d5)}</td><td class="n">${sgn(r.d20)}</td><td>${G[r.grade] || `<span class="dim">—</span>`}</td></tr>`));
+
+    // 소피 프로그램 주도 신호
+    const prog = table(["날짜 · 시각", "종류", "가격", "등락", "결과", "구간"], C.program.map((r) =>
+      `<tr><td class="mono">${esc((r.d || "").slice(5))} ${esc((r.t || "").slice(0, 5))}</td><td class="l">${esc(r.kind)}</td><td class="n">${won(r.price)}</td>`
+      + `<td class="n">${sgn(r.chg)}</td><td class="n">${r.pnl == null ? "—" : sgn(r.pnl, 2)}</td><td class="l dim">${esc(r.session || "")}</td></tr>`));
+
+    // 고른 기록 · 매매
+    const legs = (xs, side) => (xs || []).map((x) => `<li><span class="${side === "매수" ? "up" : "dn"}">${side}</span> ${tm(x[0])} · <span class="mono">${won(x[1])}주 × ${won(x[2])}원</span> <span class="dim">${esc(String(x[3] || "").slice(0, 60))}</span></li>`).join("");
+    const trades = C.journal.map((j) => `<div class="trade"><div class="h"><b class="mono">${tm(j.picked)}</b> <span class="dim">고름 · ${esc(j.src || "")}${j.ref_day ? " · 기준일 " + esc(j.ref_day) : ""}</span>`
+      + (j.pnl ? ` <span class="mono">비용 뺀 손익 ${j.pnl.net >= 0 ? "+" : ""}${won(j.pnl.net)}원</span> ${sgn(j.pnl.pct, 2)} ${verdict(j.pnl.net)} <span class="dim">(수수료 ${won(j.pnl.fee)} · 세금 ${won(j.pnl.tax)})</span>`
+        : j.closed ? "" : ` <span class="chip on">진행 중</span>`)
+      + `</div>${(j.themes_at || []).length ? `<div class="dim">고를 때 테마 · ${j.themes_at.map(esc).join(" · ")}</div>` : ""}${j.why ? `<div>${esc(j.why)}</div>` : ""}<ul>${legs(j.buys, "매수")}${legs(j.sells, "매도")}</ul></div>`).join("");
+
+    // 데스크 지금
+    const h = C.holding;
+    const now = [
+      h ? `<p style="margin:0 0 6px">보유 <span class="mono">${won(h.quantity)}주 · 평균 ${won(h.avg_price)}원</span> · 평가 ${sgn(h.pl_pct, 2)} <span class="mono">${h.pl_amount >= 0 ? "+" : ""}${won(h.pl_amount)}원</span> <span class="dim">비용 빼기 전</span></p>` : "",
+      C.pending.length ? table(["미체결", "수량", "가격"], C.pending.map((p) => `<tr><td class="l">${p.side === "sell" ? `<span class="dn">매도</span>` : `<span class="up">매수</span>`} <span class="dim">${esc(p.ord_no || "")}</span></td><td class="n">${won(p.qty)}</td><td class="n">${won(p.price)}</td></tr>`)) : "",
+      table(["계획", "상태", "단계 (체결/수량 @ 가격)"], C.plans.map((p) => `<tr><td class="l">${esc((p.created || "").slice(5, 10))} <span class="dim">${esc((p.tag || "").slice(0, 28))}</span></td><td class="l ${p.active ? "up" : "dim"}">${esc(p.status || (p.active ? "진행" : ""))}</td>`
+        + `<td class="l mono" style="white-space:normal">${(p.stages || []).map((s) => `${won(s.filled)}/${won(s.qty)} @ ${won(s.price)}`).join(" · ")}</td></tr>`)),
+    ].join("") || `<p class="empty">데스크에 이 종목 기록이 없습니다.</p>`;
+
+    // 성적표
+    const outs = table(["날짜", "구분", "가격", "그날", "1일", "3일", "5일", "5일 안 최저", "최고"], C.outcomes.map((r) =>
+      `<tr><td class="mono">${esc(String(r.day).replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3"))}</td><td class="l">${esc(r.kind)}</td><td class="n">${won(r.price)}</td><td class="n">${frac(r.d0)}</td><td class="n">${frac(r.d1)}</td>`
+      + `<td class="n">${frac(r.d3)}</td><td class="n">${frac(r.d5)}</td><td class="n">${frac(r.low5)}</td><td class="n">${frac(r.high5)}</td></tr>`));
+
+    const emp = (t) => `<p class="empty">${t}</p>`;
+    $("body").innerHTML = `<div class="chips">${chips}</div>${gaps}<div class="grid">
+      <section class="wide"><h2>신고대금 이력 <span class="dim">${C.ledger.length}번 · 1,000억 이상 · 비용 빼기 전 등락</span></h2>${led || emp("신고대금 장부에 없습니다.")}</section>
+      <section class="wide"><h2>테마 이력 <span class="dim">인포스탁 데일리 테마 · 최근 60거래일에 나온 날 · 문장 = 글이 직접 말한 소속, 표 = 테마별 상위 종목 표</span></h2>${
+        (C.theme_history || []).length ? table(["날짜", "테마", "근거"], C.theme_history.map((h) => `<tr><td class="mono">${esc(h.day)}</td>`
+          + `<td class="l" style="white-space:normal">${h.themes.map((t) => `${esc(t.theme)}${t.kind === "table" ? ` <span class="dim">표</span>` : ""}`).join(" · ")}</td>`
+          + `<td class="l dim" style="white-space:normal">${esc((h.themes[0] || {}).head || "")}</td></tr>`)) : emp("최근 60거래일 인포스탁 데일리 테마에 나온 적이 없습니다.")}</section>
+      <section><h2>소피 프로그램 주도 신호 <span class="dim">최근 ${C.program.length}건</span></h2>${prog || emp("소피 프로그램 신호 기록이 없습니다.")}</section>
+      <section><h2>데스크 지금</h2>${now}</section>
+      <section class="wide"><h2>고른 기록 · 매매 <span class="dim">${C.journal.length}건 · 수수료 각 0.015% · 매도세 0.20% 뺀 값, 슬리피지 없음</span></h2>${trades || emp("고른 기록이 없습니다.")}</section>
+      <section class="wide"><h2>성적표 <span class="dim">계획이 끝난 것만 · 첫 단계 가격에 샀다고 치고 비용 뺀 값</span></h2>${outs || emp("아직 끝난 계획이 없어 성적이 없습니다.")}</section>
+    </div>`;
+  }
+
+  // 다른 종목 찾기
+  let hits = [], sel = 0, tmr;
+  const go = (c) => { code = c; $("hits").hidden = true; $("q").value = ""; history.replaceState(null, "", `?code=${c}`); load(); };
+  const draw = () => { $("hits").hidden = !hits.length; $("hits").innerHTML = hits.map((h, i) => `<button type="button" data-c="${h.code}" class="${i === sel ? "sel" : ""}">${esc(h.name)} <span class="code">${h.code}</span></button>`).join(""); };
+  $("q").addEventListener("input", () => { clearTimeout(tmr); tmr = setTimeout(async () => { const q = $("q").value.trim(); hits = q ? await (await fetch(`/api/search?q=${encodeURIComponent(q)}`)).json() : []; sel = 0; draw(); }, 150); });
+  $("q").addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); sel = (sel + (e.key === "ArrowDown" ? 1 : hits.length - 1)) % Math.max(hits.length, 1); draw(); }
+    else if (e.key === "Enter" && hits[sel]) { e.preventDefault(); go(hits[sel].code); }
+    else if (e.key === "Escape" && !$("hits").hidden) { e.stopPropagation(); $("hits").hidden = true; }
+  });
+  // 데스크 안에서 열렸으면 Esc 로 닫기(포커스가 이 안에 있으면 데스크 쪽 대화창이 Esc 를 못 받는다)
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && window.top !== window) { try { window.parent.document.getElementById("cardDlg")?.close(); } catch {} } });
+  $("hits").addEventListener("click", (e) => { const b = e.target.closest("[data-c]"); if (b) go(b.dataset.c); });
+  load();
+})();
+</script>
+</body>
+</html>

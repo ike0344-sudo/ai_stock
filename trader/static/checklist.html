@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>고친 것 확인표</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root { --bg:#0a0d12; --card:#10141b; --line:#1e2530; --line2:#27303c; --chip:#1a212b; --text:#e8ebf0; --dim:#8d96a5;
+  --ok:#3fb950; --fail:#ff6b6b; --wait:#e2b65a; --real:#74c0fc; --acc:#9b7bff; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 'IBM Plex Sans KR', system-ui, sans-serif; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 20px 16px 60px; }
+h1 { font-size: 22px; margin: 0; } h2 { font-size: 16px; margin: 26px 0 8px; color: var(--acc); }
+.dim { color: var(--dim); font-size: 13px; }
+a { color: var(--real); }
+.top { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: baseline; justify-content: space-between; }
+.sum { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 4px; }
+.sum button { border: 1px solid var(--line2); background: var(--card); color: var(--text); border-radius: 999px; padding: 4px 12px; font: inherit; cursor: pointer; }
+.sum button[aria-pressed="true"] { border-color: var(--text); background: var(--chip); }
+.sum b { font-family: 'JetBrains Mono', monospace; margin-left: 4px; }
+.row { display: grid; grid-template-columns: 30px minmax(0, 1.3fr) minmax(0, 1fr) 180px minmax(0, 0.9fr); gap: 12px; align-items: center;
+  padding: 10px 8px; border-bottom: 1px solid var(--line); }
+.row.head { color: var(--dim); font-size: 12px; padding-top: 0; }
+.num { font-family: 'JetBrains Mono', monospace; color: var(--dim); }
+.what { font-weight: 500; } .how { color: #c9cfd8; font-size: 13px; }
+.seg { display: inline-flex; gap: 4px; }
+.seg button { width: 32px; height: 32px; border: 1px solid transparent; border-radius: 8px; background: transparent; font-size: 15px; line-height: 1;
+  cursor: pointer; opacity: .28; filter: grayscale(1); transition: opacity .12s; }
+.seg button:hover { opacity: .7; filter: none; }
+.seg button[aria-pressed="true"] { opacity: 1; filter: none; }
+.seg button[aria-pressed="true"][data-s="ok"] { background: #10301a; border-color: var(--ok); }
+.seg button[aria-pressed="true"][data-s="sim"] { background: #1c1730; border-color: var(--acc); }
+.seg button[aria-pressed="true"][data-s="fail"] { background: #3a1216; border-color: var(--fail); }
+.seg button[aria-pressed="true"][data-s="wait"] { background: #2e250e; border-color: var(--wait); }
+.seg button[aria-pressed="true"][data-s="real"] { background: #0f2236; border-color: var(--real); }
+.note { width: 100%; min-height: 32px; resize: vertical; background: var(--card); color: var(--text); border: 1px solid var(--line2); border-radius: 6px;
+  padding: 5px 8px; font: 13px/1.5 inherit; font-family: inherit; }
+.note:focus, .seg button:focus-visible, .sum button:focus-visible { outline: 2px solid var(--acc); outline-offset: 1px; }
+.upd { color: var(--dim); font-size: 11px; font-weight: 400; margin-top: 2px; }
+.row.fail { background: #1d0f12; }
+.imp { border: 1px solid #5c2328; background: #150b0d; border-radius: 10px; padding: 4px 12px 2px; margin-top: 18px; }
+.imp h2 { color: var(--fail); margin-top: 12px; }
+.imp .row:last-child { border-bottom: 0; }
+.risk { color: #ff9b9b; font-size: 12px; font-weight: 400; margin-top: 2px; }
+.from { display: inline-block; margin-left: 6px; padding: 0 6px; border: 1px solid var(--line2); border-radius: 4px; color: var(--dim); font-size: 11px; font-weight: 400; }
+.dec { border: 1px solid #5a4a22; background: #17130a; border-radius: 8px; padding: 10px 12px; margin-top: 8px; }
+.saved { color: var(--ok); font-size: 12px; margin-left: 6px; }
+@media (max-width: 860px) {
+  .row { grid-template-columns: 30px minmax(0, 1fr); }
+  .row.head { display: none; }
+  .row > :nth-child(n+3) { grid-column: 2; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div><h1 id="title">고친 것 확인표</h1><div class="dim" id="rule"></div></div>
+    <div class="dim"><a href="/">← 매매 데스크</a> · <a href="/guide">설명서</a></div>
+  </div>
+  <div class="sum" id="sum" role="group" aria-label="상태로 거르기"></div>
+  <div id="list"></div>
+  <h2>정해야 할 것</h2>
+  <div id="decide"></div>
+</div>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const ST = [["ok", "✅ 됨"], ["sim", "🧪 시험됨"], ["fail", "❌ 안 됨"], ["wait", "⏳ 아직"], ["real", "🔒 실계좌"]];
+  let C = null, filter = "all";
+  const post = (body) => fetch("/api/checklist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+    .then((r) => r.ok ? r.json() : r.json().then((e) => Promise.reject(new Error(e.detail || r.status))));
+
+  const row = (i) => `<div class="row ${i.status}" data-id="${i.id}">
+    <span class="num">${i.id}</span><div class="what">${esc(i.what)}${i.important ? `<span class="from">${esc(i.group)}</span><div class="risk">${esc(i.important)}</div>` : ""}<div class="upd">${esc(i.updated || "")}</div></div><div class="how">${esc(i.how)}</div>
+    <div class="seg" role="group" aria-label="${i.id}번 상태">${ST.map(([s, t]) => `<button type="button" data-s="${s}" aria-pressed="${i.status === s}" title="${t.split(" ").slice(1).join(" ")}" aria-label="${t.split(" ").slice(1).join(" ")}">${t.split(" ")[0]}</button>`).join("")}</div>
+    <div><textarea class="note" rows="2" aria-label="${i.id}번 메모">${esc(i.note)}</textarea></div></div>`;
+  function render() {
+    $("title").textContent = C.title || "고친 것 확인표";
+    $("rule").textContent = C.rule || "";
+    const n = (s) => C.items.filter((i) => i.status === s).length;
+    $("sum").innerHTML = [["all", `전체`, C.items.length], ...ST.map(([s, t]) => [s, t, n(s)])]
+      .map(([s, t, k]) => `<button type="button" data-f="${s}" aria-pressed="${filter === s}">${t}<b>${k}</b></button>`).join("");
+    // 가장 중요한 것(돈이 걸린 것)은 맨 위에 따로 — 아래 묶음에선 뺀다(10-23 사용자 "가장 중요한 문제는 따로 표시")
+    const shown = (i) => filter === "all" || i.status === filter;
+    const imp = C.items.filter((i) => i.important && shown(i));
+    const groups = [...new Set(C.items.map((i) => i.group))];
+    const head = `<div class="row head"><span>#</span><span>고친 것</span><span>확인하는 법</span><span>상태</span><span>메모 (Enter 또는 칸 밖 누르면 저장)</span></div>`;
+    $("list").innerHTML = (imp.length ? `<div class="imp"><h2>가장 중요 — 안 되면 돈을 잃는 것</h2>${head}${imp.map(row).join("")}</div>` : "") + groups.map((g) => {
+      const rows = C.items.filter((i) => i.group === g && !i.important && shown(i));
+      if (!rows.length) return "";
+      return `<h2>${esc(g)}</h2>${head}`
+        + rows.map(row).join("");
+    }).join("") || `<p class="dim">이 상태인 항목이 없습니다</p>`;
+    $("decide").innerHTML = (C.decide || []).map((d) => `<div class="dec" data-id="${d.id}"><div>${esc(d.text)}</div>
+      <textarea class="note" rows="2" style="margin-top:8px" aria-label="답">${esc(d.answer)}</textarea></div>`).join("") || `<p class="dim">없음</p>`;
+  }
+
+  async function save(id, body, el) {
+    try { C = await post({ id: String(id), ...body }); if (!el) render(); else { const s = document.createElement("span"); s.className = "saved"; s.textContent = "저장됨"; el.after(s); setTimeout(() => s.remove(), 1500); } }
+    catch (e) { alert("저장 못 함 — " + e.message); }
+  }
+  document.addEventListener("click", (e) => {
+    const f = e.target.closest("[data-f]"); if (f) { filter = f.dataset.f; render(); return; }
+    const b = e.target.closest(".seg [data-s]"); if (b) save(b.closest("[data-id]").dataset.id, { status: b.dataset.s });
+  });
+  const saveNote = (t) => { const box = t.closest("[data-id]"); if (!box || t._v === t.value) return; t._v = t.value;
+    save(box.dataset.id, box.classList.contains("dec") ? { answer: t.value } : { note: t.value }, t); };
+  document.addEventListener("focusin", (e) => { if (e.target.matches(".note")) e.target._v = e.target.value; });
+  document.addEventListener("focusout", (e) => { if (e.target.matches(".note")) saveNote(e.target); });
+  document.addEventListener("keydown", (e) => { if (e.target.matches(".note") && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveNote(e.target); } });
+  fetch("/api/checklist").then((r) => r.json()).then((c) => { C = c; render(); });
+})();
+</script>
+</body>
+</html>

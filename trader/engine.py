@@ -96,6 +96,15 @@ def _num(v, default=None):
         return default
 
 
+def level_opts(lv) -> dict:
+    """매수 단계 [pct, 금액%, {옵션}] 의 옵션(10-20 사용자) — ma: 15분봉 60선 근접 %(있으면 60선 단계, pct 는 60선 대비 %),
+    from/to: 그 단계를 살 수 있는 시각 "HH:MM"(to 는 그 시각 전까지). → {"band": 근접%|None, "t0": "HHMM"|None, "t1": "HHMM"|None}"""
+    o = lv[2] if len(lv) > 2 and isinstance(lv[2], dict) else {}
+    t = lambda k: str(o.get(k) or "").replace(":", "").strip()[:4] or None   # noqa: E731
+    return {"band": abs(_num(o.get("ma"), 1) or 0) if "ma" in o else None, "t0": t("from"), "t1": t("to"),
+            "src": o.get("src") if o.get("src") in ("reg", "aft") else None}   # 60선 봉 — 단계마다 정규장/애프터(10-21 사용자 "나눠 사기"), 없으면 규칙 기준
+
+
 def exit_actions(pos: dict, price: float, now: datetime, exits: dict) -> list[dict]:
     """보유 종목 하나에 지금 내야 할 청산 주문들. 먼저 닿는 것부터 — 전량 청산이 나오면 그것 하나만.
 
@@ -117,10 +126,20 @@ def exit_actions(pos: dict, price: float, now: datetime, exits: dict) -> list[di
         stop_px = max(stop_px or 0, avg)
     if stop_px is not None and price <= stop_px:
         return [{"kind": "stop", "qty": qty, "market": True, "why": f"손절선 {stop_px:,.0f} 이탈"}]
+    # 15분봉 60선 엔벨로프 하단 이탈(10-20 사용자 "60선 엔벨로프 6% 하단을 깰 때") — ma_env: [on, pct, "reg"|"aft"], 60선 값은 desk 가 pos["ma60"] 로
+    if on("ma_env") and pos.get("ma60"):
+        env = float(pos["ma60"]) * (1 - abs(_num(exits["ma_env"][1], 6) or 0) / 100)
+        if price < env:
+            return [{"kind": "stop", "qty": qty, "market": True, "why": f"15분봉 60선 엔벨로프 −{abs(_num(exits['ma_env'][1], 6) or 0):g}% 하단 {env:,.0f} 이탈", "line": env}]
 
+    # 되밀림이 켜지는 때(10-19 사용자) — trail[2]: take1 = 1차 익절이 체결된 뒤(기본, 분할 익절이 꺼져 있으면 평단 위로 오른 뒤)
+    # · gain = 고가가 평단 +trail[3]% 를 넘은 뒤 · always = 평단 위로 한 번이라도 오른 뒤. breakeven = 익절 매도가 실제로 체결됐다는 표시(desk.on_order)
     if on("trail"):
-        tp, high = _num(exits["trail"][1]), float(pos.get("high") or 0)
-        if tp is not None and high > avg and price <= high * (1 - abs(tp) / 100):
+        tr = list(exits["trail"]) + [None, None]
+        tp, high, when = _num(tr[1]), float(pos.get("high") or 0), tr[2] or "take1"
+        armed = (bool(pos.get("breakeven")) if when == "take1" and on("take") else
+                 high >= avg * (1 + abs(_num(tr[3], 0) or 0) / 100) if when == "gain" else True)
+        if tp is not None and armed and high > avg and price <= high * (1 - abs(tp) / 100):
             return [{"kind": "trail", "qty": qty, "market": True, "why": f"고점 {high:,.0f} 대비 −{abs(tp)}%"}]
 
     if on("close"):
@@ -190,11 +209,12 @@ def safety_block(safety: dict, day: dict, positions: list, notional: int, equity
 # 시가총액은 상장주식수 캐시 × 현재가. 값을 못 구하면(일봉 백필 전 등) 그 조건은 '만족 안 함'.
 SUPPORTED = {"정규장 종가 대비", "애프터 종가 대비", "고점 대비 하락률(첫 도달)", "등락률", "거래대금",
              "시장", "같은 테마 장대양봉 종목 수", "52주 신고가 대비", "체결강도", "시가총액",
-             "최근 장대양봉 고가 대비", "장대양봉일 52주 고가 돌파폭"}
+             "최근 장대양봉 고가 대비", "장대양봉일 52주 고가 돌파폭", "52주 신고대금 대비(애프터)", "52주 신고대금 대비(정규장)",
+             "거래대금(애프터)", "거래대금(정규장)", "60선 차이(애프터−정규장)"}
 TEXT_FIELDS = {"시장"}
 
 
-def cond_value(field: str, snap: dict) -> float | str | None:
+def cond_value(field: str, snap: dict, days=None) -> float | str | None:
     f = snap.get("facts") or {}
     big = f.get("big")
     if field == "시장":
@@ -224,9 +244,51 @@ def cond_value(field: str, snap: dict) -> float | str | None:
         return (px / snap["high"] - 1) * 100 if snap.get("high") else None
     if field == "등락률":
         return snap.get("chg")
-    if field == "거래대금":
+    if field in ("거래대금", "거래대금(애프터)"):                   # 오늘 누적 — 통합(_AL) 08:00~20:00 하루 전체
         return (snap.get("value") or 0) / 1e8                     # 억원
+    if field == "거래대금(정규장)":                                # 오늘 09:00~15:30 몫(desk.reg_value) — 못 쟀으면 판단 안 함
+        return snap["value_reg"] / 1e8 if snap.get("value_reg") is not None else None
+    if field == "60선 차이(애프터−정규장)":
+        # 통합(애프터) 15분봉 60선 ÷ 정규장 15분봉 60선 − 1(%) — 1% 넘게 위면 장 마감 뒤에도 사는 힘이 셌던 종목(10-21 장부 52건: +4.0% vs −2.8%)
+        return snap.get("ma_gap")
+    if field.startswith("52주 신고대금 대비"):
+        # 오늘 누적 대금 ÷ 어제까지 245거래일 최대 − 1(%) — 0 이상이면 신고대금(10-20 사용자). 애프터 = 하루 전체(통합) 최대와,
+        # 정규장 = 정규장 몫 최대와 견준다. 장중엔 정규장 몫을 못 갈라 통합 누적 대금을 쓴다(신고대금 장부 장중 화면과 같은 추정 — 장전 NXT 포함)
+        # days = '신고대금 난 뒤 N거래일까지 유지'(10-20 사용자) — 지난 N거래일 안 신고일(장부, 1,000억 이상)의 비율도 같이 보고 큰 값
+        vr, b = snap.get("vref") or {}, "reg" if field.endswith("(정규장)") else "aft"
+        ref = vr.get(b)
+        today = snap.get("value_reg") if b == "reg" and snap.get("value_reg") is not None else snap.get("value")   # 정규장 몫을 쟀으면 그걸로
+        live = ((today or 0) / 1e8 / ref - 1) * 100 if ref else None
+        n = int(_num(days, 0) or 0)
+        past = [x for k, x in (vr.get("hist") or {}).get(b, []) if 1 <= k <= n]
+        return max([x for x in [live, *past] if x is not None], default=None)
     return None
+
+
+def peak_pct(peak_stop: dict | None, cap_eok: float | None) -> float | None:
+    """오른 뒤 재매수 금지 % — 시총(억)이 big.cap 이상이면 big.pct(10-21 사용자 "시총에 따라 바꾸자"). 꺼져 있으면 None."""
+    ps = peak_stop or {}
+    if not ps.get("on"):
+        return None
+    big = ps.get("big") or {}
+    cap_min = _num(big.get("cap"), None)
+    if cap_min is not None and cap_eok is not None and cap_eok >= cap_min and _num(big.get("pct"), None) is not None:
+        return abs(_num(big["pct"]))
+    return abs(_num(ps.get("pct"), 10) or 10)
+
+
+def peak_anchor(days: list, rd: str, window: int = 21, min_chg: float | None = None) -> str:
+    """오른 뒤 재매수 금지의 기준일 — 연달아 나온 신고대금의 첫 날(10-21 사용자 "10/16 → 10/20 → 10/21 신고대금이 자꾸 올라가서 높은 데서 사게 된다").
+    rd 앞 window 달력일 안의 신고대금 날 중 가장 이른 날, 그 앞으로도 window 안에 이어지면 계속 거슬러 간다. days·rd 는 'YYYY-MM-DD'.
+    days 가 (날짜, 그날 상승률) 이면 min_chg 이상 오른 신고대금만 잇는다(10-21 사용자 "9월 28일(−1.3%)은 빼야") — rd 자신은 늘 포함."""
+    from datetime import date as _d, timedelta as _td
+    pairs = [x if isinstance(x, (tuple, list)) else (x, None) for x in days]
+    ds = sorted({d for d, ch in pairs if d <= rd and (min_chg is None or (ch is not None and ch >= min_chg))})
+    cur = rd
+    for x in reversed(ds):
+        if _d.fromisoformat(cur) - _d.fromisoformat(x) <= _td(days=window):
+            cur = min(cur, x)
+    return cur
 
 
 def conds_met(conds: list, snap: dict) -> tuple[bool, list[str]]:
@@ -234,8 +296,9 @@ def conds_met(conds: list, snap: dict) -> tuple[bool, list[str]]:
     unsupported = [c[0] for c in conds if c[0] not in SUPPORTED]
     if unsupported:
         return False, unsupported
-    for field, op, raw in conds:
-        v = cond_value(field, snap)
+    for c in conds:
+        field, op, raw = c[0], c[1], c[2]
+        v = cond_value(field, snap, c[3] if len(c) > 3 else None)
         if field in TEXT_FIELDS:
             if v is None or (op == "같음") != (str(v) == str(raw).strip()):
                 return False, []
@@ -252,3 +315,38 @@ def conds_met(conds: list, snap: dict) -> tuple[bool, list[str]]:
         if op in ("사이", "아님"):
             return False, [f"{field} {op}"]
     return True, []
+
+
+def per_stock_amount(amount, safety: dict, equity: float, lev: float = 1.0) -> int:
+    """1종목당 금액(원) — 매매 데스크와 백테스트가 같이 쓴다.
+    "15000000" = 그 금액 · "100%" = 평가금의 100% ÷ 동시 보유 최대(종목당 최대 비중이 상한) ·
+    비움 = 평가금 × min(종목당 최대 비중, 100 ÷ 동시 보유 최대). 다 비어 있으면 0(안 삼).
+    lev = 미수·신용 배수(10-19 사용자) — 평가금 대신 평가금 × lev 를 기준으로 쓴다(원 금액은 그대로)."""
+    raw = str(amount or "").strip()
+    equity = equity * max(1.0, lev)
+    w, n = _num(safety.get("max_weight_pct"), 0) or 0, int(_num(safety.get("max_positions"), 0) or 0)
+    if raw.endswith("%"):
+        p = (_num(raw, 0) or 0) / (n if n > 0 else 1)
+        p = min(p, w) if w > 0 else p
+        return int(equity * p / 100) if p > 0 else 0
+    amt = int(_num(raw, 0) or 0)
+    if amt > 0:
+        return amt
+    ws = [x for x in (w, 100 / n if n > 0 else 0) if x > 0]
+    return int(equity * min(ws) / 100) if ws else 0
+
+
+def leverage(safety: dict, margin_rate: float | None = None, credit_ok: bool | None = None) -> tuple[float, str]:
+    """(배수, 방식) — 매수 방식(현금/미수/신용)과 종목 사정으로 정한다. 종목이 안 되면 현금(1배)로 돌아간다.
+    미수: 100 ÷ 종목 증거금률(키움 kt00011), 최대 '미수 최대 배수'까지 · 신용: '신용 배수'(신용 가능 종목만, 키움 kt20017)."""
+    mode = safety.get("buy_mode") or "cash"
+    if mode == "margin":
+        cap = _num(safety.get("margin_x"), 2.5) or 2.5
+        if margin_rate is None:
+            return cap, "margin"
+        return (min(cap, 100 / margin_rate), "margin") if 0 < margin_rate < 100 else (1.0, "cash")
+    if mode == "credit":
+        if credit_ok is False:
+            return 1.0, "cash"
+        return max(1.0, _num(safety.get("credit_x"), 2.0) or 2.0), "credit"
+    return 1.0, "cash"

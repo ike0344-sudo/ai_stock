@@ -2,7 +2,7 @@
 
 소피증권·대시보드와 앱키를 나눈다: 앱키 하나당 WebSocket 세션이 하나라(kiwoom_client.batch_keys 주석)
 같은 키를 쓰면 먼저 연 쪽이 끊기고, 토큰을 새로 받으면 그 키의 다른 프로세스 토큰이 죽는다(공유 앱키 8005, 09-28).
-프로토콜(LOGIN → REG → PING 되돌려 보내기, refresh="0" 교체)은 backtesting/board_ticks.py 와 같다.
+프로토콜(LOGIN → REG → PING 되돌려 보내기, refresh="0" 교체)은 kospi-theme-engine/app/ingest/feed.py 실측 주석과 같다.
 
 FID 번호는 키움 REST 실시간 문서 기준이고 **10-19 현재 이 앱으로는 실측 전**이다. 첫 장에서 raw 를 보고 확정할 것.
   0B: 10 현재가 · 12 등락률 · 13 누적거래량 · 14 누적거래대금(백만원) · 17 고가 · 20 체결시간 · 228 체결강도
@@ -17,7 +17,7 @@ import time
 from collections import deque
 from datetime import datetime
 
-# 0B 는 통합(_AL)으로 받아야 NXT 시간대(08:00~09:00, 15:30~20:00)에도 값이 온다(board_ticks 와 같음).
+# 0B 는 통합(_AL)으로 받아야 NXT 시간대(08:00~09:00, 15:30~20:00)에도 값이 온다.
 # 0D 호가도 통합이 맞는지는 실측 전 — 정규장에 KRX 와 같은지부터 볼 것.
 QUOTE_SUFFIX = "_AL"
 BOOK_SUFFIX = "_AL"
@@ -50,7 +50,7 @@ def parse_quote(values: dict) -> dict | None:
     px = abs(_int(values.get("10")))
     if not px:
         return None
-    return {"px": px, "chg": _float(values.get("12")), "high": abs(_int(values.get("17"))),
+    return {"px": px, "chg": _float(values.get("12")), "high": abs(_int(values.get("17"))), "low": abs(_int(values.get("18"))), "open": abs(_int(values.get("16"))),
             "value": abs(_int(values.get("14"))) * 1_000_000,
             "strength": abs(_float(values.get("228"))), "cum": abs(_int(values.get("13"))), "t": time.time()}
 
