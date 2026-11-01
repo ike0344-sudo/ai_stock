@@ -17,7 +17,7 @@ import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from . import daily_facts, engine, feed
+from . import daily_facts, engine, feed, rec
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE = ROOT / "state" / "trader"
@@ -346,7 +346,10 @@ class Desk:
         """실시간 구독 = 고른 종목 + 보유 + 지금 보고 있는 종목(목록에 없어도 호가가 바로 나오게)."""
         now = time.time()
         self.viewing = {c: t for c, t in self.viewing.items() if now - t < 60}   # 화면이 여럿이어도 각자 보는 종목을 다 구독
-        return self.watch + [h["code"] for h in self.holdings] + list(self.viewing) + [p["code"] for p in self.plans if p["active"]]
+        mine = self.watch + [h["code"] for h in self.holdings] + [p["code"] for p in self.plans if p["active"]]
+        extra = rec.today_codes()                                        # 최근 신고대금 종목도 체결·호가 원본 저장(trader/rec.py)
+        rec.codes = set(mine) | set(extra)
+        return mine + list(self.viewing) + extra
 
     def ready(self) -> str | None:
         if not self.client:
@@ -926,6 +929,8 @@ class Desk:
             # 신고대금 당일 예약(10-21 사용자) — 오늘 종가가 아직 없어 기준가는 지금 값(자리만). 오늘은 60선 단계만 사고,
             # 종가 % 단계·급락/갭/버림 판단은 다음 거래일 아침 기준가를 오늘 종가로 고친 뒤부터
             plan["same_day"] = True
+        elif ref_day:
+            plan["ref_cl"] = {"reg": r.get("reg") or 0, "aft": r.get("aft") or 0}   # 기준일 정규장·애프터 종가 — 차트 C 선을 어느 쪽으로든(11-01 사용자)
         if guard and guard.get("on"):
             # 급락 피하기(10-19 사용자): 기준일 다음 거래일은 정한 시각까지 사지 않고 지켜본다 — 그 사이 저가가 기준가 −pct% 이하면 이 예약을 버린다.
             # 9~10월 통합 분봉으로 정하고 2025-07~2026-08 정규장 1분봉(보지 않은 기간)에서 확인: 조건 없음 −2,657만 → +656만(예산 3,000만, 405건)
@@ -959,8 +964,9 @@ class Desk:
             # 60선 단계는 사는 값이 기준일(처음 신고대금 날) 종가 C −pct% 이상일 때만(10-30 사용자 "C 위에 있거나 근접했을 때 60선에서").
             # C 는 고점 따라가기로 기준가가 옮겨져도 그대로 — 당일 예약은 종가가 나온 다음 거래일 아침(_fix_same_day)에 정한다
             plan["c_near"] = abs(engine._num(c_near.get("pct"), 3) if engine._num(c_near.get("pct"), 3) is not None else 3)   # 0 = C 위에서만
+            plan["c_src"] = c_near.get("src") if c_near.get("src") in ("reg", "aft") else base   # C 기준 — 애프터/정규장 종가(11-01 사용자), 안 고르면 매수 기준과 같게
             if not plan.get("same_day"):
-                plan["c_px"] = bp
+                plan["c_px"] = r.get(plan["c_src"]) or bp
             if c_near.get("full"):
                 plan["c_full"] = True                               # 사는 값이 C −N% 이상이면 남은 단계를 합쳐 한 번에 다 산다(10-30 사용자)
         if peak_stop and peak_stop.get("on") and ref_day:
@@ -1307,6 +1313,11 @@ class Desk:
                         s_.update(price=top, qty=max(s_["filled"], int(s_["amt"] // top)))
                     elif not mb[1] <= px <= mb[2]:
                         continue
+                    if "c_near" in p and not p.get("c_px") and p["ref_day"] < today.replace("-", ""):
+                        if s_.get("cn_day") != today:               # 당일 예약의 C(기준일 종가)를 아직 못 받음 — 모르는 채로 C 아래에서 사지 않게(11-01 사용자 지니언스)
+                            s_["cn_day"], changed = today, True
+                            self.note(f"{p['name']} 기준일 종가 BC 를 아직 못 받음 — 60선 매수 안 함(받으면 다시)")
+                        continue
                     if p.get("c_px") and top < p["c_px"] * (1 - p["c_near"] / 100):
                         if s_.get("cn_day") != today:               # C 아래로 멀다 — 이 60선에선 안 산다(10-30 사용자). 알림은 하루 한 번
                             s_["cn_day"], changed = today, True
@@ -1416,12 +1427,14 @@ class Desk:
     def _fix_same_day(self, p: dict) -> None:
         """신고대금 당일 예약의 다음 거래일 — 기준가를 그날 종가로(장중 자리값이었다), 종가 % 단계 가격도 다시. 못 받으면 다음 판단 때."""
         self._refc.pop((p["code"], p["ref_day"]), None)               # 장중에 받아 둔 값(그때 가격)을 버린다
-        bp = self.ref(p["code"], p["ref_day"]).get(p["base"]) or 0
+        rr = self.ref(p["code"], p["ref_day"])
+        bp = rr.get(p["base"]) or 0
         if not bp:
             return
         p["base_px"] = bp
+        p["ref_cl"] = {"reg": rr.get("reg") or 0, "aft": rr.get("aft") or 0}
         if "c_near" in p:
-            p["c_px"] = bp                                          # C 고정(10-30) — 당일 예약은 이제야 기준일 종가가 나온다
+            p["c_px"] = rr.get(p.get("c_src") or p["base"]) or bp     # C 고정(10-30) — 당일 예약은 이제야 기준일 종가가 나온다 · C 기준(11-01)
         for s_ in p["stages"]:
             if not s_.get("ma") and not s_["filled"]:
                 s_["price"] = engine.floor_tick(bp * (1 + s_["pct"] / 100))
@@ -1823,9 +1836,44 @@ class Desk:
         if not self.client:
             self.note(self.ready(), "warn")
             return
+        self._fill_ref_cl()
         feed.set_codes(self.sub_codes())
         feed.start(self.client, self.is_active, self.on_order)
+        rec.start(self.is_active)
         threading.Thread(target=self._loop, daemon=True, name="trader-desk").start()
+
+    def _fill_ref_cl(self) -> None:
+        """11-01 전에 만든 예약 — 기준일 정규장·애프터 종가(차트 C 선 고르기)와 C 기준(매수 기준과 같게)을 채운다. 오늘이 기준일이면 종가가 아직 없어 둔다."""
+        today, ch = date.today().strftime("%Y%m%d"), False
+        for p in self.plans:
+            if "c_near" in p and not p.get("c_src"):
+                p["c_src"], ch = p["base"], True
+            if p.get("active") and p.get("ref_day") and p["ref_day"] < today and not p.get("ref_cl"):
+                r = self.ref(p["code"], p["ref_day"])
+                if r.get("reg") and r.get("aft"):
+                    p["ref_cl"], ch = {"reg": r["reg"], "aft": r["aft"]}, True
+        if ch:
+            _write("plans.json", self.plans)
+        self.sync_c_src()
+
+    def sync_c_src(self) -> None:
+        """C 기준(애프터/정규장 종가)은 이미 만든 예약도 그 매수 규칙의 지금 설정을 따른다(11-01 사용자 — 규칙을 정규장으로 바꿨는데 예약은 애프터 그대로였다).
+        다른 예약 설정은 만들 때 그대로. 당일 예약이 아직 C 를 안 정했으면 기준만 바꿔 두고 C 는 다음 거래일 아침에 그 기준으로 정한다."""
+        ch = False
+        for p in self.plans:
+            if not p.get("active") or "c_near" not in p:
+                continue
+            L = (self.rule(p.get("buy_rule")) or {}).get("ladder") or {}
+            src = (L.get("c_near") or {}).get("src")
+            src = src if src in ("reg", "aft") else p["base"]
+            if src == p.get("c_src"):
+                continue
+            p["c_src"], ch = src, True
+            if p.get("c_px") and (p.get("ref_cl") or {}).get(src):
+                p["c_px"] = p["ref_cl"][src]
+            self.note(f"{p['name']} 예약 BC 기준을 {'정규장' if src == 'reg' else '애프터'} 종가로" + (f" — BC {p['c_px']:,}" if p.get("c_px") else " (BC 는 다음 거래일 아침에 정함)"))
+        if ch:
+            _write("plans.json", self.plans)
 
     def _loop(self) -> None:
         last_acct = last_pend = 0.0

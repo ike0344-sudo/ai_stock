@@ -42,7 +42,8 @@ def test_take_orders_split_and_last_takes_rest():
 
 def test_close_time_and_trail():
     ex = {**EXITS, "close": [True, "15:15"], "trail": [True, "4"]}
-    pos = {"qty": 10, "avg": 10_000, "high": 11_000}
+    assert e.exit_actions({"qty": 10, "avg": 10_000, "high": 11_000}, 10_500, NOON, ex) == []   # 1차 익절 전엔 되밀림 꺼짐
+    pos = {"qty": 10, "avg": 10_000, "high": 11_000, "breakeven": True}
     assert e.exit_actions(pos, 10_600, NOON, ex) == []                           # 11,000 × 0.96 = 10,560 — 아직 위
     assert e.exit_actions(pos, 10_560, NOON, ex)[0]["kind"] == "trail"
     assert e.exit_actions(pos, 10_600, NOON, {**ex, "trail": [True, "3"]})[0]["kind"] == "trail"
@@ -119,3 +120,79 @@ def test_feed_parsers():
     assert b["asks"][0] == (9710, 120) and b["bids"][0] == (9700, 300) and b["bid_total"] == 2000
     o = feed.parse_order({"9203": "0012345", "9001": "A005930", "905": "-매도", "910": "70000", "911": "3"})
     assert o["code"] == "005930" and o["side"] == "sell" and o["fill_qty"] == 3
+
+
+def test_trail_when():
+    ex = {**EXITS, "trail": [True, "3", "gain", "10"]}
+    pos = {"qty": 10, "avg": 10_000, "high": 10_900}
+    assert e.exit_actions(pos, 10_500, NOON, ex) == []                           # +9% 까지만 — 아직 안 켜짐
+    assert e.exit_actions({**pos, "high": 11_000}, 10_660, NOON, ex)[0]["kind"] == "trail"
+    assert e.exit_actions(pos, 10_500, NOON, {**ex, "trail": [True, "3", "always"]})[0]["kind"] == "trail"
+    assert e.exit_actions(pos, 10_500, NOON, {**ex, "trail": [True, "3"]}) == []          # 기본 = 1차 익절 뒤
+
+
+def test_leverage_modes():
+    assert e.leverage({"buy_mode": "cash"}, 40, True) == (1.0, "cash")
+    assert e.leverage({"buy_mode": "margin", "margin_x": "2.5"}, 20, None) == (2.5, "margin")     # 증거금 20% = 5배지만 최대 2.5배
+    assert e.leverage({"buy_mode": "margin", "margin_x": "5"}, 40, None) == (2.5, "margin")
+    assert e.leverage({"buy_mode": "margin"}, 100, None) == (1.0, "cash")                        # 증거금 100% 종목은 미수 불가
+    assert e.leverage({"buy_mode": "credit", "credit_x": "2"}, 40, False) == (1.0, "cash")       # 신용 불가 종목
+    assert e.leverage({"buy_mode": "credit", "credit_x": "2"}, 40, True) == (2.0, "credit")
+    assert e.per_stock_amount("100%", {"max_positions": "2"}, 30_000_000, 2.5) == 37_500_000
+
+
+def test_value_high_52w_after_and_regular():
+    """52주 신고대금 — 오늘 누적 대금이 어제까지 1년 최대를 넘으면 0 이상(10-20 사용자, 애프터·정규장 따로)."""
+    from trader import engine
+    snap = {"px": 10000, "value": 1200e8, "vref": {"aft": 1500, "reg": 1000}}   # 오늘 1,200억 · 하루 전체 최대 1,500억 · 정규장 최대 1,000억
+    assert round(engine.cond_value("52주 신고대금 대비(애프터)", snap)) == -20
+    assert round(engine.cond_value("52주 신고대금 대비(정규장)", snap)) == 20
+    assert engine.conds_met([["52주 신고대금 대비(정규장)", "이상", "0"]], snap)[0]
+    assert not engine.conds_met([["52주 신고대금 대비(애프터)", "이상", "0"]], snap)[0]
+    assert not engine.conds_met([["52주 신고대금 대비(애프터)", "이상", "0"]], {**snap, "vref": {}})[0]   # 기준을 모르면 안 삼
+
+
+def test_value_high_kept_n_days():
+    """신고대금 유지 N거래일 — 2거래일 전 신고(정규장 +30%)는 '유지 2'면 맞고 '유지 1'·오늘만이면 안 맞다(10-20 사용자)."""
+    from trader import engine
+    snap = {"px": 10000, "value": 500e8, "vref": {"aft": 1500, "reg": 1000, "hist": {"aft": [], "reg": [(2, 30.0)]}}}
+    c = ["52주 신고대금 대비(정규장)", "이상", "0"]
+    assert not engine.conds_met([c], snap)[0]                       # 오늘 500억 < 1,000억
+    assert not engine.conds_met([c + ["1"]], snap)[0]
+    assert engine.conds_met([c + ["2"]], snap)[0]
+    assert round(engine.cond_value(c[0], snap, "2")) == 30
+
+
+def test_trading_value_regular_vs_after():
+    """거래대금 정규장·애프터 따로 — 정규장 몫을 못 쟀으면 정규장 조건은 판단 안 함(10-20 사용자)."""
+    from trader import engine
+    snap = {"px": 10000, "value": 1500e8, "value_reg": 900e8, "vref": {"aft": 1400, "reg": 1000}}
+    assert engine.cond_value("거래대금(애프터)", snap) == 1500 and engine.cond_value("거래대금", snap) == 1500
+    assert engine.cond_value("거래대금(정규장)", snap) == 900
+    assert engine.cond_value("거래대금(정규장)", {**snap, "value_reg": None}) is None
+    assert round(engine.cond_value("52주 신고대금 대비(정규장)", snap)) == -10      # 정규장 몫 900억 ÷ 1,000억
+    assert round(engine.cond_value("52주 신고대금 대비(애프터)", snap)) == 7
+
+
+def test_peak_pct_by_market_cap():
+    """오른 뒤 재매수 금지 % — 시총 big.cap 억 이상이면 big.pct(10-21 사용자 "시총에 따라 바꾸자")."""
+    ps = {"on": True, "pct": "25", "by": "close", "big": {"cap": "10000", "pct": "15"}}
+    assert e.peak_pct(ps, 1800) == 25 and e.peak_pct(ps, 56000) == 15
+    assert e.peak_pct(ps, None) == 25                               # 시총을 모르면 기본 %
+    assert e.peak_pct({**ps, "big": {}}, 56000) == 25 and e.peak_pct({"on": False}, 1) is None
+
+
+def test_peak_anchor_first_of_streak():
+    """연달아 나온 신고대금의 첫 날(10-21 사용자) — 3주 안에 이어지면 계속 거슬러 간다."""
+    days = ["2026-09-28", "2026-10-14", "2026-10-16", "2026-10-20", "2026-10-21"]
+    assert e.peak_anchor(days, "2026-10-21") == "2026-09-28"           # 9/28 → 10/14 는 16일, 계속 이어짐
+    assert e.peak_anchor(days, "2026-10-21", window=10) == "2026-10-14"
+    assert e.peak_anchor(["2026-08-01"], "2026-10-21") == "2026-10-21"  # 3주 넘게 떨어지면 자기 날
+
+
+def test_peak_anchor_skips_down_days():
+    """내린 날 신고대금은 잇지 않는다(10-21 사용자 "9월 28일은 빼야") — HT로보틱스 9/28 −1.3%."""
+    days = [("2026-09-28", -1.33), ("2026-10-14", 9.39), ("2026-10-16", 26.0), ("2026-10-20", 7.13)]
+    assert e.peak_anchor(days, "2026-10-20") == "2026-09-28"
+    assert e.peak_anchor(days, "2026-10-20", min_chg=5) == "2026-10-14"
+    assert e.peak_anchor(days, "2026-10-20", window=14) == "2026-10-14"

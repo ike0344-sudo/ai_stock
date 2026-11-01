@@ -469,7 +469,9 @@ def simulate(rule: dict, exits: dict, safety: dict, capital: float, start: str, 
             if (L.get("peak_stop") or {}).get("first_reg_only") and x[17] is None:
                 continue                                           # 통합으로만 신고대금인 날은 잇지 않는다(정규장 몫은 못 넘음)
             ledger_days.setdefault(x[1], []).append((x[0], x[20] if x[20] is not None else x[7]))   # 데스크 ledger_day 와 같은 상승률
-    facts = _daily_facts() if (use_conds or follow or pk) else None
+    c_src = (L.get("c_near") or {}).get("src") if (L.get("c_near") or {}).get("src") in ("reg", "aft") else None
+    c_src = c_src if c_src and c_src != L.get("base", "reg") else None   # C 기준이 매수 기준과 다를 때만(11-01) — 같으면 기준가가 곧 C
+    facts = _daily_facts() if (use_conds or follow or pk or c_src) else None
     min_chg = max(min_chg, engine._num(L.get("ref_min_chg"), 0) or 0)   # 규칙의 '신고일 상승률 ≥' 가 더 높으면 그걸로
     evs = events(start, end, min_chg, L.get("base", "reg"), session, bool(L.get("ref_reg_only")))
     scope = None
@@ -593,7 +595,7 @@ def simulate(rule: dict, exits: dict, safety: dict, capital: float, start: str, 
                     last_px[cc] = bp                               # 첫날 '전날 종가' = 기준일 종가(예전엔 그 종목 마지막 봉)
                 if x0:
                     skipped["same_day"] = skipped.get("same_day", 0) + 1
-                P[cc] = {"name": name, "rd": rd, "bp": bp, "c0": bp, "live": live, "d1": min(nd), "lmax": max(nd), "qty": 0, "avg": 0.0, "init": 0, "cost": 0.0,
+                P[cc] = {"name": name, "rd": rd, "bp": bp, "c0": (facts.close_on(cc, rd.replace("-", ""), c_src) if c_src else None) or bp, "live": live, "d1": min(nd), "lmax": max(nd), "qty": 0, "avg": 0.0, "init": 0, "cost": 0.0,
                          "xt": x0, "xd": d if x0 else None, "hi_since": 0,
                          "rdh": ((facts.close_on(cc, rd.replace("-", ""), pk_base) or bp) if pk_close else facts.high_on(cc, rd.replace("-", ""), pk_base)) if pk else None,
                          "pk_ref": engine.peak_anchor(ledger_days.get(cc, []), rd, int(engine._num((L.get("peak_stop") or {}).get("first_days"), 21) or 21),

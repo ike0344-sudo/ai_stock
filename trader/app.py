@@ -20,9 +20,10 @@ import threading
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+NO_CACHE = {"Cache-Control": "no-cache"}   # 화면 파일은 매번 서버에 물어본다 — 고친 화면이 브라우저 저장본에 가려졌다(11-01 사용자 "지니언스 아직도 정규장 C")
 
 from . import desk as desk_mod
-from . import card, daily_facts, engine, feed, ontology, outcomes, shadow, tgcmd, themes
+from . import card, daily_facts, engine, feed, flow, ontology, outcomes, shadow, tgcmd, themes
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
@@ -59,6 +60,17 @@ def _start() -> None:
     shadow.start(D, _chart_fresh)
     from . import slicer
     slicer.run(D)                                                   # Jev 호가 보고 나눠 사기 일감 루프(10-30)
+    flow.notify = D.note                                            # 과열 매수·C 깨짐·헛오름 → 데스크 알림(11-01)
+
+    def _flow_warm():                                               # 고른 종목 '평소'·지난 체결을 미리 — 화면 폴링이 첫 계산(종목당 수 초)에 막히지 않게
+        while True:
+            for c in list(D.watch):
+                try:
+                    flow.baseline(c, _c_of(c)[1])
+                except Exception:                                   # noqa: BLE001 — 다음 회차에 다시
+                    pass
+            time.sleep(300)
+    threading.Thread(target=_flow_warm, daemon=True, name="flow-warm").start()
     tgcmd.start(D)                                                     # 텔레그램 말 명령(안전판 — 매도·청산 없음), TRADER_TG_BOT_TOKEN 있을 때만
     _warm(D.watch)
 
@@ -122,24 +134,24 @@ async def stream(codes: str = "", active: str = ""):
 
 @app.get("/")
 def index():
-    return FileResponse(Path(__file__).parent / "static" / "index.html")
+    return FileResponse(Path(__file__).parent / "static" / "index.html", headers=NO_CACHE)
 
 
 @app.get("/guide")
 def guide():
-    return FileResponse(Path(__file__).parent / "static" / "guide.html")
+    return FileResponse(Path(__file__).parent / "static" / "guide.html", headers=NO_CACHE)
 
 
 # 고친 것 확인 목록(10-23 사용자 "체크 리스트 하나 만들어서 관리" · "관리 페이지 하나 만들고") — state/trader/checklist.json 하나가 원본
 @app.get("/checklist")
 def checklist_page():
-    return FileResponse(Path(__file__).parent / "static" / "checklist.html")
+    return FileResponse(Path(__file__).parent / "static" / "checklist.html", headers=NO_CACHE)
 
 
 # 종목 한 장(10-23 사용자 "종목 한 장부터") — 섹터·소피 테마·신고대금·소피 신호·고른 기록·계획·성적을 한 카드에
 @app.get("/card")
 def card_page():
-    return FileResponse(Path(__file__).parent / "static" / "card.html")
+    return FileResponse(Path(__file__).parent / "static" / "card.html", headers=NO_CACHE)
 
 
 @app.get("/api/card")
@@ -150,7 +162,7 @@ def card_get(code: str):
 # 온톨로지 관리(10-23 사용자) — 이어 놓은 선이 살아 있는지: 자료 신선도·테마 연결률·고른 기록·Jev·허브 경보
 @app.get("/ontology")
 def ontology_page():
-    return FileResponse(Path(__file__).parent / "static" / "ontology.html")
+    return FileResponse(Path(__file__).parent / "static" / "ontology.html", headers=NO_CACHE)
 
 
 @app.get("/api/ontology")
@@ -223,6 +235,67 @@ def _env_line(code: str, ex: dict):
     return engine.floor_tick(m * (1 - abs(engine._num(me[1], 6) or 0) / 100)) if m else None
 
 
+def _c_of(c: str) -> tuple:
+    """(C, C 날 'YYYY-MM-DD', 기준 reg/aft, 예약) — 차트 C 선과 같은 규칙: 예약이 있으면 그 예약을 만든 매수 규칙의 지금 C 기준,
+    없으면 켜진 매수 규칙의 C 기준으로 기준일 종가."""
+    p = next((x for x in D.plans if x["active"] and x["code"] == c and (x.get("c_px") or not x.get("follow_day"))), None)
+    rule = D.rule(p.get("buy_rule")) if p else next((r for r in D.rules["rules"] if r.get("on") and (r.get("ladder") or {}).get("on")), None)
+    L = (rule or {}).get("ladder") or {}
+    src = (L.get("c_near") or {}).get("src")
+    src = src if src in ("reg", "aft") else (p["base"] if p else L.get("base", "reg"))
+    if p:
+        day = p["ref_day"]
+        px = (p.get("ref_cl") or {}).get(src) or (p.get("c_px") if p.get("c_src") == src else None) or (p["base_px"] if not p.get("same_day") and p["base"] == src else None)
+    else:
+        day = D.ref_day(c)
+        px = (D.ref(c, day) or {}).get(src) if day and _ready(c) else None
+    return px, (f"{day[:4]}-{day[4:6]}-{day[6:]}" if day else None), src, p
+
+
+def _hold_count(c: str, base: str, hold: float) -> int:
+    """60선 위 0~hold% 에서 연달아 끝난 15분봉 수(데스크 _ma_confirmed 와 같은 셈, 화면 '버팀 n/2' 용)."""
+    bars = D.__dict__.get("_b15", {}).get((c, base)) or []
+    closes, j, n = [b[1] for b in bars], len(bars) - 2, 0
+    while j >= 59 and sum(closes[j - 59:j + 1]) / 60 < closes[j] <= sum(closes[j - 59:j + 1]) / 60 * (1 + hold / 100):
+        n, j = n + 1, j - 1
+    return n
+
+
+def _flow(c: str, held: dict) -> dict | None:
+    """C 사다리·지금 신호·매수 세기(11-01) — 자동 매수와 무관한 화면·알림용. 신호: 들고 있음 > 사지 말 것 > 살 자리(예약 주문 나감) > 기다림."""
+    C, cday, src, p = _c_of(c)
+    if not C:
+        return None
+    base = (p["stages"][0].get("src") if p and p.get("stages") else None) or (p["base"] if p else src)
+    ma = (D.ma60_15(c, base) if _ready(c) else 0) or flow.ma_fallback(c, base)   # 키움 15분봉을 못 받으면 받아 둔 1분봉으로
+    last = D.snap(c)["px"] or (D.refs.get(c) or {}).get("aft") or (D.refs.get(c) or {}).get("reg")   # 장 밖·주말엔 마지막 종가
+    v = flow.view(c, C, cday, ma or None, last or None)
+    if not v:
+        return None
+    v.update(c_day=cday, c_src=src)
+    px = v["px"]
+    h = held.get(c)
+    if h:
+        stop = h["avg_price"] * 0.96
+        s, why = "hold", f"산 값 {h['avg_price']:,.0f} · {(px / h['avg_price'] - 1) * 100:+.1f}% · −4% {stop:,.0f}까지 {(px / stop - 1) * 100:.1f}%" + (" · 일부 익절 후보(과열·헛오름)" if any(b["kind"] in ("heat", "hot") for b in v["blocks"]) else "")
+    elif v["blocks"]:
+        s, why = "avoid", " · ".join(f"{b['text']}({b['until']}까지)" for b in v["blocks"]) + " — 사지 말 것"
+    elif p and any(o["code"] == c and o["side"] == "buy" for o in D.pending):
+        o = next(o for o in D.pending if o["code"] == c and o["side"] == "buy")
+        s, why = "buy", f"예약 매수 주문 나감 {o.get('price', 0):,} — 매수 규칙 조건 맞음"
+    elif p:
+        need = int(p.get("ma_confirm") or 0)
+        gap = (px / ma - 1) * 100 if ma and px else None
+        cn = f" · BC −{p['c_near']:g}%({C * (1 - p['c_near'] / 100):,.0f}) 위에서만" if p.get("c_near") is not None else ""
+        hold = f" · 버팀 {min(_hold_count(c, base, p.get('ma_hold', 2)), need)}/{need}" if need else ""
+        s, why = "wait", (f"60선 {ma:,} · 지금가 {gap:+.1f}%" if gap is not None else "60선 받는 중") + hold + cn + \
+            (" — 60선에서 멀어 기다림" if gap is not None and gap > (p.get("ma_hold") or 3) else "")
+    else:
+        s, why = "wait", "예약 없음 — 매수 규칙이 예약을 만들면 여기 신호가 뜬다"
+    v["sig"] = {"s": s, "why": why}
+    return v
+
+
 @app.get("/api/state")
 def state(code: str = ""):
     held = {h["code"]: h for h in D.holdings}
@@ -259,10 +332,20 @@ def state(code: str = ""):
                        "loss_limit": D.rules["safety"].get("max_daily_loss"), "halted": D.buy_block(0)},
            "watch": watch, "books": {c: feed.books.get(c) for c in D.watch}, "holdings": holdings, "pending": D.pending, "msgs": D.msgs[:40],
            "fills": [e for e in list(feed.order_events) if e.get("fill_qty")][-200:],
-           "rules": [{"id": r["id"], "name": r["name"], "on": r.get("on")} for r in D.rules["rules"]],
+           # c_src: 그 규칙의 C 기준(애프터/정규장) — 차트 C 선이 매 폴링마다 지금 규칙을 따르게(11-01 사용자 "규칙에서 바꾸면 차트는 반영 못해")
+           "rules": [{"id": r["id"], "name": r["name"], "on": r.get("on"),
+                      "c_src": (((r.get("ladder") or {}).get("c_near") or {}).get("src") if (((r.get("ladder") or {}).get("c_near") or {}).get("src") in ("reg", "aft"))
+                                else (r.get("ladder") or {}).get("base")) if (r.get("ladder") or {}).get("on") else None} for r in D.rules["rules"]],
            "exits": [{"id": r["id"], "name": r["name"]} for r in D.rules.get("exits", [])],
            "plans": [p for p in D.plans if p["active"] or p["created"][:10] >= time.strftime("%Y-%m-%d", time.localtime(time.time() - 3 * 86400))][-60:],
            "manual_exit": D.rules.get("manual_exit")}
+    fl = {}
+    for c in D.watch:
+        try:
+            fl[c] = _flow(c, held)
+        except Exception as e:                                         # noqa: BLE001 — 흐름 표시가 상태 전체를 막으면 안 된다
+            fl[c] = {"err": f"{type(e).__name__}: {e}"}
+    out["flow"] = fl
     if code:
         c = _code(code)
         new = c not in D.viewing
@@ -614,6 +697,7 @@ def rules_put(body: dict = Body(...)):
         D.rules = {**D.rules, **rules, "rev": int(D.rules.get("rev") or 0) + 1}
         desk_mod._write("rules.json", D.rules)
     D.note("규칙 저장")
+    D.sync_c_src()                                                   # C 기준은 이미 만든 예약도 따라간다(11-01)
     return rules_get()
 
 

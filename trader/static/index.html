@@ -78,6 +78,23 @@ header.card { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22p
   .chbook .mk { font-size: 9px; padding: 0 2px; } .chbook .lg { display: none; } .chbook .bk .bar span.mks { display: none; }
 }
 .ch { display: flex; flex-direction: column; gap: 6px; min-width: 0; cursor: default; }
+/* C 사다리 띠(11-01) — 차트·호가 배치는 그대로, 카드 아래에 가로로. 폰에서는 사다리만 가로로 밀어 본다 */
+.flow { border-top: 1px solid var(--line); padding-top: 6px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.flow .frow { display: flex; gap: 8px 14px; align-items: center; flex-wrap: wrap; }
+.flow .fsig { display: flex; gap: 8px; align-items: baseline; border: 1px solid var(--sc); border-radius: 7px; padding: 4px 10px; flex: 1 1 340px; min-width: 0; }
+.flow .fsig b { color: var(--sc); font-size: 14px; white-space: nowrap; } .flow .fsig span { min-width: 0; }
+.flow .fheat { display: flex; gap: 6px; align-items: center; }
+.flow .fbar { position: relative; width: 110px; height: 9px; background: var(--chip); border-radius: 5px; overflow: hidden; }
+.flow .fbar i { position: absolute; left: 0; top: 0; bottom: 0; } .flow .fbar em { position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; background: var(--text); }
+.flow .flad { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(62px, 1fr); gap: 2px; overflow-x: auto; }
+.flow .fz { display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 3px 2px; border-radius: 4px; background: color-mix(in srgb, var(--zc) 14%, transparent); border-top: 2px solid var(--zc); font-size: 10px; min-width: 0; }
+.flow .fz.now { outline: 2px solid #22d3ee; outline-offset: 1px; transform: translateY(-2px); z-index: 1; } .flow .fz.now .fm { color: #0a0d12; background: #22d3ee; border-radius: 3px; padding: 0 4px; font-weight: 800; } .flow .fz.fc { --zc: var(--gold); background: #2a2210; }
+.flow .fz .fl { color: var(--dim); white-space: nowrap; } .flow .fz .fn { font-weight: 600; white-space: nowrap; } .flow .fz .ft { font-family: var(--mono); }
+.flow .fz .fm { color: var(--text); font-weight: 600; min-height: 12px; white-space: nowrap; }
+.flow .fz .fo { font-size: 11.5px; font-weight: 700; color: var(--text); white-space: nowrap; min-height: 15px; } .flow .fz .fo.mob { color: #0a0d12; background: var(--gold); border-radius: 3px; padding: 0 3px; white-space: normal; line-height: 1.2; }
+.flow .fop { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 6px; font-size: 12.5px; margin: 6px 0 4px; } .flow .fop b { font-weight: 700; }
+.flow .fop .oc { border: 1px solid var(--line, #2a3140); background: #141a24; border-radius: 4px; padding: 2px 7px; } .flow .fop .oc.warn { border-color: var(--up); background: rgba(255,92,99,.14); }
+.flow .fev { display: flex; gap: 4px 14px; flex-wrap: wrap; color: var(--dim); font-size: 11px; }
 .ch.on { border-color: var(--acc-line); }
 .ch .hd { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 /* 차트 머리 한 줄 — 넓은 화면에선 줄바꿈 없이, 기준·종가 글자가 모자라면 그 칸만 … 로 줄인다(이동평균·확대 버튼까지 맨 윗줄) */
@@ -311,7 +328,8 @@ function ask(text) {
 let S = null, RULES = null, active = store.get("active", null), side = "buy", base = store.get("base", "aft"), userPx = null, tab = "pos", modSel = null;
 const checked = new Set(store.get("checked", []));
 let ladder = store.get("ladder", [{ pct: "-3", amt: "" }, { pct: "-5", amt: "" }]);
-const tfOf = store.get("tf", {}), sessOf = store.get("sess", {});
+const TF0 = "15";                                                    // 차트 기본 봉 = 15분(11-01 사용자) — 종목마다 고른 봉은 그대로 기억
+const tfOf = store.get("tf", {}), sessOf = store.get("sess", {}), cOf = {};   // 차트 C 선 보기 기준 "" = 예약·규칙 따라 — 저장 안 함: 저장된 'C 정규'가 규칙보다 먼저 와서 크롬에서만 규칙 변경이 안 보였다(11-01), 새로고침하면 'C 규칙'
 for (const k in sessOf) if (sessOf[k] === "after") sessOf[k] = "all";   // 옛 '애프터만' 선택은 애프터 포함으로
 // 이동평균 — 신고대금 장부와 같다(10-16): 분봉 60·120, 일봉 5·10·20·60·120
 const MA_DAY = [[5, "#ff8787"], [10, "#74c0fc"], [20, "#e2b65a"], [60, "#9b7bff"], [120, "#adb5bd"]], MA_MIN = MA_DAY.slice(3);
@@ -558,7 +576,7 @@ function chartCodes() {
   return (active && list.includes(active) ? [active, ...rest] : list).slice(0, 4);
 }
 async function loadChart(code, force, ses = sessOf[code] || "all") {
-  const tf = tfOf[code] || "5", k = code + tf + ses, hit = chartData[k];
+  const tf = tfOf[code] || TF0, k = code + tf + ses, hit = chartData[k];
   if (!force && hit && Date.now() - hit.at < (tf === "D" ? 300000 : 60000)) return;
   if (inflight.has(k)) return;
   inflight.add(k);
@@ -572,13 +590,14 @@ async function loadChart(code, force, ses = sessOf[code] || "all") {
 // 통째로 갈아 끼우면 손가락이 닿아 있던 요소가 사라져 두 손가락 확대가 첫 순간만 먹고 끊겼다(10-19 사용자 "매끄럽게 안 돼").
 function topHtml(c) {
   // 한 줄(10-20 사용자 "종목명 옆에 1분 5분 15분 다 한 줄로, 차트 높이를 그만큼") — 이름·가격 · 봉 단위 · 시간대 · 기준·종가 · 이동평균 · 확대
-  const w = S.watch.find((x) => x.code === c) || { name: c }, tf = tfOf[c] || "5", ses = sessOf[c] || "all", h = S.holdings.find((x) => x.code === c);
+  const w = S.watch.find((x) => x.code === c) || { name: c }, tf = tfOf[c] || TF0, ses = sessOf[c] || "all", h = S.holdings.find((x) => x.code === c);
   const f = followBase(w, chartBase(c)), rg = w.ref_day ? w.ref_reg : w.reg, af = w.ref_day ? w.ref_aft : w.aft;
   return `<div class="hd one" style="gap:6px 12px;align-items:center">
       <button type="button" data-pick="${c}" style="background:none;border:0;padding:0;font-weight:700;font-size:14px">${esc(w.name)}</button>
       <span class="mono" style="font-size:14px">${fp(w.px)}</span><span class="mono ${cls(w.chg)}" style="font-size:12px">${pct(w.chg)}</span>
       <div class="tfs" role="group" aria-label="봉 단위">${[["1", "1분"], ["5", "5분"], ["15", "15분"], ["D", "일"]].map(([v, t]) => `<button type="button" data-tf="${v}" aria-pressed="${tf === v}">${t}</button>`).join("")}</div>
       <div class="tfs" role="group" aria-label="시간대">${SESS.map(([v, t]) => `<button type="button" data-sess="${v}" aria-pressed="${ses === v}" ${tf === "D" && v !== "all" ? 'disabled title="일봉은 하루 전체만(키움 일봉 종가 = 20:00 마지막 체결)"' : ""}>${t}</button>`).join("")}</div>
+      <div class="tfs" role="group" aria-label="BC 선 기준">${[["", "BC 규칙"], ["reg", "BC 정규"], ["aft", "BC 애프터"]].map(([v, t]) => `<button type="button" data-csrc="${v}" aria-pressed="${(cOf[c] || "") === v}" title="${v ? "차트 BC 선을 기준일 " + (v === "reg" ? "정규장" : "애프터") + " 종가로" : "차트 BC 선을 예약(없으면 매수 규칙)의 BC 기준으로"}">${t}</button>`).join("")}</div>
       <span class="info" style="font-size:12px">${w.ref_day ? `<b style="color:var(--acc)">기준 ${w.ref_day.slice(4, 6)}.${w.ref_day.slice(6)}</b> ` : ""}${f ? `<span style="color:var(--acc)">고점 ${f.live ? "오늘" : f.day.slice(4, 6) + "." + f.day.slice(6)} → <b class="mono">${fmt(f.close)}</b></span> ` : ""}<span class="dim">정규 <b class="mono" style="color:var(--text)">${fp(rg)}</b> · 애프터 ${w.nxt === false ? "<b>NXT 없음</b>" : `<b class="mono" style="color:var(--gold)">${fp(af)}</b>${rg && af ? ` <span class="mono ${cls(af - rg)}" style="font-size:11px">(${pct((af / rg - 1) * 100)})</span>` : ""}`}</span></span>
       ${h ? `<span class="dim" style="font-size:11px">보유 ${fmt(h.quantity)}주</span>` : ""}
       <span style="font-size:11px">${ses === "after" ? '<span class="dim">애프터는 이동평균 없음</span>' : (tf === "D" ? MA_DAY : MA_MIN).map(([n, col]) => `<span style="color:${col}">${n}선</span>`).join(" ")}${tf !== "D" ? ` <span style="color:${OTHER60[ses === "reg" ? "all" : "reg"][0]}">┄${OTHER60[ses === "reg" ? "all" : "reg"][1]}</span>` : ""}</span>
@@ -594,7 +613,8 @@ function renderCharts() {
     if (!card) {
       card = document.createElement("div"); card.className = "card ch"; card.dataset.chart = c;
       card.innerHTML = `<div class="chrow"><div class="chmain"><div class="top"></div><div class="plot"><div class="svgw"></div><div class="hit" aria-hidden="true"></div></div></div>
-        <div class="chbook" aria-label="호가"><div class="bk dim" style="font-size:11px"><span style="text-align:right">매도<i class="lg">잔량</i></span><span style="text-align:center">호가</span><span style="text-align:right">등락률</span><span>매수<i class="lg">잔량</i></span></div><div class="bkrows"></div></div></div>`;
+        <div class="chbook" aria-label="호가"><div class="bk dim" style="font-size:11px"><span style="text-align:right">매도<i class="lg">잔량</i></span><span style="text-align:center">호가</span><span style="text-align:right">등락률</span><span>매수<i class="lg">잔량</i></span></div><div class="bkrows"></div></div></div>
+        <div class="flow" aria-label="BC 사다리 · 지금 신호"></div>`;
     }
     if (box.children[i] !== card) box.insertBefore(card, box.children[i] || null);
     card.classList.toggle("on", c === active);
@@ -602,8 +622,9 @@ function renderCharts() {
     if (card._top !== t) { card.querySelector(".top").innerHTML = t; card._top = t; }
     drawChart(c, card);
     drawBook(c, card);
+    drawFlow(c, card);
     loadChart(c);
-    if ((tfOf[c] || "5") !== "D") loadChart(c, false, (sessOf[c] || "all") === "reg" ? "all" : "reg");   // 다른 시간대 60선용
+    if ((tfOf[c] || TF0) !== "D") loadChart(c, false, (sessOf[c] || "all") === "reg" ? "all" : "reg");   // 다른 시간대 60선용
   });
 }
 function drawChart(c, card = $("charts").querySelector(`[data-chart="${c}"]`)) {
@@ -618,7 +639,8 @@ let cwT = 0;
 window.addEventListener("resize", () => { clearTimeout(cwT); cwT = setTimeout(() => { for (const k in CW) delete CW[k]; renderCharts(); }, 120); });
 $("charts").addEventListener("click", (e) => {
   const t = e.target.closest("[data-tf]"), p = e.target.closest("[data-pick]");
-  const ss = e.target.closest("[data-sess]"), zb = e.target.closest("[data-zoom]");
+  const ss = e.target.closest("[data-sess]"), zb = e.target.closest("[data-zoom]"), cs = e.target.closest("[data-csrc]");
+  if (cs) { cOf[cs.closest("[data-chart]").dataset.chart] = cs.dataset.csrc; renderCharts(); return; }
   if (zb) { zoomBy(zb.closest("[data-chart]").dataset.chart, zb.dataset.zoom === "in" ? 1 / 1.4 : zb.dataset.zoom === "out" ? 1.4 : 0); return; }
   if (t) { const c = t.closest("[data-chart]").dataset.chart; tfOf[c] = t.dataset.tf; delete zoomOf[c]; if (t.dataset.tf === "D") sessOf[c] = "all";
     store.set("tf", tfOf); store.set("sess", sessOf); loadChart(c, true); renderCharts(); }
@@ -627,7 +649,7 @@ $("charts").addEventListener("click", (e) => {
 });
 const under = (e) => { const el = document.elementFromPoint(e.clientX, e.clientY), card = el?.closest(".hit") && el.closest("#charts [data-chart]"); return card ? [card.querySelector("svg"), card] : [null, null]; };
 function zoomBy(c, f) {
-  const tf = tfOf[c] || "5", total = chartData[c + tf + (sessOf[c] || "all")]?.bars.length || 90;
+  const tf = tfOf[c] || TF0, total = chartData[c + tf + (sessOf[c] || "all")]?.bars.length || 90;
   if (!f) delete zoomOf[c]; else zoomOf[c] = Math.max(15, Math.min(total, Math.round(Math.min(total, zoomOf[c] || 90) * f)));
   renderCharts();
 }
@@ -666,7 +688,7 @@ $("charts").addEventListener("touchend", (e) => {
 $("charts").addEventListener("wheel", (e) => {
   const [svg, card] = under(e); if (!svg || !card) return;
   e.preventDefault();
-  const c = card.dataset.chart, tf = tfOf[c] || "5", total = chartData[c + tf + (sessOf[c] || "all")]?.bars.length || 90;
+  const c = card.dataset.chart, tf = tfOf[c] || TF0, total = chartData[c + tf + (sessOf[c] || "all")]?.bars.length || 90;
   const cur = Math.min(total, zoomOf[c] || 90);
   zoomOf[c] = Math.max(15, Math.min(total, Math.round(e.deltaY > 0 ? cur * 1.25 : cur / 1.25)));
   drawChart(c, card);
@@ -681,7 +703,7 @@ $("charts").addEventListener("mousemove", (e) => {
 });
 $("charts").addEventListener("mouseleave", () => { for (const k in crossOf) delete crossOf[k]; renderCharts(); });
 function svgChart(code) {
-  const tf = tfOf[code] || "5", ses = sessOf[code] || "all", d = chartData[code + tf + ses];
+  const tf = tfOf[code] || TF0, ses = sessOf[code] || "all", d = chartData[code + tf + ses];
   if (!d) return `<div class="empty">차트 불러오는 중</div>`;
   if (!d.bars.length) return `<div class="empty">${esc(d.err || "봉이 없습니다")}</div>`;
   const all = d.bars.map((b) => ({ ...b })), w = S.watch.find((x) => x.code === code);
@@ -711,9 +733,33 @@ function svgChart(code) {
   const plans = (S.plans || []).filter((p) => p.active && p.code === code);
   const pmd = (d) => d ? d.slice(4, 6) + "." + d.slice(6) : "";
   const liveOf = (p) => p.follow_high && S.watch.find((x) => x.code === code)?.follow?.[p.base]?.live;
-  plans.forEach((p) => !liveOf(p) && p.stages.forEach((st) => st.filled < st.qty && lines.push(st.ma ? [st.ma_px ? floorTick(st.ma_px * (1 + st.pct / 100)) : st.price, "var(--up)", true,
-    `예약 ${stName(st)} (${fmt(floorTick((st.ma_px || 0) * (1 + st.pct / 100) * (1 - st.band / 100)))}~${fmt(st.price)} 들어오면 삼 · 60선 ${fmt(st.ma_px)} · ${(st.src || p.base) === "reg" ? "정규장" : "통합"} 15분봉)`]
+  // C −N% 아래라 엔진이 안 사는 60선 예약은 안 그린다(desk.py c_near · 11-01 사용자 "사야 될 때만 나오게")
+  const cnOf = (p) => p.c_near != null && (p.c_px || p.ref_cl?.[p.c_src || p.base]) ? (p.c_px || p.ref_cl[p.c_src || p.base]) * (1 - p.c_near / 100) : 0;
+  // 버팀 매수(ma_confirm)는 60선에 안 닿아도 끝난 15분봉 N개가 60선 위 0~hold% 마감 → 마지막 종가에 삼(desk.py _ma_confirmed) — 그 값이 C −N% 아래면 안 삼
+  const maLine = (p, st) => { const ma = st.ma_px || 0, cn = cnOf(p), tf = `${(st.src || p.base) === "reg" ? "정규장" : "통합"} 15분봉`;
+    if (p.ma_confirm) { const hi = floorTick(ma * (1 + (p.ma_hold ?? 2) / 100)), lo = Math.max(ma, cn ? Math.round(cn) : 0);
+      return lo > hi ? null
+        : [lo, "var(--up)", true, `예약 60선 버팀 — ${tf} ${p.ma_confirm}개가 ${fmt(lo)}~${fmt(hi)}에서 마감하면 그 종가에 삼 (60선 ${fmt(ma)}${cn ? ` · BC −${p.c_near}% ${fmt(Math.round(cn))} 이상만` : ""})`]; }
+    const top = ma ? floorTick(ma * (1 + st.pct / 100)) : st.price;
+    return cn && top < cn ? null
+      : [top, "var(--up)", true, `예약 ${stName(st)} (${fmt(floorTick(ma * (1 + st.pct / 100) * (1 - st.band / 100)))}~${fmt(st.price)} 들어오면 삼 · 60선 ${fmt(ma)} · ${tf})`]; };
+  plans.forEach((p) => !liveOf(p) && p.stages.forEach((st) => st.filled < st.qty && (st.ma ? maLine(p, st) : 1) && lines.push(st.ma ? maLine(p, st)
     : [st.price, "var(--up)", true, `예약 ${st.pct}% ${fmt(st.price)} (${pmd(p.follow_day || p.ref_day)} ${p.base === "reg" ? "정규장" : "애프터"} 종가 ${fmt(p.base_px)} 대비)`])));
+  // C 선(11-01 사용자 "차트에서 C값에 선 하나") — 기준일(신고대금 날) 종가. 예약이 있으면 그 예약이 고정한 C(고점 따라가기로 안 옮겨짐), 없으면 매수 규칙 기준의 기준일 종가
+  const cW = code === active ? S.active : S.watch.find((x) => x.code === code);
+  // 보기 기준(11-01 사용자 "차트에 C 보이는 기준도 정규장/애프터") — 'C 규칙'이면 예약의 C 기준(없으면 매수 규칙의 C 기준), 아니면 고른 쪽 종가
+  // 'C 규칙' = 그 예약을 만든 매수 규칙의 지금 C 기준(없으면 켜진 매수 규칙) — S.rules 는 폴링마다 새로 와서 다른 창에서 바꿔도 바로 따라간다
+  const cp = plans.find((p) => p.c_px || !p.follow_day), cR = (S.rules || []).find((r) => r.id === cp?.buy_rule && r.c_src) || (S.rules || []).find((r) => r.on && r.c_src);
+  const cSel = cOf[code] || "", cs = cSel || cR?.c_src || cp?.c_src || cp?.base || "reg", cDay = cp?.ref_day || cW?.ref_day;
+  // 당일 예약은 만든 때 값(장중)이 기준가라 C 를 정하기 전엔 받아 둔 기준일 종가로 — 11-01 지니언스 28,000(19:03 값) vs 애프터 종가 26,650
+  const cPx = (cp?.c_px && cs === cp.c_src && cp.c_px) || cp?.ref_cl?.[cs] || (cW?.ref_day && cW.ref_day === cDay && (cs === "reg" ? cW.ref_reg : cW.ref_aft)) || (cp && !cp.same_day && cs === cp.base && cp.base_px) || 0;
+  const cGap = cPx ? `BC대비 ${last.c >= cPx ? "+" : ""}${((last.c / cPx - 1) * 100).toFixed(1)}%` : "";   // 11-01 사용자 "C값과 현재가 N% 차이"
+  if (cPx) lines.push([cPx, "var(--gold)", false, `BC ${fmt(cPx)} · 지금 ${cGap} (${pmd(cDay)} ${cs === "reg" ? "정규장" : "애프터"} 종가)`]);
+  const cHi = cPx && S.flow?.[code]?.[ses === "reg" ? "chi_reg" : "chi"];   // HC 는 차트 보기(애프터 포함/정규장)를 따른다 — BC 버튼과 안 묶음(11-01 사용자 "HC는 BC랑 같이 묶이면 안돼")
+  const hcGap = cHi ? `${last.c >= cHi ? "+" : ""}${((last.c / cHi - 1) * 100).toFixed(2)}%` : "";   // 11-01 사용자 "차트에 HC" — HC = C 날부터 지금까지 통합(08~20시) 최고가(trader/flow.py chi)
+  const dHi = cPx && S.flow?.[code]?.[cs === "reg" ? "dhi_reg" : "dhi"];   // BC 날(신고대금일) 고점 — BC 버튼(규칙/정규/애프터)에 묶음(11-01 사용자 "BC 애프터 누르면 고점도 애프터 고가")
+  if (cHi) lines.push([cHi, "var(--gold)", true, `HC ${fmt(cHi)} · 지금 HC대비 ${hcGap} (${pmd(cDay)}부터 ${ses === "reg" ? "정규장" : "애프터 포함"} 최고가${dHi === cHi ? " = BC날 고점" : ""})`]);
+  if (dHi && dHi !== cHi) lines.push([dHi, "#c9a24a", true, `BC날 고점 ${fmt(dHi)} · 지금 ${last.c >= dHi ? "+" : ""}${((last.c / dHi - 1) * 100).toFixed(2)}% (${pmd(cDay)} ${cs === "reg" ? "정규장" : "애프터 포함"} 고가)`]);
   // 오늘 전날 고가를 넘었으면(고점 갱신) 장 끝난 뒤 기준이 오늘 종가로 바뀐다 — 지금가로 미리 보여 준다(10-20 사용자 "오늘로 또 바뀌어야지")
   // 예약이 없는 종목도(다 팔았거나 끝난 예약) 켜진 매수 규칙이 고점 따라가기면 오늘 고점 갱신을 보여 준다(10-20 사용자 에스엠벡셀)
   const fr = (RULES?.rules || []).find((r) => r.on && r.ladder?.on && r.ladder.follow_high?.on), fw = S.watch.find((x) => x.code === code);
@@ -773,6 +819,8 @@ function svgChart(code) {
   const ly = y(last.c);
   s += `<line x1="0" x2="${PW}" y1="${ly}" y2="${ly}" stroke="#dfe4ec" stroke-dasharray="2 3" opacity=".5"/>`;
   s += `<rect x="${W - 62}" y="${ly - 8}" width="62" height="16" rx="3" fill="#dfe4ec"/><text x="${W - 31}" y="${ly + 4}" text-anchor="middle" font-size="11" fill="#0a0d12" font-family="JetBrains Mono">${fmt(last.c)}</text>`;
+  if (cGap) s += `<rect x="${W - 62}" y="${ly + 9}" width="62" height="15" rx="3" fill="#0a0d12" opacity=".85"/><text x="${W - 31}" y="${ly + 20}" text-anchor="middle" font-size="10.5" font-weight="700" fill="var(--gold)" font-family="JetBrains Mono">${cGap.replace("BC대비 ", "BC")}</text>`;   // 현재가 상자 바로 밑 — C 선이 화면 밖이어도 보이게
+  if (hcGap) s += `<rect x="${W - 62}" y="${ly + 25}" width="62" height="15" rx="3" fill="#0a0d12" opacity=".85"/><text x="${W - 31}" y="${ly + 36}" text-anchor="middle" font-size="10.5" font-weight="700" fill="var(--gold)" font-family="JetBrains Mono">HC${hcGap}</text>`;
   const cr = crossOf[code];
   if (cr) {
     const i = Math.max(0, Math.min(n - 1, Math.floor((cr.fx * W) / bw))), b = bars[i], cx = i * bw + bw / 2, cy = cr.fy * H;
@@ -925,6 +973,39 @@ $("tabBody").addEventListener("change", async (e) => {
 // ── 호가 ────────────────────────────────────────────
 // 호가는 차트마다 옆에(10-19). 가격을 누르면 그 종목을 고르고 주문가로 넣는다
 function renderBook() { const box = $("charts"); chartCodes().forEach((c) => drawBook(c, box.querySelector(`[data-chart="${c}"]`))); }
+// C 사다리 · 지금 신호 · 시장가 매수 세기(11-01 사용자 "실시간으로 C 중심", trader/flow.py) — 자동 매수와 무관한 보기·경고
+const FZ = { B: ["매수 우세", "#ff5c63"], S: ["매도 우세", "#4d8dff"], U: ["매물", "#e2b65a"], G: ["받침", "#3ccf7e"], M: ["보통", "#8d96a5"], T: ["거래 적음", "#5b6472"] };
+const FS = { buy: ["살 자리", "var(--ok)"], wait: ["기다림", "var(--gold)"], avoid: ["사지 말 것", "var(--up)"], hold: ["들고 있음", "var(--acc)"] };
+function flowHtml(c) {
+  const f = S.flow?.[c];
+  if (!f) return `<div class="dim" style="font-size:11px">BC 사다리 — 기준일 종가(BC)를 아직 모릅니다</div>`;
+  if (f.err) return `<div class="dim" style="font-size:11px">BC 사다리 오류: ${esc(f.err)}</div>`;
+  const sg = FS[f.sig?.s] || FS.wait, band = (p) => p ? f.rows.findIndex((x) => (x.lo == null || p >= x.lo) && (x.hi == null || p < x.hi)) : -1;
+  const bNow = f.band, bMa = band(f.ma), bW = band(f.wall);
+  const heat = f.heat, hc = heat == null ? "var(--dim)" : heat >= 3 ? "var(--up)" : heat >= 1.5 ? "var(--gold)" : "var(--ok)";
+  const segs = f.rows.map((r, i) => ({ ...r, i })).reverse();      // 왼쪽 = C 아래(−10%↓) · 오른쪽 = C 위
+  const cell = (r) => { const z = FZ[r.z] || FZ.T, mk = [r.i === bNow ? "●지금" : "", r.i === bMa ? "▲60선" : "", r.i === bW ? "═벽" : ""].filter(Boolean).join(" ");
+    // 세력 읽기(11-01 사용자 "사다리는 세력 입장에서") — C 날 뒤 이 칸 체결 = C 날 대금의 몇 %, 시장가 매도가 한 값에 몰렸으면(개인 지정가 벽이 먹힘) '몰림 값', 여러 값이면 '나눠'(세력은 나눠 받는다)
+    const op = r.amt == null || !r.amt ? "" : `${r.amt}%${r.op ? " " + (r.op === "몰림" ? "몰림 " + fmt(r.op_px) : "나눠") : ""}`;
+    return `<div class="fz${r.i === bNow ? " now" : ""}" style="--zc:${z[1]}" title="${esc(r.lab)} ${r.lo ? fmt(r.lo) : ""}~${r.hi ? fmt(r.hi) : ""} · ${z[0]} · 물린 ${r.trap ?? "—"}%${r.amt ? ` · BC 날 뒤 이 칸 체결 = BC 날 대금의 ${r.amt}%` + (r.op === "몰림" ? ` · 시장가 매도가 ${fmt(r.op_px)} 한 값에 몰림(개인 지정가 벽이 먹힘 — 세력은 이렇게 안 산다)` : r.op ? " · 여러 값에 나눠 받음(세력이 받는 모양)" : "") : ""}"><span class="fl">${esc(r.lab)}</span><span class="fn" style="color:${z[1]}">${z[0]}</span><span class="ft">${r.trap ?? "—"}%</span><span class="fo${r.op === "몰림" ? " mob" : ""}">${op}</span><span class="fm">${mk}</span></div>`; };
+  const cIdx = segs.findIndex((r) => r.i === 5);                    // 0~+1% 칸 앞에 C 칸
+  const lad = segs.map((r, k) => (k === cIdx ? `<div class="fz fc" title="BC ${fmt(f.C)}"><span class="fl">BC</span><span class="fn">${fmt(f.C)}</span><span class="ft">${f.c_src === "reg" ? "정규장" : "애프터"}</span><span class="fm">${f.c_day ? f.c_day.slice(5) : ""}</span></div>` : "") + cell(r)).join("");
+  const how = f.how ? Object.entries(f.how).filter(([, v]) => v).map(([k, v]) => ({ sign15: "체결 부호", quote: "호가 비교", tick: "직전가" }[k] + " " + v + "%")).join(" · ") + (f.tick_ok != null ? ` · 직전가 짐작 맞음 ${f.tick_ok}%` : "") : "체결 아직 없음";
+  const ev = (f.events || []).slice(0, 3).map((e) => `<span><b class="mono">${e.t}</b> ${esc(e.text.replace(/^\S+ /, ""))}</span>`).join("");
+  return `<div class="frow">
+      <div class="fsig" role="status" style="--sc:${sg[1]}"><b>${sg[0]}</b><span>${esc(f.sig?.why || "")}</span></div>
+      <div class="fheat" title="최근 5분 시장가 매수 ÷ 평소(${esc(f.base_src || "평소 기준 없음")}) — 3배 넘으면 과열 매수(3개월: 60분 뒤 −0.3%, −2% 먼저 29%·+2% 먼저 25%)">
+        <span class="dim">매수 세기</span><span class="fbar"><i style="width:${heat == null ? 0 : Math.min(100, heat / 6 * 100)}%;background:${hc}"></i><em></em></span>
+        <b class="mono" style="color:${hc}">${heat == null ? "장 밖" : heat.toFixed(1) + "배"}</b></div>
+      <div class="fmeta dim">구간 색 근거 <b style="color:${(f.zone_days || 0) >= 3 ? "var(--text)" : "var(--gold)"}">체결 ${f.zone_days || 0}일${(f.zone_days || 0) < 3 ? "(적음 — 흔들림 큼)" : ""}</b> · 물린 <b class="mono" style="color:var(--text)">${f.trap_now ?? "—"}%</b> · 벽 <b class="mono" style="color:#3ccf7e">${f.wall ? fmt(f.wall) : "없음"}</b> · ${how}</div></div>
+    ${(f.op_days || []).length ? `<div class="fop" title="세력 입장(자동 매수 무관): 내린 날 대금이 BC 날의 절반 이하면 털기 쪽, 절반 이상이면 큰 대금 하락·BC 날 이상이면 넘기기 쪽. 오른 날 그날 고점에서 4% 넘게 눌렸다 올렸으면 흔들며 올림. 11-01 장부 460날 검증(다음 날 09:00 사서 15:30, 비용 뺌): 평소 −0.4% · 털기 쪽 −0.7% · 흔들며 올림 −0.7% → 살 근거 아님. 큰 대금 하락 −1.6%(14번, 이긴 29%) → 조심. 재매수 금지 걸린 뒤는 −1.5%(3일 −5.0%)"><span class="dim">세력 읽기 <small>(살 근거 아님 · 큰 대금 하락만 조심)</small></span>${f.op_days.map((d) => `<span class="oc${["큰 대금 하락", "넘기기 쪽"].includes(d.k) ? " warn" : ""}"><b class="mono">${d.d}</b> <b style="color:${{ "큰 대금 하락": "var(--up)", "넘기기 쪽": "var(--up)" }[d.k] || "var(--text)"}">${d.k || (d.chg >= 0 ? "오름" : "내림")}</b> <span class="mono dim">${d.chg >= 0 ? "+" : ""}${d.chg}% · 대금 BC날 ${d.val}%${d.k === "흔들며 올림" ? " · 눌림 " + d.dd + "%" : ""}</span></span>`).join("")}</div>` : ""}
+    <div class="flad">${lad}</div>
+    ${ev ? `<div class="fev">${ev}</div>` : ""}`;
+}
+function drawFlow(c, card) {
+  const el = card?.querySelector(".flow"); if (!el) return;
+  const h = flowHtml(c); if (el._h !== h) { el.innerHTML = h; el._h = h; }
+}
 function drawBook(c, card) {
   const el = card?.querySelector(".bkrows"); if (!el) return;
   const h = bookHtml(c); if (el._h !== h) { el.innerHTML = h; el._h = h; }
@@ -1221,7 +1302,7 @@ function buySum(r) {
     if (ps.on) re.push(`<b>재매수 금지</b>: 고가가 기준일 ${by} +${ps.pct}%${ps.big?.cap && ps.big?.pct ? `(시총 ${ps.big.cap}억↑ +${ps.big.pct}%)` : ""} 넘으면 그 흐름 끝${ps.first ? ` · 처음 신고대금 날 기준(${ps.first_days || 21}일 안${ps.first_min_chg ? `, +${ps.first_min_chg}% 이상 신고대금만` : ""} 같은 흐름)` : ""}`);
   }
   const no = !on ? [] : [l.guard?.on && `다음 날 ${l.guard.until} 전 −${l.guard.pct}% 급락이면 버림`, l.gap?.on && "마지막 단계 아래로 갭 하락한 날 안 삼",
-    l.drop?.on && `전날 종가 −${l.drop.pct}% 이하면 버림`, l.ma_turn?.on && (l.ma_turn.mode === "pause" ? "60선 꺾인 동안 멈춤" : "60선 꺾이면 끝"), l.ma_stop?.on && `60선 −${l.ma_stop.pct}% 깨지면 60선 단계 멈춤`, l.c_near?.on && `60선은 C −${l.c_near.pct}% 이상일 때만${l.c_near.full ? " · 그 위면 한 번에 100%" : ""}`, l.ma_confirm?.on && `60선 위 0~${l.ma_confirm.hold || 2}%에서 ${l.ma_confirm.n}개 버티면 종가에 삼`, l.slice?.on && "Jev 가 호가 보고 나눠 삼"].filter(Boolean);
+    l.drop?.on && `전날 종가 −${l.drop.pct}% 이하면 버림`, l.ma_turn?.on && (l.ma_turn.mode === "pause" ? "60선 꺾인 동안 멈춤" : "60선 꺾이면 끝"), l.ma_stop?.on && `60선 −${l.ma_stop.pct}% 깨지면 60선 단계 멈춤`, l.c_near?.on && `60선은 BC${l.c_near.src ? `(${l.c_near.src === "reg" ? "정규장" : "애프터"} 종가)` : ""} −${l.c_near.pct}% 이상일 때만${l.c_near.full ? " · 그 위면 한 번에 100%" : ""}`, l.ma_confirm?.on && `60선 위 0~${l.ma_confirm.hold || 2}%에서 ${l.ma_confirm.n}개 버티면 종가에 삼`, l.slice?.on && "Jev 가 호가 보고 나눠 삼"].filter(Boolean);
   const x = (draft?.exits || []).find((e) => e.id === r.exit);
   const row = (t, v) => `<span>${t}</span><span>${v}</span>`;
   return row("① 진입 종류", entry) + row("② 진입 조건", cond) + row("③ 재진입", re.join(" · ")) + row("④ 안 사는 경우", no.join(" · ") || "없음")
@@ -1320,9 +1401,9 @@ function buyEditor(r) {
           <span class="dim">15분봉 60선(①의 '기준' 봉, 지금가 포함)이 전 거래일 마지막 60선보다 낮아지면 꺾임 · 걸린 매수는 거둠 · 멈춤이면 60선이 전날 마지막 위로 돌아올 때 다시 삼 · 기준일 다음 날부터 봄</span></div>
         <div class="row" style="gap:8px;flex-wrap:wrap"><label class="row" style="gap:6px"><input type="checkbox" data-lms="1" ${r.ladder.ma_stop?.on ? "checked" : ""} style="width:16px;height:16px;margin:0">60선 깨지면 멈춤</label>
           <span class="dim">지금가가 15분봉 60선 −</span><input class="in num" data-lmsp="1" value="${esc(r.ladder.ma_stop?.pct || "6")}" style="width:52px" aria-label="60선 엔벨로프 하단 %"><span class="dim">%(엔벨로프 하단) 아래로 깨지면 그 예약의 60선 단계는 더 안 삼 · 걸린 60선 주문도 거둠 · 고점 따라가기로 기준이 옮겨지면 다시</span></div>
-        <div class="row" style="gap:8px;flex-wrap:wrap"><label class="row" style="gap:6px"><input type="checkbox" data-lcn="1" ${r.ladder.c_near?.on ? "checked" : ""} style="width:16px;height:16px;margin:0">C −N% 위에서만 60선 매수</label>
-          <span class="dim">60선 단계가 사는 값이 기준일(처음 신고대금 날) 종가 C −</span><input class="in num" data-lcnp="1" value="${esc(r.ladder.c_near?.pct || "3")}" style="width:52px" aria-label="C 아래 허용 %"><span class="dim">% 이상일 때만 삼 · C 는 고점 따라가기로 기준가가 옮겨져도 그대로 · 신고대금 당일은 종가가 없어 안 막음</span>
-          <label class="row" style="gap:6px"><input type="checkbox" data-lcnf="1" ${r.ladder.c_near?.full ? "checked" : ""} style="width:16px;height:16px;margin:0">C −N% 위면 한 번에 100%</label><span class="dim">사는 값이 C −N% 이상이면 아직 안 산 단계 금액까지 합쳐 그 자리에서 다 삼</span></div>
+        <div class="row" style="gap:8px;flex-wrap:wrap"><label class="row" style="gap:6px"><input type="checkbox" data-lcn="1" ${r.ladder.c_near?.on ? "checked" : ""} style="width:16px;height:16px;margin:0">BC −N% 위에서만 60선 매수</label>
+          <span class="dim">60선 단계가 사는 값이 기준일(처음 신고대금 날) 종가 BC −</span><input class="in num" data-lcnp="1" value="${esc(r.ladder.c_near?.pct || "3")}" style="width:52px" aria-label="BC 아래 허용 %"><span class="dim">% 이상일 때만 삼 · BC =</span><select class="in" data-lcns="1" aria-label="BC 기준" style="width:auto"><option value="" ${!r.ladder.c_near?.src ? "selected" : ""}>매수 기준과 같게</option><option value="aft" ${r.ladder.c_near?.src === "aft" ? "selected" : ""}>애프터 종가</option><option value="reg" ${r.ladder.c_near?.src === "reg" ? "selected" : ""}>정규장 종가</option></select><span class="dim">· BC 는 고점 따라가기로 기준가가 옮겨져도 그대로 · 신고대금 당일은 종가가 없어 안 막음 · 바꾸면 이미 만든 예약의 BC 도 바로 바뀜</span>
+          <label class="row" style="gap:6px"><input type="checkbox" data-lcnf="1" ${r.ladder.c_near?.full ? "checked" : ""} style="width:16px;height:16px;margin:0">BC −N% 위면 한 번에 100%</label><span class="dim">사는 값이 BC −N% 이상이면 아직 안 산 단계 금액까지 합쳐 그 자리에서 다 삼</span></div>
         <div class="row" style="gap:8px;flex-wrap:wrap"><label class="row" style="gap:6px"><input type="checkbox" data-lmc="1" ${r.ladder.ma_confirm?.on ? "checked" : ""} style="width:16px;height:16px;margin:0">60선 위에서 버티면 삼</label>
           <span class="dim">60선에 안 닿아도, 15분봉이 60선 위 0~</span><input class="in num" data-lmch="1" value="${esc(r.ladder.ma_confirm?.hold || "2")}" style="width:52px" aria-label="버팀 범위 %"><span class="dim">% 안에서</span><input class="in num" data-lmcn="1" value="${esc(r.ladder.ma_confirm?.n || "3")}" style="width:52px" aria-label="확인할 15분봉 수"><span class="dim">개 연달아 마감하면 그 봉 종가에 지정가로 삼 · 60선 아래 마감이면 주문 거두고 처음부터 · 켜면 60선 닿을 때 바로 사기는 안 함</span></div>
         <div class="row" style="gap:8px;flex-wrap:wrap"><label class="row" style="gap:6px"><input type="checkbox" data-lsl="1" ${r.ladder.slice?.on ? "checked" : ""} style="width:16px;height:16px;margin:0">Jev 가 호가 보고 나눠 사기</label>
@@ -1633,6 +1714,7 @@ $("rulesView").addEventListener("change", (e) => {
   else if (d.lcn) r.ladder.c_near = { pct: "3", ...(r.ladder.c_near || {}), on: el.checked };
   else if (d.lsl) r.ladder.slice = { on: el.checked };
   else if (d.lmc) r.ladder.ma_confirm = { n: "3", ...(r.ladder.ma_confirm || {}), on: el.checked };
+  else if (d.lcns) r.ladder.c_near = { on: false, pct: "3", ...(r.ladder.c_near || {}), src: el.value };
   else if (d.lcnf) r.ladder.c_near = { on: false, pct: "3", ...(r.ladder.c_near || {}), full: el.checked };
   else if (d.lrb) r.ladder.rebuy = { n: "1", ...(r.ladder.rebuy || {}), on: el.checked };
   else if (d.lfh) r.ladder.follow_high = { ...(r.ladder.follow_high || {}), on: el.checked };

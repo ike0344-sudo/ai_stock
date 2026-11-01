@@ -17,6 +17,8 @@ import time
 from collections import deque
 from datetime import datetime
 
+from . import flow, rec
+
 # 0B 는 통합(_AL)으로 받아야 NXT 시간대(08:00~09:00, 15:30~20:00)에도 값이 온다.
 # 0D 호가도 통합이 맞는지는 실측 전 — 정규장에 KRX 와 같은지부터 볼 것.
 QUOTE_SUFFIX = "_AL"
@@ -112,6 +114,12 @@ def _on_message(ws, message: str) -> None:
             elif kind == "00":
                 ev = parse_order(values)
                 order_events.append(ev)
+        rec.put(kind, code, values)                                 # 체결·호가 원본 저장(고른 종목 + 최근 신고대금)
+        if kind == "0B":
+            try:
+                flow.on_tick(code, values)                          # 시장가 매수·매도 흐름 — C 사다리·신호(11-01, trader/flow.py)
+            except Exception as e:                               # noqa: BLE001 — 흐름 계산 오류로 수신이 멈추면 안 된다
+                _state["err"] = f"체결 흐름 처리 오류: {e}"
         if kind == "00" and _on_order:
             try:
                 _on_order(ev)

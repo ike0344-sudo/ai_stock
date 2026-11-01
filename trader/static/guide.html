@@ -34,7 +34,7 @@ ol li, ul li { margin: 3px 0; }
   <a href="#start">시작</a><a href="#screen">화면 구성</a><a href="#add">종목 넣기</a><a href="#ref">기준일</a>
   <a href="#ladder">기준일 종가 분할매수</a><a href="#near">근접 주문</a><a href="#sets">매수 세트</a><a href="#rules">매수 규칙(자동)</a>
   <a href="#conds">매수 조건</a><a href="#stages">매수 단계 · 60선 · 시각</a><a href="#ladopt">예약 옵션</a><a href="#follow-ex">고점 따라가기 예시</a><a href="#ma-turn">60선 매수 규칙(7종목)</a>
-  <a href="#exit">청산 규칙</a><a href="#safety">안전장치</a><a href="#bt">백테스트</a><a href="#tune">변수 찾기 결과</a><a href="#tabs">아래 탭</a><a href="#chart">차트 조작</a><a href="#tg">텔레그램</a><a href="#caution">주의할 점</a>
+  <a href="#flowread">시장가 매수 판별 · 꼭 볼 곳</a><a href="#exit">청산 규칙</a><a href="#safety">안전장치</a><a href="#bt">백테스트</a><a href="#tune">변수 찾기 결과</a><a href="#tabs">아래 탭</a><a href="#chart">차트 조작</a><a href="#tg">텔레그램</a><a href="#caution">주의할 점</a>
 </nav>
 <main>
 <h1>매매 데스크 설명서</h1>
@@ -253,7 +253,13 @@ ol li, ul li { margin: 3px 0; }
       <li><b>옮긴 뒤 산 건 청산</b>: 따로 고른 청산 규칙(예: 고점 따라가기 · 6% 익절)으로 팝니다. 기준일 종가로 산 뒤 고점 따라가기로 더 사면, 그때부터 그 종목 <b>전체</b>를 이 청산으로 팝니다.</li>
     </ul></td></tr>
   <tr><td>60선 깨지면 멈춤</td><td>지금가가 15분봉 60선 −N%(엔벨로프 하단, 기본 6%) 아래로 깨지면, 그 예약의 <b>60선 단계는 더 안 삽니다</b>. 걸려 있던 60선 주문도 거둡니다. 기준 종가 % 단계는 그대로. 고점 따라가기로 기준이 옮겨지면 다시 삽니다. 60선은 매수 단계와 같은 봉(규칙의 "기준")으로 봅니다.</td></tr>
-  <tr><td>C −N% 위에서만 60선 매수</td><td>60선 단계가 사는 값(범위 위쪽 끝)이 <b>기준일(처음 신고대금 날) 종가 C −N%</b>(기본 3%) 이상일 때만 삽니다. 60선이 C 위면 그대로, C 아래 N% 안이면 삼, 그보다 아래면 안 삼(하루 한 번 알림). C 는 고점 따라가기로 기준가가 옮겨져도 바뀌지 않습니다. 신고대금 당일 예약은 그날 종가가 아직 없어 막지 않고, 다음 거래일부터 봅니다. 기준 종가 % 단계는 그대로.<br><b>C −N% 위면 한 번에 100%</b>(체크): 사는 값이 C −N% 이상이면 아직 주문을 안 낸 다른 단계 금액까지 합쳐 그 자리에서 다 삽니다(10-30 사용자 "C 기준 −2% 위로는 다 사지게").</td></tr>
+  <tr><td>C 사다리 · 지금 신호 (차트 아래 띠, 11-01)</td><td>고른 종목 차트마다 아래에 붙습니다. <b>자동 매수와는 무관</b>한 보기·경고입니다.<br>
+  <b>지금 신호</b>: 살 자리(예약 매수 주문이 나감) · 기다림(60선까지 거리, 버팀 n/2, C −N% 선) · <b>사지 말 것</b>(C 첫 깨짐 30분 · 헛오름 15분 · 과열 매수 15분) · 들고 있음(손익, −4% 까지).<br>
+  <b>매수 세기</b>: 최근 5분 시장가 매수 ÷ 평소(전 거래일 정규장 5분 평균, 체결 파일 없으면 1분봉 대금 절반). 흰 눈금 3배 — 넘고 오르면 '과열 매수'(3개월 체결: 60분 뒤 −0.3%, −2% 먼저 29%·+2% 먼저 25% — 평소 15·11%, 앞·뒤 기간 같음).<br>
+  <b>헛오름</b>: 매수 힘보다 가격이 더 튐(30분 뒤 내림 59%). <b>C 첫 깨짐</b>: 그날 C 위에 있다가 처음 아래로(매도 몰림 3.2배).<br>
+  <b>가로 사다리</b>: 왼쪽 C −10% 아래 → 오른쪽 C +10% 위. 칸마다 구간(매수 우세·매도 우세·매물·받침·보통·거래 적음), 물린 %(C 날부터 그 값보다 비싸게 거래된 몫), ●지금 ▲60선 ═벽(오늘 시장가 매도를 가장 많이 받아낸 값). <b>구간 색 근거가 체결 1~2일이면 흔들림이 큽니다</b>(노란 글씨).<br>
+  시장가 매수·매도는 실시간 체결의 매수·매도 부호 → 그 순간 호가 비교 → 직전가 비교 순으로 가르고, 어느 방법을 썼는지 띠에 %로 보입니다. 신호 기록: state/trader/flow_events.jsonl. 근거·한계: 체결 3개월(거래대금 상위 종목 위주), 걸러 내기를 지금 매수 규칙에 붙인 백테스트는 손익이 거의 같았음 — 직접 매매 때 따라 사지 않기 용도.</td></tr>
+  <tr><td>C −N% 위에서만 60선 매수</td><td>60선 단계가 사는 값(범위 위쪽 끝)이 <b>기준일(처음 신고대금 날) 종가 C −N%</b>(기본 3%) 이상일 때만 삽니다. 60선이 C 위면 그대로, C 아래 N% 안이면 삼, 그보다 아래면 안 삼(하루 한 번 알림). C 는 고점 따라가기로 기준가가 옮겨져도 바뀌지 않습니다. 신고대금 당일 예약은 그날 종가가 아직 없어 막지 않고, 다음 거래일부터 봅니다. 기준 종가 % 단계는 그대로.<br><b>C 기준</b>(11-01): C 를 기준일 <b>애프터 종가</b>로 볼지 <b>정규장 종가</b>로 볼지 고릅니다. 안 고르면 매수 기준(정규장/애프터)과 같습니다. 바꾸면 이미 만든 예약의 C 도 바로 그 기준으로 바뀝니다(다른 예약 설정은 만들 때 그대로). 차트의 C 선은 차트 위 'C 규칙 · C 정규 · C 애프터'로 종목마다 잠깐 바꿔 볼 수 있습니다(매수 판단은 안 바뀜 · 새로고침하면 'C 규칙'으로).<br><b>C −N% 위면 한 번에 100%</b>(체크): 사는 값이 C −N% 이상이면 아직 주문을 안 낸 다른 단계 금액까지 합쳐 그 자리에서 다 삽니다(10-30 사용자 "C 기준 −2% 위로는 다 사지게").</td></tr>
   <tr><td>60선 위에서 버티면 삼</td><td>60선에 닿지 않아도 됩니다. <b>15분봉 종가가 60선 위 0~H%(기본 2%) 안에서 N개(기본 3) 연달아 마감</b>하면 그 봉 종가에 지정가로 삽니다(더 버티면 새 종가로). 60선 아래로 마감하면 걸린 주문을 거두고 처음부터 셉니다. 60선 위 H% 보다 멀리 마감하면 세기만 처음부터(걸린 주문은 둠). 켜면 '60선 닿으면 바로 사기'는 하지 않습니다(10-30 사용자 "60선 위에서 버티면 사게"). 아래 시험은 바꾸기 전(닿은 뒤 확인) 것입니다. 10-30 시험(60선 매수 규칙): 3개가 두 구간 모두 '닿으면 바로'보다 나았지만(앞 +112만 vs −425만, 뒤 +2,153만 vs +1,451만) 매매 8~22번이라 표본이 작습니다.</td></tr>
   <tr><td>Jev 가 호가 보고 나눠 사기</td><td>살 자리에 오면 한 주문으로 다 내지 않습니다. Jev 가 10호가를 보고 <b>매도 몇 호가까지(1~3) · 그 잔량의 몇 % · 몇 초 뒤(2~30초) 다시</b>를 정하면 그만큼 지정가로 사고, 안 채워진 몫은 거두고 다음 조각을 냅니다. <b>원래 주문 가격 위로는 절대 안 사고 남은 수량보다 많이 안 삽니다</b>(코드가 강제). 매도1호가가 그 가격 위면 그 가격에 걸어 두고 기다립니다. Jev 가 2초 안에 답이 없으면 매도1호가 잔량 절반씩 5초 간격, 호가가 안 들어오면 남은 몫을 원래 가격에 한 번에, 10분 안에 다 못 사면 남은 몫을 원래 가격에 걸어 둡니다. 조각 기록은 state/trader/slices.jsonl. 백테스트에는 호가 기록이 없어 반영되지 않습니다(10-30).</td></tr>
   <tr><td><b>오른 뒤 재매수 금지</b></td><td>고가가 한 번이라도 <b>기준일 종가</b>(또는 <b>기준일 고가</b>, 고르기) +N%를 넘으면 그 예약은 <b>끝</b>입니다. 걸린 매수도 거둡니다. 기준일 다음 날부터 봅니다(장중 고가로 바로).
@@ -889,6 +895,214 @@ ol li, ul li { margin: 3px 0; }
   <li><b>정규장 vs 애프터</b>: 같은 설정이면 비슷하거나 애프터가 조금 나을 때도 있지만(고가 +10%: +143 vs +165), 최종 설정(종가 +23%)은 정규장이 낫습니다.</li>
   <li class="dim">처음엔 단순 청산(+6%/−4%·3일)으로 "60선 꺾이면 끝"을 먼저 시험했습니다(167번 중 막으면 34번 23승 7패). 실제 청산 규칙으로 다시 재니 위 표처럼 바뀌었습니다.</li>
 </ul>
+<h2 id="flowread">시장가 매수 판별 · 꼭 볼 곳 (C 사다리 띠, 11-01)</h2>
+<h3>시장가 매수·매도는 어떻게 가르나</h3>
+<p>"누가 급해서 먼저 샀나(시장가 매수)"를 체결마다 아래 순서로 정합니다. 띠의 <span class="k">방법 %</span>에 어느 걸 썼는지 나옵니다.</p>
+<table>
+  <tr><th style="white-space:nowrap">순서</th><th>방법</th><th style="white-space:nowrap">믿을 만한가</th></tr>
+  <tr><td>①</td><td><b>체결 부호</b> — 키움 실시간 체결에 붙어 오는 매수(+)·매도(−) 표시</td><td style="color:var(--ok)"><b>좋음</b> · 진짜 값</td></tr>
+  <tr><td>②</td><td><b>호가 비교</b> — 체결값이 매도호가 이상이면 매수, 매수호가 이하면 매도</td><td>보통 · ①이 없을 때만</td></tr>
+  <tr><td>③</td><td><b>직전가</b> — 직전 체결보다 오르면 매수, 내리면 매도, 같으면 앞 방향 그대로</td><td class="up"><b>짐작</b> · 같은 값 체결이 약 60%라 그만큼 불확실</td></tr>
+</table>
+<div class="card warn"><b>주의</b>: 저장된 체결 파일에는 ① 표시가 없어서, 지금까지의 3개월 분석(헛오름·과열·C 첫 깨짐 숫자)은 전부 <b>③ 짐작</b>으로 냈습니다.
+장중에는 띠에 <span class="k">직전가 짐작 맞음 N%</span>가 나옵니다 — ①과 ③을 같은 체결에 같이 돌려 맞은 비율입니다.
+<b>80% 이상이면</b> 그 분석을 믿어도 되고, <b>70% 아래면</b> 숫자를 덜 믿고 실시간 기록이 쌓인 뒤 다시 봐야 합니다.<br><b>10-30 실측</b>(키움 체결정보의 진짜 표시, 4종목·19만 체결): 짐작 맞음 <b>81~89%</b>(대금 기준 83~92%), 5분 흐름 방향 81~87% 같음, 경고 신호는 진짜로 뜬 5분의 약 80%를 짐작도 잡음, 사다리 칸 색은 대부분 같지만 안랩은 14칸 중 4칸이 달랐음 — <b>방향·결론은 믿을 만하고, 칸 하나하나의 색은 조심</b>.<br>
+<span class="dim">띠의 방법 %가 대부분 "체결 부호"가 아니면(③ 직전가가 많으면) 그날 띠의 매수·매도 구분 자체가 짐작입니다.</span></div>
+
+<h3>09:00~10:30 동안 꼭 볼 곳 (중요한 순서)</h3>
+<!-- fig-watch -->
+<svg viewBox="0 0 900 300" role="img" aria-label="C 사다리 띠 — 볼 곳 번호" style="width:100%;height:auto;background:#0d1117;border:1px solid var(--line);border-radius:10px">
+<text x="20" y="24" font-size="13" fill="#8d96a5" font-weight="400" text-anchor="start">차트 아래 C 사다리 띠 — 번호 순서대로 보세요 (예시 화면)</text>
+<rect x="20" y="40" width="440" height="40" rx="7" fill="none" stroke="#ff5c63" stroke-width="1.5"/>
+<text x="34" y="66" font-size="16" fill="#ff5c63" font-weight="700" text-anchor="start">사지 말 것</text>
+<text x="130" y="66" font-size="13" fill="#d3d8e0" font-weight="400" text-anchor="start">헛오름 뒤 15분 · 09:42까지</text>
+<circle cx="20" cy="40" r="11" fill="#e2b65a"/><text x="20" y="44.5" text-anchor="middle" font-size="13" font-weight="700" fill="#0a0d12">1</text>
+<text x="486" y="66" font-size="12" fill="#8d96a5" font-weight="400" text-anchor="start">매수 세기</text>
+<rect x="550" y="56" width="150" height="10" rx="5" fill="#1a212b"/>
+<rect x="550" y="56" width="90" height="10" rx="5" fill="#ff5c63"/>
+<rect x="624" y="53" width="2.5" height="16" fill="#e8ebf0"/>
+<text x="710" y="66" font-size="13" fill="#ff5c63" font-weight="700" text-anchor="start">3.6배</text>
+<text x="625" y="86" font-size="10" fill="#8d96a5" font-weight="400" text-anchor="middle">흰 눈금 = 평소 3배</text>
+<circle cx="770" cy="61" r="11" fill="#e2b65a"/><text x="770" y="65.5" text-anchor="middle" font-size="13" font-weight="700" fill="#0a0d12">4</text>
+<text x="20" y="114" font-size="12" fill="#8d96a5" font-weight="400" text-anchor="start">구간 색 근거 체결 3일</text>
+<text x="190" y="114" font-size="12" fill="#e8ebf0" font-weight="600" text-anchor="start">물린 18%</text>
+<circle cx="266" cy="110" r="11" fill="#e2b65a"/><text x="266" y="114.5" text-anchor="middle" font-size="13" font-weight="700" fill="#0a0d12">6</text>
+<text x="300" y="114" font-size="12" fill="#3ccf7e" font-weight="600" text-anchor="start">벽 25,900</text>
+<circle cx="378" cy="110" r="11" fill="#e2b65a"/><text x="378" y="114.5" text-anchor="middle" font-size="13" font-weight="700" fill="#0a0d12">5</text>
+<text x="410" y="114" font-size="12" fill="#e8ebf0" font-weight="600" text-anchor="start">체결 부호 97% · 직전가 짐작 맞음 84%</text>
+<circle cx="668" cy="110" r="11" fill="#e2b65a"/><text x="668" y="114.5" text-anchor="middle" font-size="13" font-weight="700" fill="#0a0d12">7</text>
+<rect x="18" y="134" width="52" height="70" rx="4" fill="#5b6472" fill-opacity=".14"/>
+<rect x="18" y="134" width="52" height="2.5" fill="#5b6472"/>
+<text x="44.0" y="150" font-size="9.5" fill="#8d96a5" font-weight="400" text-anchor="middle">−10%↓</text>
+<text x="44.0" y="166" font-size="10" fill="#5b6472" font-weight="700" text-anchor="middle">거래 적음</text>
+<text x="44.0" y="181" font-size="10" fill="#d3d8e0" font-weight="400" text-anchor="middle">0%</text>
+<text x="44.0" y="197" font-size="10" fill="#e8ebf0" font-weight="700" text-anchor="middle"></text>
+<rect x="72" y="134" width="52" height="70" rx="4" fill="#5b6472" fill-opacity=".14"/>
+<rect x="72" y="134" width="52" height="2.5" fill="#5b6472"/>
+<text x="98.0" y="150" font-size="9.5" fill="#8d96a5" font-weight="400" text-anchor="middle">−8~−10</text>
+<text x="98.0" y="166" font-size="10" fill="#5b6472" font-weight="700" text-anchor="middle">거래 적음</text>
+<text x="98.0" y="181" font-size="10" fill="#d3d8e0" font-weight="400" text-anchor="middle">2%</text>
+<text x="98.0" y="197" font-size="10" fill="#e8ebf0" font-weight="700" text-anchor="middle"></text>
+<rect x="126" y="134" width="52" height="70" rx="4" fill="#4d8dff" fill-opacity=".14"/>
+<rect x="126" y="134" width="52" height="2.5" fill="#4d8dff"/>
+<text x="152.0" y="150" font-size="9.5" fill="#8d96a5" font-weight="400" text-anchor="middle">−6~−8</text>
+<text x="152.0" y="166" font-size="10" fill="#4d8dff" font-weight="700" text-anchor="middle">매도 우세</text>
+<text x="152.0" y="181" font-size="10" fill="#d3d8e0" font-weight="400" text-anchor="middle">5%</text>
+<text x="152.0" y="197" font-size="10" fill="#e8ebf0" font-weight="700" text-anchor="middle"></text>
+<rect x="180" y="134" width="52" height="70" rx="4" fill="#4d8dff" fill-opacity=".14"/>
+<rect x="180" y="134" width="52" height="2.5" fill="#4d8dff"/>
+<text x="206.0" y="150" font-size="9.5" fill="#8d96a5" font-weight="400" text-anchor="middle">−5~−6</text>
+<text x="206.0" y="166" font-size="10" fill="#4d8dff" font-weight="700" text-anchor="middle">매도 우세</text>
+<text x="206.0" y="181" font-size="10" fill="#d3d8e0" font-weight="400" text-anchor="middle">9%</text>
+<text x="206.0" y="197" font-size="10" fill="#e8ebf0" font-weight="700" text-anchor="middle"></text>
+<rect x="234" y="134" width="52" height="70" rx="4" fill="#3ccf7e" fill-opacity=".14"/>
+<rect x="234" y="134" width="52" height="2.5" fill="#3ccf7e"/>
+<text x="260.0" y="150" font-size="9.5" fill="#8d96a5" font-weight="400" text-anchor="middle">−4~−5</text>
+<text x="260.0" y="166" font-size="10" fill="#3ccf7e" font-weight="700" text-anchor="middle">받침</text>
+<text x="260.0" y="181" font-size="10" fill="#d3d8e0" font-weight="400" text-anchor="middle">12%</text>
+<text x="260.0" y="197" font-size="10" fill="#e8ebf0" font-weight="700" text-anchor="middle">▲60선</text>
+<rect x="288" y="134" width="52" height="70" rx="4" fill="#4d8dff" fill-opacity=".14"/>
+<rect x="288" y="134" width="52" height="2.5" fill="#4d8dff"/>
+<text x="314.0" y="150" font-size="9.5" fill="#8d96a5" font-weight="400" text-anchor="middle">−3~−4</text>
+<text x="314.0" y="166" font-size="10" fill="#4d8dff" font-weight="700" text-anchor="middle">매도 우세</text>
+<text x="314.0" y="181" font-size="10" fill="#d3d8e0" font-weight="400" text-anchor="middle">15%</text>
+<text x="314.0" y="197" font-size="10" fill="#e8ebf0" font-weight="700" text-anchor="middle"></text>
+<rect x="342" y="134" width="52" height="70" rx="4" fill="#3ccf7e" fill-opacity=".14"/>
+<rect x="342" y="134" width="52" height="2.5" fill="#3ccf7e"/>
+<text x="368.0" y="150" font-size="9.5" fill="#8d96a5" font-weight="400" text-anchor="middle">−2~−3</text>
+<text x="368.0" y="166" font-size="10" fill="#3ccf7e" font-weight="700" text-anchor="middle">받침</text>
+<text x="368.0" y="181" font-size="10" fill="#d3d8e0" font-weight="400" text-anchor="middle">17%</text>
+<text x="368.0" y="197" font-size="10" fill="#e8ebf0" font-weight="700" text-anchor="middle">═벽</text>
+<rect x="396" y="134" width="52" height="70" rx="4" fill="#8d96a5" fill-opacity=".14"/>
+<rect x="396" y="134" width="52" height="2.5" fill="#8d96a5"/>
+<text x="422.0" y="150" font-size="9.5" fill="#8d96a5" font-weight="400" text-anchor="middle">−1~−2</text>
+<text x="422.0" y="166" font-size="10" fill="#8d96a5" font-weight="700" text-anchor="middle">보통</text>
+<text x="422.0" y="181" font-size="10" fill="#d3d8e0" font-weight="400" text-anchor="middle">18%</text>
+<text x="422.0" y="197" font-size="10" fill="#e8ebf0" font-weight="700" text-anchor="middle">●지금</text>
+<rect x="396" y="134" width="52" height="70" rx="4" fill="none" stroke="#e8ebf0"/>
+<rect x="450" y="134" width="52" height="70" rx="4" fill="#4d8dff" fill-opacity=".14"/>
+<rect x="450" y="134" width="52" height="2.5" fill="#4d8dff"/>
+<text x="476.0" y="150" font-size="9.5" fill="#8d96a5" font-weight="400" text-anchor="middle">0~−1</text>
+<text x="476.0" y="166" font-size="10" fill="#4d8dff" font-weight="700" text-anchor="middle">매도 우세</text>
+<text x="476.0" y="181" font-size="10" fill="#d3d8e0" font-weight="400" text-anchor="middle">26%</text>
+<text x="476.0" y="197" font-size="10" fill="#e8ebf0" font-weight="700" text-anchor="middle"></text>
+<rect x="504" y="134" width="52" height="70" rx="4" fill="#2a2210" stroke="#e2b65a" stroke-width="1"/>
+<text x="530.0" y="150" font-size="11" fill="#e2b65a" font-weight="700" text-anchor="middle">C</text>
+<text x="530.0" y="167" font-size="10.5" fill="#e2b65a" font-weight="600" text-anchor="middle">26,650</text>
+<text x="530.0" y="183" font-size="9.5" fill="#8d96a5" font-weight="400" text-anchor="middle">정규장</text>
+<rect x="558" y="134" width="52" height="70" rx="4" fill="#ff5c63" fill-opacity=".14"/>
+<rect x="558" y="134" width="52" height="2.5" fill="#ff5c63"/>
+<text x="584.0" y="150" font-size="9.5" fill="#8d96a5" font-weight="400" text-anchor="middle">0~+1</text>
+<text x="584.0" y="166" font-size="10" fill="#ff5c63" font-weight="700" text-anchor="middle">매수 우세</text>
+<text x="584.0" y="181" font-size="10" fill="#d3d8e0" font-weight="400" text-anchor="middle">41%</text>
+<text x="584.0" y="197" font-size="10" fill="#e8ebf0" font-weight="700" text-anchor="middle"></text>
+<rect x="612" y="134" width="52" height="70" rx="4" fill="#e2b65a" fill-opacity=".14"/>
+<rect x="612" y="134" width="52" height="2.5" fill="#e2b65a"/>
+<text x="638.0" y="150" font-size="9.5" fill="#8d96a5" font-weight="400" text-anchor="middle">+1~+3</text>
+<text x="638.0" y="166" font-size="10" fill="#e2b65a" font-weight="700" text-anchor="middle">매물</text>
+<text x="638.0" y="181" font-size="10" fill="#d3d8e0" font-weight="400" text-anchor="middle">63%</text>
+<text x="638.0" y="197" font-size="10" fill="#e8ebf0" font-weight="700" text-anchor="middle"></text>
+<rect x="666" y="134" width="52" height="70" rx="4" fill="#ff5c63" fill-opacity=".14"/>
+<rect x="666" y="134" width="52" height="2.5" fill="#ff5c63"/>
+<text x="692.0" y="150" font-size="9.5" fill="#8d96a5" font-weight="400" text-anchor="middle">+3~+5</text>
+<text x="692.0" y="166" font-size="10" fill="#ff5c63" font-weight="700" text-anchor="middle">매수 우세</text>
+<text x="692.0" y="181" font-size="10" fill="#d3d8e0" font-weight="400" text-anchor="middle">80%</text>
+<text x="692.0" y="197" font-size="10" fill="#e8ebf0" font-weight="700" text-anchor="middle"></text>
+<rect x="720" y="134" width="52" height="70" rx="4" fill="#8d96a5" fill-opacity=".14"/>
+<rect x="720" y="134" width="52" height="2.5" fill="#8d96a5"/>
+<text x="746.0" y="150" font-size="9.5" fill="#8d96a5" font-weight="400" text-anchor="middle">+5~+7</text>
+<text x="746.0" y="166" font-size="10" fill="#8d96a5" font-weight="700" text-anchor="middle">보통</text>
+<text x="746.0" y="181" font-size="10" fill="#d3d8e0" font-weight="400" text-anchor="middle">92%</text>
+<text x="746.0" y="197" font-size="10" fill="#e8ebf0" font-weight="700" text-anchor="middle"></text>
+<rect x="774" y="134" width="52" height="70" rx="4" fill="#5b6472" fill-opacity=".14"/>
+<rect x="774" y="134" width="52" height="2.5" fill="#5b6472"/>
+<text x="800.0" y="150" font-size="9.5" fill="#8d96a5" font-weight="400" text-anchor="middle">+7~+10</text>
+<text x="800.0" y="166" font-size="10" fill="#5b6472" font-weight="700" text-anchor="middle">거래 적음</text>
+<text x="800.0" y="181" font-size="10" fill="#d3d8e0" font-weight="400" text-anchor="middle">97%</text>
+<text x="800.0" y="197" font-size="10" fill="#e8ebf0" font-weight="700" text-anchor="middle"></text>
+<rect x="828" y="134" width="52" height="70" rx="4" fill="#5b6472" fill-opacity=".14"/>
+<rect x="828" y="134" width="52" height="2.5" fill="#5b6472"/>
+<text x="854.0" y="150" font-size="9.5" fill="#8d96a5" font-weight="400" text-anchor="middle">+10%↑</text>
+<text x="854.0" y="166" font-size="10" fill="#5b6472" font-weight="700" text-anchor="middle">거래 적음</text>
+<text x="854.0" y="181" font-size="10" fill="#d3d8e0" font-weight="400" text-anchor="middle">100%</text>
+<text x="854.0" y="197" font-size="10" fill="#e8ebf0" font-weight="700" text-anchor="middle"></text>
+<circle cx="260.0" cy="218" r="11" fill="#e2b65a"/><text x="260.0" y="222.5" text-anchor="middle" font-size="13" font-weight="700" fill="#0a0d12">6</text>
+<circle cx="368.0" cy="218" r="11" fill="#e2b65a"/><text x="368.0" y="222.5" text-anchor="middle" font-size="13" font-weight="700" fill="#0a0d12">5</text>
+<rect x="126" y="234" width="106" height="8" rx="3" fill="#ff5c63" fill-opacity=".45"/>
+<text x="179" y="258" font-size="10.5" fill="#ff5c63" font-weight="600" text-anchor="middle">벽 −2~−3% 아래 = 손절 무더기</text>
+<text x="540.0" y="258" font-size="10" fill="#8d96a5" font-weight="400" text-anchor="end">← 아래(C −10%)</text>
+<text x="568.0" y="258" font-size="10" fill="#8d96a5" font-weight="400" text-anchor="start">위(C +10%) →</text>
+<text x="20" y="282" font-size="11.5" fill="#8d96a5" font-weight="400" text-anchor="start">09:31 C 첫 깨짐 — 30분 쉬기</text>
+<circle cx="220" cy="278" r="11" fill="#e2b65a"/><text x="220" y="282.5" text-anchor="middle" font-size="13" font-weight="700" fill="#0a0d12">2</text>
+<text x="250" y="282" font-size="11.5" fill="#8d96a5" font-weight="400" text-anchor="start">09:27 헛오름 — 15분 따라 사지 말기</text>
+<circle cx="480" cy="278" r="11" fill="#e2b65a"/><text x="480" y="282.5" text-anchor="middle" font-size="13" font-weight="700" fill="#0a0d12">3</text>
+<text x="880" y="282" font-size="10.5" fill="#5b6472" font-weight="400" text-anchor="end">칸 = C 대비 구간 · 색 = 누가 많았나 · % = 물린 몫</text>
+</svg>
+<p class="dim">그림 1 — 띠의 어디를 보나. 노란 번호가 아래 목록 번호와 같습니다.</p>
+<svg viewBox="0 0 900 410" role="img" aria-label="09:00~10:30 가격 그림 — 위험한 순간" style="width:100%;height:auto;background:#0d1117;border:1px solid var(--line);border-radius:10px">
+<text x="20" y="22" font-size="13" fill="#8d96a5" font-weight="400" text-anchor="start">09:00 → 10:30 가격 그림 — 이런 순간에 멈추세요 (예시)</text>
+<rect x="250" y="32" width="267" height="262" fill="#ff5c63" fill-opacity=".07"/>
+<text x="258" y="48" font-size="12" fill="#ff5c63" font-weight="600" text-anchor="start">C 첫 깨짐 → 30분은 사지 않기</text>
+<line x1="60" y1="120" x2="880" y2="120" stroke="#e2b65a" stroke-width="1.5"/>
+<text x="56" y="116" font-size="11" fill="#e2b65a" font-weight="600" text-anchor="end">C 26,650</text>
+<line x1="60" y1="190" x2="880" y2="190" stroke="#3ccf7e" stroke-dasharray="6 4"/>
+<text x="56" y="194" font-size="11" fill="#3ccf7e" font-weight="600" text-anchor="end">═벽 25,900</text>
+<rect x="60" y="240" width="820" height="25" fill="#ff5c63" fill-opacity=".16"/>
+<text x="56" y="256" font-size="11" fill="#ff5c63" font-weight="600" text-anchor="end">손절 무더기</text>
+<text x="875" y="257" font-size="10.5" fill="#ff5c63" font-weight="400" text-anchor="end">벽 −2~−3% 아래: 손절이 평소 2.3배</text>
+<polyline points="60,82 110,72 160,78 210,95 250,120 290,150 330,170 380,188 410,182 430,175 445,135 470,150 510,185 560,207 600,232 630,248 680,240 730,225 780,215 860,205" fill="none" stroke="#e8ebf0" stroke-width="2"/>
+<circle cx="250" cy="120" r="11" fill="#e2b65a"/><text x="250" y="124.5" text-anchor="middle" font-size="13" font-weight="700" fill="#0a0d12">2</text>
+<circle cx="445" cy="135" r="5" fill="#ff5c63"/>
+<circle cx="445" cy="104" r="11" fill="#e2b65a"/><text x="445" y="108.5" text-anchor="middle" font-size="13" font-weight="700" fill="#0a0d12">3</text>
+<text x="462" y="100" font-size="11.5" fill="#e8ebf0" font-weight="600" text-anchor="start">헛오름: 매수 힘보다 더 튐 → 따라 사면 60분 뒤 −0.3%</text>
+<circle cx="600" cy="232" r="5" fill="#ff5c63"/>
+<circle cx="626" cy="214" r="11" fill="#e2b65a"/><text x="626" y="218.5" text-anchor="middle" font-size="13" font-weight="700" fill="#0a0d12">5</text>
+<text x="644" y="218" font-size="11.5" fill="#e8ebf0" font-weight="600" text-anchor="start">벽 깨지면 한 번 더 밀림</text>
+<line x1="60" y1="305" x2="880" y2="305" stroke="#1e2530"/>
+<text x="64" y="320" font-size="10.5" fill="#8d96a5" font-weight="400" text-anchor="start">5분 시장가 매수 (평소 = 1)</text>
+<rect x="68" y="371" width="30" height="14" rx="2" fill="#4b5566"/>
+<rect x="114" y="367" width="30" height="18" rx="2" fill="#4b5566"/>
+<rect x="159" y="372" width="30" height="13" rx="2" fill="#4b5566"/>
+<rect x="204" y="375" width="30" height="10" rx="2" fill="#4b5566"/>
+<rect x="250" y="370" width="30" height="15" rx="2" fill="#4b5566"/>
+<rect x="296" y="374" width="30" height="11" rx="2" fill="#4b5566"/>
+<rect x="341" y="377" width="30" height="8" rx="2" fill="#4b5566"/>
+<rect x="386" y="372" width="30" height="13" rx="2" fill="#4b5566"/>
+<rect x="432" y="332" width="30" height="53" rx="2" fill="#ff5c63"/>
+<rect x="478" y="368" width="30" height="17" rx="2" fill="#4b5566"/>
+<rect x="523" y="375" width="30" height="10" rx="2" fill="#4b5566"/>
+<rect x="568" y="378" width="30" height="7" rx="2" fill="#4b5566"/>
+<rect x="614" y="377" width="30" height="8" rx="2" fill="#4b5566"/>
+<rect x="660" y="374" width="30" height="11" rx="2" fill="#4b5566"/>
+<rect x="705" y="372" width="30" height="13" rx="2" fill="#4b5566"/>
+<rect x="750" y="371" width="30" height="14" rx="2" fill="#4b5566"/>
+<rect x="796" y="375" width="30" height="10" rx="2" fill="#4b5566"/>
+<rect x="842" y="374" width="30" height="11" rx="2" fill="#4b5566"/>
+<line x1="60" y1="343" x2="880" y2="343" stroke="#e8ebf0" stroke-dasharray="3 3" stroke-opacity=".7"/>
+<text x="876" y="339" font-size="10" fill="#e8ebf0" font-weight="400" text-anchor="end">평소 3배</text>
+<circle cx="470" cy="340" r="11" fill="#e2b65a"/><text x="470" y="344.5" text-anchor="middle" font-size="13" font-weight="700" fill="#0a0d12">4</text>
+<text x="488" y="336" font-size="11" fill="#e8ebf0" font-weight="600" text-anchor="start">3배 넘고 오름 = 과열(흔들림) → 크게 사지 않기</text>
+<text x="60" y="402" font-size="10" fill="#5b6472" font-weight="400" text-anchor="start">09:00</text>
+<text x="880" y="402" font-size="10" fill="#5b6472" font-weight="400" text-anchor="end">10:30</text>
+</svg>
+<p class="dim">그림 2 — <b>설명용 그림</b>입니다(데스크 차트에는 C 선만 있고, 벽·손절 무더기·쉬는 시간 색칠·5분 매수 막대는 없음). 데스크에서는 그림 1의 띠로 같은 내용을 봅니다.</p>
+<!-- /fig-watch -->
+<p class="dim">원칙: 이 띠는 <b>사면 안 되는 때를 알려 주는 용도</b>입니다. "사라"는 신호로 검증된 건 아직 없습니다.</p>
+<ol>
+  <li><b>지금 신호가 "사지 말 것"인가</b> — 가장 먼저. 아래 세 가지 중 하나가 켜진 것입니다. 꺼질 시각이 같이 나옵니다.</li>
+  <li><b>C 첫 깨짐</b> — 그날 C 위에 있다가 처음 C 아래로 내려온 순간. 그때 매도가 평소 <b>3.2배</b> 몰립니다. <b>30분은 사지 않습니다.</b></li>
+  <li><b>C 아래에서 갑자기 튀는 오름(헛오름)</b> — 시장가 매수 힘에 비해 가격이 더 많이 오른 5분. "C 다시 가겠다" 싶어 따라 사기 쉬운 자리인데,
+    장부 전체 3개월에서 <b>60분 뒤 −0.3%</b>(1,214번), 2% 먼저 밀림 25%(평소 15%)로 <b class="up">나쁨</b>(앞·뒤 기간 같음). 고른 종목만 보면 −0.2%(179번)로 약해 확실치 않습니다. <b>15분은 따라 사지 않습니다.</b></li>
+  <li><b>매수 세기 막대가 흰 눈금(평소 3배)을 넘었나</b> — 넘고 오르면 '과열 매수'. 방향이 아니라 <b>흔들림</b> 신호입니다(고른 종목: −2% 먼저 42%, +2% 먼저 36% — 평소 21·16%, 둘 다 늘어남).
+    크게 들어가지 말고 15분 기다립니다.</li>
+  <li><b>═ 벽과 그 아래 −2~−3%</b> — 벽은 오늘 시장가 매도를 가장 많이 받아낸 값. 그 아래 2~3%에 손절이 <b>2.3배</b> 몰려 있어, 벽이 깨지면 한 번 더 빠지기 쉽습니다.
+    벽 바로 아래에서 사지 않습니다. 손절 −4%는 이 무더기 밖이라 괜찮은 자리입니다.</li>
+  <li><b>▲60선 위치와 물린 %</b> — 60선 반등은 <b>60선이 C +5~10%</b>에 있거나(+4% 먼저 62%, 24번) <b>물린 % 0~20%</b>일 때(45%, 51번 — 평소 33%) 잘 나왔습니다. C +10%보다 위면 다시 보통입니다. 물린 %가 높으면(위에 비싸게 산 사람이 많으면) 반등이 막히기 쉽습니다.</li>
+  <li><b>방법 %와 짐작 맞음 %</b> — 위 숫자를 얼마나 믿을지. 체결 부호가 대부분이고 짐작 맞음 80% 이상이면 그대로 믿습니다.</li>
+</ol>
+<div class="card tip"><b>한 줄 요약</b>: C 근처에서 급하게 오르는 걸 보고 따라 사지 말 것 — 3개월 체결에서 따라 산 쪽은 비용(0.52%)도 못 넘었습니다.
+자동 매수 규칙은 이 신호와 상관없이 그대로 돕니다(붙여 봐도 손익이 같았음).</div>
+
 <h2 id="exit">청산 규칙</h2>
 <p>매수 규칙과 따로 만들고, 매수 규칙·손 주문·보유 종목이 각자 고릅니다. 켜 둔 것 중 먼저 닿는 것부터 실행됩니다.</p>
 <table>
