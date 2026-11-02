@@ -98,7 +98,7 @@ header.card { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22p
 .ch.on { border-color: var(--acc-line); }
 .ch .hd { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 /* 차트 머리 한 줄 — 넓은 화면에선 줄바꿈 없이, 기준·종가 글자가 모자라면 그 칸만 … 로 줄인다(이동평균·확대 버튼까지 맨 윗줄) */
-.ch .hd.one { flex-wrap: nowrap; white-space: nowrap; } .ch .hd.one > * { flex: 0 0 auto; }
+.ch .hd.one { flex-wrap: wrap; white-space: nowrap; } .ch .hd.one > * { flex: 0 0 auto; }   /* 차트 칸이 좁으면 줄을 넘긴다 — 한 줄 고정이면 호가 칸 머리를 덮었다(11-02) */
 .ch .hd.one .info { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 900px) { .ch .hd.one { flex-wrap: wrap; white-space: normal; } }
 .ch .tfs button { font-size: 11px; padding: 2px 8px; border-radius: 5px; border: 0; background: transparent; color: var(--dim); }
@@ -313,6 +313,7 @@ const floorTick = (p) => Math.floor(p / tick(p) + 1e-9) * tick(p);
 const ceilTick = (p) => Math.ceil(p / tick(p) - 1e-9) * tick(p);
 const store = { get(k, d) { try { return JSON.parse(localStorage.getItem("td_" + k)) ?? d; } catch { return d; } },
                 set(k, v) { try { localStorage.setItem("td_" + k, JSON.stringify(v)); } catch {} } };
+const show = store.get("show", { fill: true, exit: true });   // 차트 매수·매도 표시 · 청산 자리(손절·익절·매도 대기) 켜고 끄기 — 모든 차트 같이(11-02 사용자)
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
@@ -598,6 +599,7 @@ function topHtml(c) {
       <div class="tfs" role="group" aria-label="봉 단위">${[["1", "1분"], ["5", "5분"], ["15", "15분"], ["D", "일"]].map(([v, t]) => `<button type="button" data-tf="${v}" aria-pressed="${tf === v}">${t}</button>`).join("")}</div>
       <div class="tfs" role="group" aria-label="시간대">${SESS.map(([v, t]) => `<button type="button" data-sess="${v}" aria-pressed="${ses === v}" ${tf === "D" && v !== "all" ? 'disabled title="일봉은 하루 전체만(키움 일봉 종가 = 20:00 마지막 체결)"' : ""}>${t}</button>`).join("")}</div>
       <div class="tfs" role="group" aria-label="BC 선 기준">${[["", "BC 규칙"], ["reg", "BC 정규"], ["aft", "BC 애프터"]].map(([v, t]) => `<button type="button" data-csrc="${v}" aria-pressed="${(cOf[c] || "") === v}" title="${v ? "차트 BC 선을 기준일 " + (v === "reg" ? "정규장" : "애프터") + " 종가로" : "차트 BC 선을 예약(없으면 매수 규칙)의 BC 기준으로"}">${t}</button>`).join("")}</div>
+      <div class="tfs" role="group" aria-label="차트 표시">${[["fill", "매매 표시"], ["exit", "청산 자리"]].map(([k, t]) => `<button type="button" data-show="${k}" aria-pressed="${show[k]}" title="${k === "fill" ? "체결한 매수·매도 점" : "손절·익절 선과 매도 대기 선"} 켜고 끄기 — 모든 차트">${t}</button>`).join("")}</div>
       <span class="info" style="font-size:12px">${w.ref_day ? `<b style="color:var(--acc)">기준 ${w.ref_day.slice(4, 6)}.${w.ref_day.slice(6)}</b> ` : ""}${f ? `<span style="color:var(--acc)">고점 ${f.live ? "오늘" : f.day.slice(4, 6) + "." + f.day.slice(6)} → <b class="mono">${fmt(f.close)}</b></span> ` : ""}<span class="dim">정규 <b class="mono" style="color:var(--text)">${fp(rg)}</b> · 애프터 ${w.nxt === false ? "<b>NXT 없음</b>" : `<b class="mono" style="color:var(--gold)">${fp(af)}</b>${rg && af ? ` <span class="mono ${cls(af - rg)}" style="font-size:11px">(${pct((af / rg - 1) * 100)})</span>` : ""}`}</span></span>
       ${h ? `<span class="dim" style="font-size:11px">보유 ${fmt(h.quantity)}주</span>` : ""}
       <span style="font-size:11px">${ses === "after" ? '<span class="dim">애프터는 이동평균 없음</span>' : (tf === "D" ? MA_DAY : MA_MIN).map(([n, col]) => `<span style="color:${col}">${n}선</span>`).join(" ")}${tf !== "D" ? ` <span style="color:${OTHER60[ses === "reg" ? "all" : "reg"][0]}">┄${OTHER60[ses === "reg" ? "all" : "reg"][1]}</span>` : ""}</span>
@@ -630,7 +632,7 @@ function renderCharts() {
 function drawChart(c, card = $("charts").querySelector(`[data-chart="${c}"]`)) {
   if (!card) return;
   const el = card.querySelector(".svgw");
-  if (!CW[c]) CW[c] = el.clientWidth || 0;
+  CW[c] = el.clientWidth || CW[c] || 0;                             // 그릴 때마다 — 첫 그림 때 칸이 덜 펴져 237로 재고 굳은 적 있다(11-02, 머리 줄 넘김 뒤)
   const h = svgChart(c);
   if (el._h !== h) { el.innerHTML = h; el._h = h; }               // 바뀐 게 없으면 DOM 을 건드리지 않는다(10-20 측정: 한 장 3.9ms → 0)
 }
@@ -641,6 +643,8 @@ $("charts").addEventListener("click", (e) => {
   const t = e.target.closest("[data-tf]"), p = e.target.closest("[data-pick]");
   const ss = e.target.closest("[data-sess]"), zb = e.target.closest("[data-zoom]"), cs = e.target.closest("[data-csrc]");
   if (cs) { cOf[cs.closest("[data-chart]").dataset.chart] = cs.dataset.csrc; renderCharts(); return; }
+  const sh = e.target.closest("[data-show]");
+  if (sh) { show[sh.dataset.show] = !show[sh.dataset.show]; store.set("show", show); renderCharts(); return; }
   if (zb) { zoomBy(zb.closest("[data-chart]").dataset.chart, zb.dataset.zoom === "in" ? 1 / 1.4 : zb.dataset.zoom === "out" ? 1.4 : 0); return; }
   if (t) { const c = t.closest("[data-chart]").dataset.chart; tfOf[c] = t.dataset.tf; delete zoomOf[c]; if (t.dataset.tf === "D") sessOf[c] = "all";
     store.set("tf", tfOf); store.set("sess", sessOf); loadChart(c, true); renderCharts(); }
@@ -723,13 +727,13 @@ function svgChart(code) {
   const bars = all.slice(cut), last = bars[bars.length - 1];
   const h = S.holdings.find((x) => x.code === code);
   const lines = [];                                   // [가격, 색, 점선?, 글]
-  if (h) {
-    lines.push([h.avg_price, "#dfe4ec", true, "평단 " + fmt(h.avg_price)]);
+  if (h) lines.push([h.avg_price, "#dfe4ec", true, "평단 " + fmt(h.avg_price)]);
+  if (h && show.exit) {
     if (h.stop) lines.push([h.stop, "var(--dn)", false, (h.breakeven ? "본전 손절 " : "손절 ") + fmt(h.stop)]);
     if (h.env) lines.push([h.env, "var(--dn)", true, "60선 엔벨로프 하단 손절 " + fmt(h.env)]);
     h.takes.forEach((p, i) => lines.push([p, "var(--up)", false, `${i + 1}차 익절 ${fmt(p)}`]));
   }
-  S.pending.filter((p) => p.code === code).forEach((p) => lines.push([p.price, p.side === "buy" ? "var(--up)" : "var(--dn)", true, `${p.side === "buy" ? "매수" : "매도"} 대기 ${fmt(p.price)}`]));
+  S.pending.filter((p) => p.code === code && (show.exit || p.side === "buy")).forEach((p) => lines.push([p.price, p.side === "buy" ? "var(--up)" : "var(--dn)", true, `${p.side === "buy" ? "매수" : "매도"} 대기 ${fmt(p.price)}`]));
   const plans = (S.plans || []).filter((p) => p.active && p.code === code);
   const pmd = (d) => d ? d.slice(4, 6) + "." + d.slice(6) : "";
   const liveOf = (p) => p.follow_high && S.watch.find((x) => x.code === code)?.follow?.[p.base]?.live;
@@ -753,7 +757,7 @@ function svgChart(code) {
   const cSel = cOf[code] || "", cs = cSel || cR?.c_src || cp?.c_src || cp?.base || "reg", cDay = cp?.ref_day || cW?.ref_day;
   // 당일 예약은 만든 때 값(장중)이 기준가라 C 를 정하기 전엔 받아 둔 기준일 종가로 — 11-01 지니언스 28,000(19:03 값) vs 애프터 종가 26,650
   const cPx = (cp?.c_px && cs === cp.c_src && cp.c_px) || cp?.ref_cl?.[cs] || (cW?.ref_day && cW.ref_day === cDay && (cs === "reg" ? cW.ref_reg : cW.ref_aft)) || (cp && !cp.same_day && cs === cp.base && cp.base_px) || 0;
-  const cGap = cPx ? `BC대비 ${last.c >= cPx ? "+" : ""}${((last.c / cPx - 1) * 100).toFixed(1)}%` : "";   // 11-01 사용자 "C값과 현재가 N% 차이"
+  const cGap = cPx ? `BC대비 ${last.c >= cPx ? "+" : ""}${((last.c / cPx - 1) * 100).toFixed(2)}%` : "";   // 11-01 사용자 "C값과 현재가 N% 차이"
   if (cPx) lines.push([cPx, "var(--gold)", false, `BC ${fmt(cPx)} · 지금 ${cGap} (${pmd(cDay)} ${cs === "reg" ? "정규장" : "애프터"} 종가)`]);
   const cHi = cPx && S.flow?.[code]?.[ses === "reg" ? "chi_reg" : "chi"];   // HC 는 차트 보기(애프터 포함/정규장)를 따른다 — BC 버튼과 안 묶음(11-01 사용자 "HC는 BC랑 같이 묶이면 안돼")
   const hcGap = cHi ? `${last.c >= cHi ? "+" : ""}${((last.c / cHi - 1) * 100).toFixed(2)}%` : "";   // 11-01 사용자 "차트에 HC" — HC = C 날부터 지금까지 통합(08~20시) 최고가(trader/flow.py chi)
@@ -808,7 +812,7 @@ function svgChart(code) {
     s += `<text x="4" y="${y(p) - 3}" fill="${col}" font-size="11" font-weight="600">${esc(W < 500 ? txt.replace(/\s*\(.*$/, "") : txt)}</text>`; });
   // 오늘 체결 표시 — 체결 시각과 가장 가까운 봉
   const stamp = (b) => tf === "D" ? b.t.slice(0, 8) : b.t.slice(0, 12);
-  S.fills.filter((f) => f.code === code).forEach((f) => {
+  S.fills.filter((f) => show.fill && f.code === code).forEach((f) => {
     const dt = new Date(f.t * 1000), key = tf === "D" ? dt.toISOString().slice(0, 10).replaceAll("-", "")
       : `${dt.getFullYear()}${String(dt.getMonth() + 1).padStart(2, "0")}${String(dt.getDate()).padStart(2, "0")}${String(dt.getHours()).padStart(2, "0")}${String(dt.getMinutes()).padStart(2, "0")}`;
     let i = bars.findIndex((b) => stamp(b) >= key); if (i < 0) i = n - 1;

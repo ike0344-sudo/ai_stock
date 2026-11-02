@@ -38,7 +38,7 @@ def test_rebuy_after_selling_uses_current_manual_rule(monkeypatch):
     k.rules = {"manual_exit": "new10", "safety": {}}
     k.day = {"bought": {"396300": {"key": "manual", "rule": "old", "t": "09:00:00"}}}
     k.holdings = []
-    k.buy_block, k.buy_lev = (lambda n: None), (lambda c: (1.0, "cash"))
+    k.buy_block, k.buy_lev = (lambda n, code=None: None), (lambda c: (1.0, "cash"))
     k._submit = lambda *a, **kw: (k.holdings.append({"code": "396300"}) or {"ok": True})   # 가상 시장가 — 보내자마자 보유
     k.snap = lambda c: {"px": 9000}
     monkeypatch.setattr(d, "_write", lambda *a: None)

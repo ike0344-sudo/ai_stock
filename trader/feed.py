@@ -127,8 +127,12 @@ def _on_message(ws, message: str) -> None:
                 _state["err"] = f"주문체결 처리 오류: {e}"
 
 
+ORDERS = True                                                    # 주문체결(00) 구독 — 따로 도는 수집기(trader/recorder.py)는 끈다
+
+
 def _reg(ws) -> None:
-    ws.send(json.dumps({"trnm": "REG", "grp_no": "9", "refresh": "0", "data": [{"item": [""], "type": ["00"]}]}))
+    if ORDERS:
+        ws.send(json.dumps({"trnm": "REG", "grp_no": "9", "refresh": "0", "data": [{"item": [""], "type": ["00"]}]}))
     codes = list(_state["codes"])
     if codes:
         ws.send(json.dumps({"trnm": "REG", "grp_no": "1", "refresh": "0", "data": [

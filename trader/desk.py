@@ -17,7 +17,7 @@ import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from . import daily_facts, engine, feed, rec
+from . import daily_facts, engine, feed, flow, rec
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE = ROOT / "state" / "trader"
@@ -759,7 +759,7 @@ class Desk:
         """오늘 실현 + 지금 보유분 평가손익. ponytail: 평가손익은 산 날부터 누적이라 어제 산 종목은 어제 몫까지 든다 — 하루 손실 한도가 조금 일찍 걸리는 쪽(안전)."""
         return int(self.day.get("pnl_realized", 0)) + sum(h["pl_amount"] for h in self.holdings)
 
-    def buy_block(self, notional: int) -> str | None:
+    def buy_block(self, notional: int, code: str | None = None) -> str | None:
         sf = self.rules["safety"]
         if sf.get("halt_on_disconnect") and not feed.status()["connected"]:
             return "실시간 연결이 끊겨 새 매수를 멈췄습니다"
@@ -768,15 +768,16 @@ class Desk:
             return f"코스닥 {self.mkt['chg']:+.2f}% — −{abs(md):g}% 이하라 새 매수를 멈췄습니다"
         if ms and int(self.day.get("stops", 0)) >= ms:
             return f"오늘 손절 {self.day.get('stops')}번 — {ms}번이면 그날 새 매수를 멈춥니다"
-        return engine.safety_block(self.rules["safety"], {**self.day, "pnl": self.day_pnl()}, self.meta_positions(),
+        return engine.safety_block(self.rules["safety"], {**self.day, "pnl": self.day_pnl()}, self.meta_positions(code),
                                    notional, self.equity())
 
-    def meta_positions(self) -> list[dict]:
-        return [{"qty": h["quantity"]} for h in self.holdings]
+    def meta_positions(self, skip: str | None = None) -> list[dict]:
+        """동시 보유 수 — 이미 가진 종목을 더 사는 건 새 종목이 아니라 뺀다(11-02 지니언스 6주 사고 '최대 2종목'에 막힘)."""
+        return [{"qty": h["quantity"]} for h in self.holdings if h["code"] != skip]
 
     def buy(self, code: str, qty: int, price: int, market: bool, tag: str = "수동", rule: str | None = None) -> dict:
         notional = qty * (price or self.snap(code)["px"])
-        if why := self.buy_block(notional):
+        if why := self.buy_block(notional, code):
             self.note(f"매수 막음 · {self.name(code)} — {why}", "warn")
             return {"ok": False, "msg": why}
         lev, how = self.buy_lev(code)
@@ -1838,9 +1839,22 @@ class Desk:
             return
         self._fill_ref_cl()
         feed.set_codes(self.sub_codes())
+        flow.replay(rec.DIR)                                             # 오늘 받은 체결부터 다시 흘려 HC·사다리 오늘 몫을 되살린다(피드 전에)
+        self._seed_fills()
         feed.start(self.client, self.is_active, self.on_order)
         rec.start(self.is_active)
         threading.Thread(target=self._loop, daemon=True, name="trader-desk").start()
+
+    def _seed_fills(self) -> None:
+        """오늘 체결을 일지(journal.json, 분 단위)에서 되살린다 — 체결 목록은 메모리(feed.order_events)라 데스크를 다시 켜면 비어
+        차트 매수·매도 표시와 '오늘 체결' 탭이 사라졌다(11-02 사용자 "매매 표시 눌러도 안 나와")."""
+        today, out = date.today().isoformat(), []
+        for e in _read("journal.json", []):
+            for side, k in (("buy", "buys"), ("sell", "sells")):
+                out += [{"ord_no": "", "code": e["code"], "side": side, "status": "체결", "qty": x[1], "price": x[2], "left": 0,
+                         "fill_px": x[2], "fill_qty": x[1], "t": datetime.fromisoformat(x[0]).timestamp(), "restored": True}
+                        for x in e.get(k, []) if str(x[0])[:10] == today]
+        feed.order_events.extend(sorted(out, key=lambda ev: ev["t"]))
 
     def _fill_ref_cl(self) -> None:
         """11-01 전에 만든 예약 — 기준일 정규장·애프터 종가(차트 C 선 고르기)와 C 기준(매수 기준과 같게)을 채운다. 오늘이 기준일이면 종가가 아직 없어 둔다."""
@@ -1857,21 +1871,37 @@ class Desk:
         self.sync_c_src()
 
     def sync_c_src(self) -> None:
-        """C 기준(애프터/정규장 종가)은 이미 만든 예약도 그 매수 규칙의 지금 설정을 따른다(11-01 사용자 — 규칙을 정규장으로 바꿨는데 예약은 애프터 그대로였다).
-        다른 예약 설정은 만들 때 그대로. 당일 예약이 아직 C 를 안 정했으면 기준만 바꿔 두고 C 는 다음 거래일 아침에 그 기준으로 정한다."""
+        """60선 매수 관문(버팀 확인 · BC −N% 위에서만 · 나눠 사기)은 이미 만든 예약도 그 매수 규칙의 지금 설정을 따른다 — 데스크를 켤 때와 규칙 저장 때.
+        11-01 사용자: 규칙을 정규장으로 바꿨는데 예약은 애프터 그대로였다 · 11-02: 버팀 확인 전에 만든 안랩 예약이 옛 방식(60선 ±1% 지정가)으로 삼.
+        다른 예약 설정은 만들 때 그대로. BC = 기준일 종가(ref_cl) — 당일 예약이 아직 BC 를 안 정했으면 기준만 두고 BC 는 다음 거래일 아침에."""
+        keys = ("slice", "ma_confirm", "ma_hold", "c_near", "c_src", "c_full", "c_px")
         ch = False
         for p in self.plans:
-            if not p.get("active") or "c_near" not in p:
+            L = (self.rule(p.get("buy_rule")) or {}).get("ladder") if p.get("active") else None
+            if L is None:
                 continue
-            L = (self.rule(p.get("buy_rule")) or {}).get("ladder") or {}
-            src = (L.get("c_near") or {}).get("src")
-            src = src if src in ("reg", "aft") else p["base"]
-            if src == p.get("c_src"):
+            ma, cn, mc = any(s_.get("ma") for s_ in p["stages"]), L.get("c_near") or {}, L.get("ma_confirm") or {}
+            want = {"slice": True} if (L.get("slice") or {}).get("on") else {}
+            if ma and mc.get("on"):
+                hp = engine._num(mc.get("hold"), 2)
+                want.update(ma_confirm=max(1, int(engine._num(mc.get("n"), 3) or 3)), ma_hold=abs(2 if hp is None else hp))
+            if ma and cn.get("on") and p.get("ref_day"):
+                pc, src = engine._num(cn.get("pct"), 3), cn.get("src") if cn.get("src") in ("reg", "aft") else p["base"]
+                want.update(c_near=abs(3 if pc is None else pc), c_src=src, **({"c_full": True} if cn.get("full") else {}))
+                if not p.get("same_day") and (p.get("ref_cl") or {}).get(src):
+                    want["c_px"] = p["ref_cl"][src]
+                elif p.get("c_px") and p.get("c_src") == src:
+                    want["c_px"] = p["c_px"]
+            if want == {k: p[k] for k in keys if k in p}:
                 continue
-            p["c_src"], ch = src, True
-            if p.get("c_px") and (p.get("ref_cl") or {}).get(src):
-                p["c_px"] = p["ref_cl"][src]
-            self.note(f"{p['name']} 예약 BC 기준을 {'정규장' if src == 'reg' else '애프터'} 종가로" + (f" — BC {p['c_px']:,}" if p.get("c_px") else " (BC 는 다음 거래일 아침에 정함)"))
+            for k in keys:
+                p.pop(k, None)
+            p.update(want)
+            ch = True
+            self.note(f"{p['name']} 예약에 매수 규칙 지금 설정을 입힘 — "
+                      + " · ".join([f"15분봉 {want['ma_confirm']}개 60선 위 버팀" if "ma_confirm" in want else "버팀 확인 없음",
+                                    (f"BC −{want['c_near']:g}% 위에서만" + (f"(BC {want['c_px']:,})" if want.get("c_px") else "(BC 는 다음 거래일 아침에 정함)")) if "c_near" in want else "BC 조건 없음",
+                                    "나눠 사기" if want.get("slice") else "한 번에"]))
         if ch:
             _write("plans.json", self.plans)
 

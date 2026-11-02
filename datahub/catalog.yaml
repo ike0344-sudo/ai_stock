@@ -19,6 +19,7 @@ locks:
   daily_minute: {path: state/locks/data_daily_minute, covers: [daily, minute_krx, index]}
   minute_al:    {path: state/locks/data_minute_al,    covers: [minute_al, minute_al_archive]}
   tick_al:      {path: state/locks/data_tick_al,      covers: [tick_al]}
+  live_al:      {path: state/locks/data_live_al,      covers: [live_al]}
   program_al:   {path: state/locks/data_program_al,   covers: [program_al]}
   rs_rating:    {path: state/locks/data_rs_rating,    covers: [rs_rating, rs_raw, rs_period, rs_shares]}
   infostock_news: {path: state/locks/data_infostock_news, covers: [infostock_news]}
@@ -130,9 +131,24 @@ datasets:
     readers: [studio 틱, 연구]
     # 기대 종목 = 날짜별 전일 거래대금 상위 top_n − 초대형주(data_exclude.MEGA_CAP_EXCLUDE) + extra_codes
     # (수집기 tick_collect_804_828_al.EXTRA_CODES 와 같아야 한다 — 테스트 P7 이 확인)
-    freshness: {rule: tick_window, window_days: 20, top_n: 35, extra_codes: ["032820", "030530"]}
+    # include_picks: 매매 데스크 고른 종목 + 선정 일지(안 뺀 것)도 매일 기대 종목에 — 고른 종목의 시장가 매수를 체결로 검증(11-01 사용자)
+    freshness: {rule: tick_window, window_days: 20, top_n: 35, extra_codes: ["032820", "030530"], include_picks: true}
     retention: forever_unrecoverable
     notes: 조회창 20거래일 — 놓치면 재수집 불가. 압축 전에는 같은 자리에 .csv
+
+  - id: live_al
+    label: 실시간 체결·호가 원본(매수·매도 표시 포함)
+    basis: AL
+    path: data/stocks/live_al/{code}/{date}.jsonl.gz
+    lock: live_al
+    writers:
+      - {id: trader_rec, cmd: "python -m trader.recorder", triggers: ["07:50~20:05"]}   # 따로 도는 수집기(11-02) — 데스크를 다시 켜도 안 끊김
+      - {id: trader_desk, cmd: trader/rec.py, triggers: ["8790:07:50~20:05"]}            # 수집기가 멈췄을 때만(rec_alive 15초 넘음) 이어 씀
+    readers: [시장가 매수 판별 검증, 호가 연구]
+    # 매매 데스크 실시간 연결(TRADER_APPKEY)이 받는 0B·0D 를 그대로 — 고른 종목 + 신고대금 다음 10거래일 종목(11-01 사용자)
+    freshness: {rule: max_age_days, good: 4, warn: 7}
+    retention: forever_unrecoverable
+    notes: 과거 조회 불가(호가·체결 부호). 데스크가 꺼져 있던 시간은 빈다 — 장부 실행 기록으로 확인
 
   - id: program_al
     label: 통합 종목 프로그램 매매(체결 변화마다)

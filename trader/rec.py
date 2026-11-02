@@ -18,8 +18,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DIR = ROOT / "data" / "stocks" / "live_al"
 DAYS_AFTER = 10                                      # 신고대금 다음 거래일부터 10거래일(11-01 사용자 "나오면 10일간")
+MIN_EOK = 1000                                       # 기준일(신고대금 날) 통합 대금 1000억 이상만(11-02 사용자)
 
-codes: set[str] = set()                              # 저장할 종목 — desk 가 정한다
+codes: set[str] = set()                              # 저장할 종목 — desk(또는 recorder)가 정한다
+OWNER = False                                        # True = 따로 도는 수집기(trader/recorder.py) — 살아 있다는 표시를 남긴다
+ALIVE = ROOT / "state" / "trader" / "rec_alive"      # 수집기가 2초마다 건드림 — 15초 안이면 데스크는 저장을 넘긴다
+_chk = [0.0, False]
 _q: list = []
 _qlock = threading.Lock()
 _thread: threading.Thread | None = None
@@ -27,7 +31,7 @@ stat = {"rows": 0, "err": None, "day": None}
 
 
 def recent_value_codes(today: date | None = None) -> list[str]:
-    """오늘이 신고대금(통합) 날 다음 1~10거래일 안인 종목. 신고대금 날은 장부가 그날 밤에 생겨 다음 거래일부터 잡힌다."""
+    """오늘이 신고대금(통합) 날 다음 1~10거래일 안인 종목 — 그 신고대금 날 통합 대금 MIN_EOK 억 이상만. 신고대금 날은 장부가 그날 밤에 생겨 다음 거래일부터 잡힌다."""
     from datahub.calendar import Calendar
     from . import backtest as B
     today = today or date.today()
@@ -35,7 +39,9 @@ def recent_value_codes(today: date | None = None) -> list[str]:
     for _ in range(DAYS_AFTER):
         d = cal.prev_trading_day(d)
     ev = B.events(d.isoformat(), (today - timedelta(days=1)).isoformat(), 0, "aft", "all")
-    return sorted({c for _, c, _, _ in ev})
+    rows = json.loads((B.ROOT / "static" / "dashboard" / "value_ledger.json").read_text(encoding="utf-8"))["rows"]
+    big = {(x[0], x[1]) for x in rows if (x[3] or 0) >= MIN_EOK}    # x[3] = 그날 통합 대금(억)
+    return sorted({c for dd, c, _, _ in ev if (dd, c) in big})
 
 
 _today: dict = {}
@@ -53,8 +59,24 @@ def today_codes() -> list[str]:
     return _today["codes"]
 
 
+def _yield() -> bool:
+    """데스크 쪽: 따로 도는 수집기가 살아 있으면 저장을 넘긴다 — 수집기가 죽으면 15초 안에 데스크가 다시 저장(11-02 사용자 "데스크 고칠 때 수집이 끊기면 안 돼").
+    ponytail: 넘겨받는 순간 2초 남짓 두 쪽이 같이 써 겹칠 수 있다 — 겹침이 분석에 걸리면 (t, 13 누적량)으로 중복 지우기."""
+    if OWNER:
+        return False
+    now = time.time()
+    if now - _chk[0] > 2:
+        try:
+            _chk[:] = [now, now - ALIVE.stat().st_mtime < 15]
+        except OSError:
+            _chk[:] = [now, False]
+    return _chk[1]
+
+
 def put(kind: str, code: str, values: dict) -> None:
-    if code in codes and kind in ("0B", "0D"):
+    if OWNER and not stat.get("in"):                                  # 수집기는 잠금을 잡은 동안만 모은다 — 데스크가 쓰는 중에 쌓았다 나중에 겹쳐 쓰지 않게
+        return
+    if code in codes and kind in ("0B", "0D") and not _yield():
         with _qlock:
             _q.append((round(time.time(), 3), kind, code, values))
 
@@ -80,15 +102,20 @@ def _loop(is_active) -> None:
     from datahub import write
     while True:
         try:
-            if not (is_active(datetime.now()) and _q):
+            if not (is_active(datetime.now()) and (_q or OWNER)):
                 time.sleep(2)
                 continue
             day = date.today()
-            with write("live_al", writer="trader_desk", detail={"codes": len(codes)}) as w:
-                stat["day"] = day.isoformat()
-                while is_active(datetime.now()) and date.today() == day:
-                    flush()
-                    time.sleep(2)
+            with write("live_al", writer="trader_rec" if OWNER else "trader_desk", detail={"codes": len(codes)}) as w:
+                stat["day"], stat["in"] = day.isoformat(), True
+                try:
+                    while is_active(datetime.now()) and date.today() == day:
+                        flush()
+                        if OWNER:
+                            ALIVE.touch()                             # 잠금을 잡고 쓰는 동안만 '살아 있음' — 못 잡고 기다리는 동안은 데스크가 계속 쓴다
+                        time.sleep(2)
+                finally:
+                    stat["in"] = False
                 flush()
                 w.result(rows=stat["rows"], codes=len(codes))
         except Exception as e:                                       # noqa: BLE001 — 저장 오류로 데스크가 멈추면 안 된다

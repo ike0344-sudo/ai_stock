@@ -425,3 +425,38 @@ def test_missed_ma_stage_bought_with_next(monkeypatch):
     k._plan_rule = lambda p: None
     k._place_plans(datetime(2026, 10, 20, 9, 40))
     assert k.bought == [9550, 9550]                         # 2차 9,550 + 놓친 1차 몫도 9,550
+
+
+def test_held_code_not_counted_in_max_positions(monkeypatch):
+    """11-02 지니언스: 6주 산 뒤 '동시 보유 최대 2종목'에 막힘 — 이미 가진 종목 더 사기는 새 종목이 아니다."""
+    k = object.__new__(d.Desk)
+    k.holdings = [{"code": "A", "quantity": 1}, {"code": "B", "quantity": 6}]
+    assert len(k.meta_positions("B")) == 1 and len(k.meta_positions("C")) == 2
+
+
+def test_sync_puts_rule_gates_on_old_plan(monkeypatch):
+    """11-02 안랩: 버팀 확인 전에 만든 예약이 옛 방식으로 삼 — 켤 때·규칙 저장 때 지금 규칙의 관문을 입힌다."""
+    k = object.__new__(d.Desk)
+    k.rules = {"rules": [{"id": "r", "ladder": {"c_near": {"on": True, "pct": "-2", "full": True, "src": "reg"},
+                                                 "ma_confirm": {"on": True, "n": "2", "hold": "2"}, "slice": {"on": True}}}]}
+    k.plans = [{"active": True, "buy_rule": "r", "name": "가", "base": "aft", "ref_day": "20261028", "ref_cl": {"reg": 110900, "aft": 111600},
+                "stages": [{"ma": True}]}]
+    k.note = lambda *a, **kw: None
+    monkeypatch.setattr(d, "_write", lambda *a: None)
+    k.sync_c_src()
+    p = k.plans[0]
+    assert (p["ma_confirm"], p["ma_hold"], p["c_near"], p["c_src"], p["c_px"], p["c_full"], p["slice"]) == (2, 2, 2, "reg", 110900, True, True)
+    k.rules["rules"][0]["ladder"] = {}                               # 규칙에서 끄면 예약에서도 빠진다
+    k.sync_c_src()
+    assert not {"ma_confirm", "c_near", "c_px", "slice"} & set(p)
+
+
+def test_seed_fills_from_journal(monkeypatch):
+    """11-02: 재시작하면 체결 목록(메모리)이 비어 차트 매수·매도 표시가 사라졌다 — 오늘 일지에서 되살린다."""
+    from collections import deque
+    today = date.today().isoformat()
+    j = [{"code": "A", "buys": [[f"{today}T09:02", 114, 114300, "t"], ["2026-01-01T09:00", 1, 1, "old"]], "sells": [[f"{today}T14:05", 114, 120000, "s"]]}]
+    monkeypatch.setattr(d, "_read", lambda n, dflt=None: j if n == "journal.json" else dflt)
+    monkeypatch.setattr(feed, "order_events", deque(maxlen=10))
+    object.__new__(d.Desk)._seed_fills()
+    assert [(e["side"], e["fill_px"]) for e in feed.order_events] == [("buy", 114300), ("sell", 120000)]

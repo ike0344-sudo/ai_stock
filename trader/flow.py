@@ -132,6 +132,24 @@ def on_tick(code: str, values: dict) -> None:
         _close5(code, s, t // 5)
 
 
+def replay(base: Path, day: str | None = None) -> int:
+    """데스크를 다시 켰을 때 오늘 저장된 0B(trader/rec.py live_al)를 다시 흘려 오늘 상태(HC 오늘 고가·사다리 오늘 몫·매수 세기)를 되살린다.
+    피드 시작 전에 부른다(새 체결이 섞이면 누적 체결량 비교가 꼬인다). 켤 때는 평소·BC 가 아직 없어 과열·헛오름·BC 깨짐 알림이 다시 나지 않는다.
+    11-02: 08:17 재시작 뒤 08:00 고가 129,400 이 빠져 HC 가 127,400 으로 나왔다."""
+    import gzip
+    n, day = 0, day or date.today().isoformat()
+    for p in base.glob(f"*/{day}.jsonl.gz"):
+        try:
+            with gzip.open(p, "rt", encoding="utf-8") as f:
+                for line in f:
+                    if '"k": "0B"' in line:                             # 호가(0D)는 json 풀기 전에 거른다 — 줄의 60%, 풀기가 시간 대부분
+                        on_tick(p.parent.name, json.loads(line)["v"])
+                        n += 1
+        except (OSError, EOFError, ValueError):                         # 쓰다 꺼져 끝이 잘린 파일 — 읽은 데까지
+            pass
+    return n
+
+
 def _close5(code: str, s: dict, cur: int) -> None:
     """끝난 5분(정규장)마다 과열·헛오름 판정 — 평소는 전 거래일 기준(미리 보기 없음)."""
     base = _base.get((code, s["day"]))

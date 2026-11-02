@@ -35,7 +35,7 @@ def test_add_buy_after_partial_take_replaces_takes(monkeypatch):
 def test_first_market_buy_gets_rule_before_meta_is_made(monkeypatch):
     k = _k(monkeypatch)
     k.day, k.meta, k.holdings = {"bought": {}}, {}, []
-    k.buy_block, k.buy_lev, k.snap = (lambda n: None), (lambda c: (1.0, "cash")), (lambda c: {"px": 1000})
+    k.buy_block, k.buy_lev, k.snap = (lambda n, code=None: None), (lambda c: (1.0, "cash")), (lambda c: {"px": 1000})
 
     def submit(*a, **kw):                                  # 가상 시장가 — 보내는 중에 체결되고 보유 메타가 만들어진다
         k.holdings.append({"code": "A", "quantity": 10, "current_price": 1000})
