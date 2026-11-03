@@ -165,6 +165,7 @@ def test_follow_high_moves_base_to_new_high_close(monkeypatch):
     k.exit_rule = lambda i: i == "f6"
     p = {"code": "396300", "name": "HT", "base": "reg", "ref_day": "20261014", "base_px": 6870, "keep": {"mode": "days", "days": "5"},
          "until": "2026-10-21", "stages": [{"pct": -3, "amt": 1_000_000, "price": 6660, "qty": 150, "filled": 150}], "rule": "main", "follow_exit": "f6"}
+    k.holdings = []
     k._follow_high(p, date(2026, 10, 19))
     assert p["base_px"] == 9010 and p["stages"][0]["price"] == 8730 and p["follow_day"] == "20261016" and p["until"] == "2026-10-23"
     assert p["stages"][0]["filled"] == 0                             # 산 뒤에도 옮기면 단계를 새로 건다(10-20)
@@ -430,8 +431,44 @@ def test_missed_ma_stage_bought_with_next(monkeypatch):
 def test_held_code_not_counted_in_max_positions(monkeypatch):
     """11-02 지니언스: 6주 산 뒤 '동시 보유 최대 2종목'에 막힘 — 이미 가진 종목 더 사기는 새 종목이 아니다."""
     k = object.__new__(d.Desk)
-    k.holdings = [{"code": "A", "quantity": 1}, {"code": "B", "quantity": 6}]
+    k.holdings, k.pending = [{"code": "A", "quantity": 1}, {"code": "B", "quantity": 6}], []
     assert len(k.meta_positions("B")) == 1 and len(k.meta_positions("C")) == 2
+
+
+def test_max_positions_counts_pending_and_slicing(monkeypatch):
+    """11-03 점검: A 보유 + B 매수 미체결(또는 나눠 사는 중)이면 C 는 막힌다(최대 2) — 안 세면 3종목. B 자기 다음 조각은 통과."""
+    from trader import slicer
+    k = object.__new__(d.Desk)
+    k.holdings, k.pending = [{"code": "A", "quantity": 1}], [{"code": "B", "side": "buy", "left": 10}]
+    assert len(k.meta_positions("C")) == 2 and len(k.meta_positions("B")) == 1
+    k.pending = []
+    monkeypatch.setattr(slicer, "_jobs", [{"code": "B", "pid": "x", "i": 0}])
+    assert len(k.meta_positions("C")) == 2 and len(k.meta_positions("B")) == 1
+
+
+def test_no_buy_before_first_balance():
+    """켜진 직후 잔고를 아직 못 받았으면 새 매수 멈춤 — 빈 잔고를 0종목으로 보고 최대 보유를 넘겨 사지 않게(11-03 점검)."""
+    k = object.__new__(d.Desk)
+    k.hold_ok, k.rules = False, {"safety": {}}
+    assert "잔고" in k.buy_block(1000, "A")
+
+
+def test_slicer_start_checks_cash_first(monkeypatch):
+    """나눠 사기는 시작 전에 돈을 본다 — 모자라면 '안 됨'(데스크가 1분 뒤 다시), 알림은 이유가 바뀔 때만(11-03 안랩 30초마다 실패)."""
+    from trader import slicer
+    monkeypatch.setattr(slicer, "_jobs", [])
+    notes = []
+
+    class D:
+        deposit = {"order_available_krw": 28_153}
+        def buy_lev(self, c): return (1.0, "cash")
+        def buy_block(self, n, c): return None
+        def note(self, t, lv="info"): notes.append(t)
+    p = {"id": "p", "code": "053800", "name": "안랩", "stages": [{"filled": 0}]}
+    assert not slicer.start(D(), p, 0, 110, 119_900, "t", None)["ok"]
+    assert not slicer.start(D(), p, 0, 110, 119_900, "t", None)["ok"] and len(notes) == 1 and not slicer._jobs
+    D.deposit = {"order_available_krw": 20_000_000}
+    assert slicer.start(D(), p, 0, 110, 119_900, "t", None)["ok"] and len(slicer._jobs) == 1
 
 
 def test_sync_puts_rule_gates_on_old_plan(monkeypatch):
@@ -552,3 +589,42 @@ def test_same_day_after_hours_bc_is_regular_close(monkeypatch):
     k._refc, k.note = {}, lambda *a, **kw: None
     k._place_plans(datetime(2026, 10, 20, 16, 0))
     assert p["c_px"] == 10000 and k.bought == []
+
+
+
+def test_follow_high_buys_less_when_held(monkeypatch):
+    """고점 갱신으로 기준가가 옮겨져도 들고 있으면 산 금액만큼 덜 산다(11-03 사용자, 안랩 114주 산 뒤 110주 또 사러 감)."""
+    import backtesting.value_ledger as vl
+    rows = [["20261014", 0, 7000, 0, 6870, 0, "m"], ["20261016", 0, 9180, 0, 9010, 0, "m"], ["20261019", 0, 9500, 0, 9120, 0, "m"]]
+    monkeypatch.setattr(vl, "regular_daily_rows", lambda code: rows)
+    for held, qty in ((150 * 6660, 0), (75 * 6660, 57)):           # 다 샀으면 0주, 반만 샀으면 남은 499,500원어치
+        k = object.__new__(d.Desk)
+        k._is_trading_day = lambda dd: dd.weekday() < 5
+        k.note, k.rules = (lambda *a, **kw: None), {"rules": []}
+        k.holdings = [{"code": "396300", "quantity": held // 6660, "avg_price": 6660}]
+        p = {"code": "396300", "name": "HT", "base": "reg", "ref_day": "20261014", "base_px": 6870, "keep": {"mode": "today"}, "until": None,
+             "stages": [{"pct": -3, "amt": 999_000, "price": 6660, "qty": 150, "filled": 150}], "rule": "main"}
+        k._follow_high(p, date(2026, 10, 19))
+        assert p["base_px"] == 9010 and p["stages"][0]["qty"] == qty, held
+
+
+def test_reg_close_is_1530_bar_not_krx_daily_file(monkeypatch):
+    """BC 정규장 종가 = 15분봉 15:30 봉 — 로컬 'k' 일봉(애프터 값 26,650)도, 15:15 봉도 아니다(11-03 지니언스 10-30 = 27,750)."""
+    from trader import desk as dk
+    import backtesting.value_ledger as vl
+    monkeypatch.setattr(vl, "regular_daily_rows", lambda code: [["20261030", 25700, 30200, 25650, 26650, 1, "k"]])
+    class C:
+        def get_minute_chart_pages(self, code, tic_scope, max_pages):
+            return [{"stk_min_pole_chart_qry": [{"cntr_tm": "20261030153000", "cur_prc": "27750"}, {"cntr_tm": "20261030151500", "cur_prc": "27500"},
+                                                {"cntr_tm": "20261030194500", "cur_prc": "26650"}]}]
+    d = dk.Desk.__new__(dk.Desk)
+    d.client = C()
+    assert d._local_reg_close("263860", "20261030") == 0
+    assert d._close_1530("263860", "20261030") == 27750
+
+
+def test_suneung_day_regular_close_is_1630():
+    """수능날은 정규장 16:30 마감 — 그날 BC 는 16:30 봉(11-03 사용자)."""
+    from trader import engine
+    assert engine.reg_end("20261119") == "1630" and engine.reg_end("20261118") == "1530"
+    assert engine.reg_end_min("2026-11-19") == 990 and engine.reg_end("20261119153000") == "1630"

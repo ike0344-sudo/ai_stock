@@ -53,10 +53,27 @@ def start(D, p: dict, i: int, qty: int, cap: int, tag: str, rule: str | None) ->
     with _lock:
         if any(j["pid"] == p["id"] and j["i"] == i for j in _jobs):
             return {"ok": True, "msg": "이미 나눠 사는 중"}
+    # 시작 전에 한도·돈부터 — 안 보고 '됨'을 돌려주면 데스크가 그날 그 단계를 끝난 것으로 적어 다시 안 샀다(11-03 점검 안랩)
+    need = int(qty * cap)
+    avail = int(int((D.deposit or {}).get("order_available_krw") or 0) * max(1.0, D.buy_lev(p["code"])[0]))
+    why = D.buy_block(need, p["code"]) or (f"주문가능금액 부족({avail:,}원 < {need:,}원)" if D.deposit and need > avail else None)
+    if why:
+        if s_.get("why") != why:                                       # 1분마다 다시 해도 알림은 이유가 바뀔 때만
+            s_["why"] = why
+            D.note(f"매수 막음 · {p['name']} — {why}", "warn")
+        return {"ok": False, "msg": why}
+    s_.pop("why", None)
+    with _lock:
         _jobs.append({"pid": p["id"], "i": i, "code": p["code"], "name": p["name"], "cap": int(cap), "qty": int(qty), "filled0": s_["filled"],
                       "tag": tag, "rule": rule, "t0": time.time(), "next": 0.0, "ord": None, "day": datetime.now().date().isoformat(), "n": 0})   # 데스크가 곧 이 단계 day 를 오늘로 적는다
     D.note(f"{p['name']} {qty:,}주 · 상한 {int(cap):,}원 — Jev 가 호가 보고 나눠 삽니다")
     return {"ok": True, "msg": "나눠 사기 시작"}
+
+
+def codes() -> set[str]:
+    """지금 나눠 사는 중인 종목 — 동시 보유 수에 센다(desk.meta_positions)."""
+    with _lock:
+        return {j["code"] for j in _jobs}
 
 
 def _ask_jev(j: dict, book: dict, left: int, px: int) -> tuple[Slice, str]:

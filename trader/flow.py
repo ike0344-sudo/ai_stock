@@ -20,6 +20,8 @@ from pathlib import Path
 
 import numpy as np
 
+from . import engine
+
 ROOT = Path(__file__).resolve().parent.parent
 TICK = ROOT / "data" / "stocks" / "tick_al"
 LOG = ROOT / "state" / "trader" / "flow_events.jsonl"
@@ -127,7 +129,7 @@ def on_tick(code: str, values: dict) -> None:
             b[0 if side > 0 else 1] += v
             b[3] = px
             s["rhi"] = max(s.get("rhi", 0), px)                        # 오늘 고가 — HC(통합 · 정규장)
-            if REG0 <= t < REG1:
+            if REG0 <= t < engine.reg_end_min(s["day"]):
                 s["rhi_reg"] = max(s.get("rhi_reg", 0), px)
         s["px"], s["t"] = px, t
         C = _c.get(code)
@@ -163,7 +165,7 @@ def _close5(code: str, s: dict, cur: int) -> None:
     base = _base.get((code, s["day"]))
     for w in sorted(k for k in s["b5"] if k < cur and k not in s["done5"]):
         s["done5"].add(w)
-        if not base or not (REG0 <= w * 5 < REG1):
+        if not base or not (REG0 <= w * 5 < engine.reg_end_min(s["day"])):
             continue
         bv, sv, o, c = s["b5"][w]
         end = w * 5 + 5
@@ -228,7 +230,7 @@ def baseline(code: str, cday: str | None) -> dict:
     try:
         if days and days[-1] == prev_day:                              # 체결 파일이 바로 전 거래일 것일 때만 '평소'로(한 달 전 파일을 쓰던 것 11-01)
             mins, px, v, sd, z0 = _load_ticks(code, days[-1])
-            reg = (mins >= REG0) & (mins < REG1)
+            reg = (mins >= REG0) & (mins < engine.reg_end_min(days[-1]))
             w = mins[reg] // 5
             if reg.sum() > 100:
                 bvw = np.bincount(w - w.min(), weights=(v * (sd > 0))[reg]); svw = np.bincount(w - w.min(), weights=(v * (sd < 0))[reg])
@@ -382,7 +384,7 @@ def view(code: str, C: int | None, cday: str | None, ma: int | None = None, px_h
         # C = 정규장 종가라 C 날 15:30 뒤 애프터 체결도 'C 뒤'(11-01 사용자 "정규장 끝나고 애프터장에서는 계산해야")
         for d in base["past"]:
             if cday and d["d"] >= cday:
-                k = slice(None) if d["d"] > cday else d["mins"] >= REG1
+                k = slice(None) if d["d"] > cday else d["mins"] >= engine.reg_end_min(d["d"])
                 _amt_sp(d["px"][k], d["v"][k], (d["v"] * d["sell"])[k], C, amt0, sp0)
         pc[C] = (acc0, amt0, sp0)
     acc, amt, sp = pc[C][0].copy(), pc[C][1].copy(), dict(pc[C][2])
@@ -436,7 +438,7 @@ def view(code: str, C: int | None, cday: str | None, ma: int | None = None, px_h
             wall = max(ab, key=ab.get)
     t = (s or {}).get("t") or 0
     heat = None
-    if s and base["a1"] and REG0 <= t < REG1:
+    if s and base["a1"] and REG0 <= t < engine.reg_end_min(s["day"]):
         bv5 = sum(v[0] for k, v in s["m1"].items() if t - 5 < k <= t)
         heat = round(bv5 / base["a1"], 1)
     blocks = []

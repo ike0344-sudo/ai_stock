@@ -430,7 +430,7 @@ def _chart_fetch(c: str, tf: str, sess: str, key: tuple):
     # 정규장 보기는 정규장 봉만으로 이동평균(장부와 같다). 애프터는 이어진 하루 전체 봉으로 계산한 뒤 애프터 봉만 남긴다 —
     # 애프터만 이어 붙여 계산하면 날 사이 빈 시간을 건너뛰어 선이 엉뚱해진다(10-19 HT로보틱스).
     if tf != "D" and sess == "reg":
-        bars = [b for b in bars if "0900" <= b["t"][8:12] <= "1530"]
+        bars = [b for b in bars if "0900" <= b["t"][8:12] <= engine.reg_end(b["t"])]   # 수능날은 16:30 까지
     closes = [b["c"] for b in bars]
     for per in ((5, 10, 20, 60, 120) if tf == "D" else (60, 120)):
         run = 0.0
@@ -439,7 +439,7 @@ def _chart_fetch(c: str, tf: str, sess: str, key: tuple):
             if i >= per - 1:
                 bars[i][f"m{per}"] = round(run / per, 2)
     if tf != "D" and sess == "after":
-        bars = [b for b in bars if "1530" < b["t"][8:12] <= "2000"]
+        bars = [b for b in bars if engine.reg_end(b["t"]) < b["t"][8:12] <= "2000"]
     bars = bars[-400:]
     _chart_cache[key] = (time.time(), bars)
     return bars

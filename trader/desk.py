@@ -155,6 +155,7 @@ class Desk:
         # '감시 시작한 날'이라, 장중에 데스크를 다시 켜면 안 걸린 단계가 '주문 걸림'으로 보이고 그날은 안 샀다(엘리스 2차 86,700)
         self.deposit: dict | None = None
         self.holdings: list[dict] = []
+        self.hold_ok = False                                            # 잔고를 한 번이라도 받았나
         self.pending: list[dict] = []
         self.msgs: list[dict] = _today_notes()                          # 다시 켜도 오늘 알림 유지(11-03 사용자)
         self.names: dict = {}
@@ -259,7 +260,7 @@ class Desk:
         reserved = sum(o["left"] * o["price"] for o in P["orders"] if o["side"] == "buy")
         self.deposit = {"deposit_krw": int(P["cash"]), "order_available_krw": int(P["cash"] - reserved), "d2_deposit_krw": int(P["cash"]),
                         "paper": True, "paper_start": int(P.get("start", 0))}
-        self.holdings = hold
+        self.holdings, self.hold_ok = hold, True
         self._sync_meta()
         self.pending = [{"ord_no": o["ord_no"], "code": o["code"], "name": self.name(o["code"]), "side": o["side"], "qty": o["qty"],
                          "price": o["price"], "left": o["left"], "time": o.get("time", ""), "mine": tags.get(o["ord_no"], "")}
@@ -349,7 +350,7 @@ class Desk:
     def _new_day(self) -> None:
         if self.paper_on() != getattr(self, "_mode", None):         # 가상 ↔ 실전을 바꿈 — 그 모드 파일로
             self._load_mode()
-            self.holdings, self.pending = [], []
+            self.holdings, self.pending, self.hold_ok = [], [], False   # 바꾼 모드 잔고를 받기 전엔 새 매수 안 함
         today = date.today().isoformat()
         if self.day.get("date") != today:
             self.day = {"date": today, "pnl_realized": 0, "orders": 0, "halted": None, "bought": {}}
@@ -409,6 +410,12 @@ class Desk:
         r = self._refc.get(key)
         if r:
             return r
+        if day == today and datetime.now().strftime("%H%M") <= engine.reg_end(today):
+            px = feed.quotes.get(code, {}).get("px") or 0               # 신고대금 당일 정규장 중 — BC = 지금 15분봉 종가(= 현재가), 키움에 안 묻는다(11-03 사용자)
+            return {"day": day, "reg": px, "aft": px, "nxt": True, "live": True}
+        f = self.__dict__.setdefault("_reff", {}).get(key)
+        if f and time.time() - f[0] < 60:                               # 못 받은 것도 1분 기억 — 오늘 신고대금(15:30 봉 아직 없음)을 화면 폴링마다 키움에 물어 데스크가 멈췄다(11-03)
+            return f[1]
         out = {"day": None, "reg": 0, "aft": 0, "nxt": True}
         if self.client:
             try:
@@ -428,6 +435,8 @@ class Desk:
                 self.note(f"{self.name(code)} 정규장 종가 조회 실패: {e}", "warn")
         if out["reg"] and out["aft"]:
             self._refc[key] = out
+        else:
+            self._reff[key] = (time.time(), out)
         if not day:
             self.refs[code] = out
         return out
@@ -440,26 +449,29 @@ class Desk:
             row = next((r for r in (regular_daily_rows(code) or []) if r[0] == day), None)
         except Exception:                                               # noqa: BLE001 — 없으면 키움으로
             return 0
-        return int(row[4]) if row and row[6] in ("m", "k") else 0
+        # 'k'(KRX 일봉 파일)는 안 쓴다 — 15:30 종가가 아니었다(11-03 지니언스 10-30 26,650·안랩 121,100, 실제 15:30 27,750·118,100)
+        return int(row[4]) if row and row[6] == "m" and engine.reg_end(day) == "1530" else 0   # 'm' 은 15:30 에서 자른 묶음 — 수능날은 키움 16:30 봉으로
+
+    def _reg_close(self, code: str, day: str) -> int:
+        """지난 날 정규장(15:30) 종가 — 로컬 일봉 표 종가 대신(애프터 값이 섞여 있었다, 11-03). 못 받으면 0."""
+        try:
+            return self.ref(code, day).get("reg") or 0
+        except Exception:                                               # noqa: BLE001
+            return 0
 
     def _close_1530(self, code: str, day: str) -> int:
-        """그날 15:30 이하 마지막 1분봉 종가. 1분봉은 최신부터 오므로 그날을 지나칠 때까지 페이지를 넘긴다(최대 12쪽 ≈ 2~4주)."""
-        cont, nk, best = "N", "", None
-        for _ in range(12):
-            pg = self.client.request_tr("ka10080", {"stk_cd": code, "tic_scope": "1", "upd_stkpc_tp": "1"}, cont_yn=cont, next_key=nk)
-            rows = pg.get("stk_min_pole_chart_qry", []) or []
-            for x in rows:
-                t = str(x.get("cntr_tm", ""))
-                if t[:8] == day and t[8:12] <= "1530" and (best is None or t > best[0]):
-                    best = (t, _absint(x.get("cur_prc")))
-            if best or (rows and str(rows[-1].get("cntr_tm", ""))[:8] < day):
-                break
-            if self.client.last_cont_yn != "Y" or not self.client.last_next_key:
-                break
-            cont, nk = "Y", self.client.last_next_key
-        if not best:
-            raise RuntimeError(f"{day} 1분봉이 너무 오래돼 키움에서 못 받습니다(약 2~4주 안만)")
-        return best[1]
+        """그날 정규장 종가 = KRX 15분봉의 15:30 봉(종가 단일가) — 차트 '정규장' 보기와 같은 값, 다음 날 기준가(ka10001)와 같다(11-03 지니언스 27,450).
+        1분봉으로 받던 때 10-30 지니언스가 27,950 으로 들어갔다(실제 27,750). 오늘 15:30 봉이 아직 없으면 실패 — 다음 판단 때 다시."""
+        pages = self.client.get_minute_chart_pages(code, tic_scope="15", max_pages=3)
+        rows = sorted((str(x.get("cntr_tm", "")), _absint(x.get("cur_prc"))) for pg in pages for x in (pg.get("stk_min_pole_chart_qry") or []))
+        e = engine.reg_end(day)
+        day_rows = [r for r in rows if r[0][:8] == day and "0900" <= r[0][8:12] <= e and r[1]]
+        last = next((r for r in day_rows if r[0][8:12] == e), None)
+        if not last and day < date.today().strftime("%Y%m%d") and day_rows:
+            last = day_rows[-1]                                          # 지난 날 15:30 봉이 없으면(거래정지 등) 그날 마지막 정규장 봉
+        if not last:
+            raise RuntimeError(f"{day} {e[:2]}:{e[2:]} 정규장 종가를 아직 못 받았습니다")
+        return last[1]
 
     def snap(self, code: str) -> dict:
         q, r = feed.quotes.get(code, {}), self.refs.get(code, {})
@@ -511,10 +523,10 @@ class Desk:
                 if not old or old[:8] < t or old[8:12] <= "0900":
                     break
             v = sum(_absint(x.get("cur_prc")) * _absint(x.get("trde_qty")) for x in rows
-                    if str(x.get("cntr_tm", ""))[:8] == t and "0900" <= str(x.get("cntr_tm", ""))[8:12] <= "1530")
+                    if str(x.get("cntr_tm", ""))[:8] == t and "0900" <= str(x.get("cntr_tm", ""))[8:12] <= engine.reg_end(t))
         except Exception:                                           # noqa: BLE001 — 다음 분에 다시
             pass
-        c[code] = (t, time.time(), v, v is not None and hm > "1531")
+        c[code] = (t, time.time(), v, v is not None and hm > engine.reg_end(t))
         return v
 
     # ── 계좌 ──────────────────────────────────────────────
@@ -531,7 +543,7 @@ class Desk:
             if dep is not None:
                 self.deposit = dep
             if hold is not None:
-                self.holdings = [h for h in hold if h["quantity"] > 0]
+                self.holdings, self.hold_ok = [h for h in hold if h["quantity"] > 0], True
                 self._sync_meta()
                 gone = self.credit_codes - {h["code"] for h in self.holdings}
                 if gone:
@@ -704,7 +716,7 @@ class Desk:
             pages = self.client.get_minute_chart_pages(code if base == "reg" else code + "_AL", tic_scope="15", max_pages=1)
             rows = [x for pg in pages for x in (pg.get("stk_min_pole_chart_qry") or [])]
             bars = [(str(x.get("cntr_tm", ""))[:12], _absint(x.get("cur_prc"))) for x in reversed(rows)
-                    if base != "reg" or "0900" <= str(x.get("cntr_tm", ""))[8:12] <= "1530"]
+                    if base != "reg" or "0900" <= str(x.get("cntr_tm", ""))[8:12] <= engine.reg_end(str(x.get("cntr_tm", "")))]
             bars = [b for b in bars if b[1]]
             self.__dict__.setdefault("_b15", {})[(code, base)] = bars   # 마지막 = 만드는 중인 봉 — 60선 위 마감 확인용(10-30)
             closes = [b[1] for b in bars]
@@ -792,6 +804,8 @@ class Desk:
 
     def buy_block(self, notional: int, code: str | None = None) -> str | None:
         sf = self.rules["safety"]
+        if not getattr(self, "hold_ok", True):                          # 빈 잔고를 0종목으로 보고 최대 보유를 넘겨 사지 않게(11-03 점검)
+            return "잔고를 아직 못 받아 새 매수를 멈췄습니다(켜진 직후)"
         if sf.get("halt_on_disconnect") and not feed.status()["connected"]:
             return "실시간 연결이 끊겨 새 매수를 멈췄습니다"
         md, ms = engine._num(sf.get("mkt_drop"), None), int(engine._num(sf.get("max_stops"), 0) or 0)
@@ -803,8 +817,12 @@ class Desk:
                                    notional, self.equity())
 
     def meta_positions(self, skip: str | None = None) -> list[dict]:
-        """동시 보유 수 — 이미 가진 종목을 더 사는 건 새 종목이 아니라 뺀다(11-02 지니언스 6주 사고 '최대 2종목'에 막힘)."""
-        return [{"qty": h["quantity"]} for h in self.holdings if h["code"] != skip]
+        """동시 보유 수 — 이미 가진 종목을 더 사는 건 새 종목이 아니라 뺀다(11-02 지니언스 6주 사고 '최대 2종목'에 막힘).
+        매수 미체결·나눠 사는 중인 종목도 센다 — 안 세면 체결 전에 다른 종목이 끼어 3종목이 됐다(11-03 점검)."""
+        from . import slicer
+        codes = ({h["code"] for h in self.holdings if h.get("quantity")}
+                 | {o["code"] for o in self.pending if o["side"] == "buy" and o.get("left", 1) > 0} | slicer.codes())
+        return [{"qty": 1} for c in codes - {skip}]
 
     def buy(self, code: str, qty: int, price: int, market: bool, tag: str = "수동", rule: str | None = None) -> dict:
         notional = qty * (price or self.snap(code)["px"])
@@ -1250,6 +1268,8 @@ class Desk:
             # 당일 예약도 첫 신고대금 날이 더 앞이면 선을 이미 안다 — 그때도 본다(10-22: HT로보틱스 10-21 당일 예약이 10-14 기준 +24% 넘었는데 삼)
             if p.get("peak_stop") and (not p.get("same_day") or (p.get("peak_ref") and p["peak_ref"] != p["ref_day"])):
                 rh, rc, hi = self._peak_since(p["code"], p.get("peak_ref") or p["ref_day"], p.get("peak_base") or p["base"])
+                if rc and (p.get("peak_base") or p["base"]) == "reg":   # 종가는 15:30 종가로 — 로컬 일봉 표는 애프터 값이 섞였다(11-03 지니언스 26,650 → 33,600 에서 잘못 끝남)
+                    rc = self._reg_close(p["code"], p.get("peak_ref") or p["ref_day"]) or rc
                 rdh, what = (rc, "종가") if p.get("peak_by") == "close" else (rh, "고가")
                 hi = max(hi or 0, q.get("high") or 0, px)
                 if rdh and hi >= rdh * (1 + p["peak_stop"] / 100):
@@ -1259,7 +1279,7 @@ class Desk:
                         if o["code"] == p["code"] and o["side"] == "buy" and str(mine.get(o["ord_no"], {}).get("tag", "")).startswith(f"예약:{p['id']}:"):
                             self.cancel(o["ord_no"], p["code"])
                     p.update(active=False, status=f"기준일 {what} +{p['peak_stop']:g}% 넘음 — 재매수 금지")
-                    self.note(f"{p['name']} 기준일 {what} {rdh:,} +{p['peak_stop']:g}% 를 넘어(고가 {int(hi):,}) 예약 끝 — 재매수 금지")
+                    self.note(f"{p['name']} 기준일 {what} {int(rdh):,} +{p['peak_stop']:g}% 를 넘어(고가 {int(hi):,}) 예약 끝 — 재매수 금지")
                     changed = True
                     continue
             if (p.get("follow_high") and not p.get("follow_keep_today")
@@ -1349,7 +1369,7 @@ class Desk:
                     if "c_near" in p and not cpx and p["ref_day"] == today.replace("-", ""):
                         # 신고대금 당일 정규장은 BC(오늘 종가)를 모른다 — 지금 15분봉 종가(= 현재가)를 임시 BC 로(11-03 사용자, 한진칼 60선이 BC −20% 인데 예약 감시)
                         # 애프터로 넘어가면 오늘 정규장 종가가 BC(11-03 사용자) — 한 번 받아 c_px 로 박는다(다음 날 아침 _fix_same_day 가 다시 정함)
-                        if now.strftime("%H%M") >= "1531" and time.time() - p.get("c_try", 0) > 60:
+                        if now.strftime("%H%M") > engine.reg_end(p["ref_day"]) and time.time() - p.get("c_try", 0) > 60:
                             p["c_try"] = time.time()
                             try:
                                 p["c_px"] = self._close_1530(p["code"], p["ref_day"])
@@ -1439,7 +1459,7 @@ class Desk:
         mode = mode or self._follow_def()
         key, t = (code, ref_day, mode), date.today().strftime("%Y%m%d")
         hm = datetime.now().strftime("%H%M")
-        done = {"reg": hm > "1530", "aft": hm > "2000"}                # 장이 끝난 세션은 오늘 일봉까지 확정으로 본다
+        done = {"reg": hm > engine.reg_end(t), "aft": hm > "2000"}                # 장이 끝난 세션은 오늘 일봉까지 확정으로 본다
         stamp = t + "".join("1" if done[b] else "0" for b in ("reg", "aft"))
         hit = self._fi.get(key)
         if not (hit and hit[0] == stamp):
@@ -1449,7 +1469,8 @@ class Desk:
                     n, mx = self._new_high(code, ref_day, b, t + "~" if done[b] else t, mode)
                 except Exception:                                   # noqa: BLE001 — 일봉 못 읽으면 표시만 안 함
                     n, mx = None, None
-                base[b] = ({"day": n[0], "high": int(n[2]), "close": int(n[4])} if n else None, mx)
+                cl = n and int((b == "reg" and self._reg_close(code, n[0])) or n[4])
+                base[b] = ({"day": n[0], "high": int(n[2]), "close": cl} if n else None, mx)
             hit = self._fi[key] = (stamp, base)
         q = feed.quotes.get(code, {})
         hi, px = q.get("high") or 0, q.get("px") or 0
@@ -1511,7 +1532,7 @@ class Desk:
         new = self._new_high(p["code"], p["ref_day"], p["base"], today.strftime("%Y%m%d"), p.get("follow_def") or "prev")[0]
         if not new or new[0] == p.get("follow_day"):
             return
-        bp = int(new[4])
+        bp = int((p["base"] == "reg" and self._reg_close(p["code"], new[0])) or new[4])
         p.update(base_px=bp, follow_day=new[0])
         rule = next((r for r in self.rules["rules"] if r.get("name") == p.get("tag") and (r.get("ladder") or {}).get("on")), None)
         if rule:                                                    # 단계를 규칙대로 다시 — 그사이 시장경보(투자주의 등)가 붙었으면 그 %로(10-20 사용자 에스엠벡셀)
@@ -1522,6 +1543,12 @@ class Desk:
             st = [s_ for s_ in st if s_["pct"] is not None and s_["amt"] > 0]
             if st:
                 p["stages"] = st
+        h = next((x for x in self.holdings if x["code"] == p["code"] and x.get("quantity")), None)
+        if h:   # 들고 있으면 산 금액만큼 덜 산다(11-03 사용자) — 안랩이 114주 산 뒤 고점 갱신으로 110주를 또 사러 갔다
+            tot = sum(s_["amt"] for s_ in p["stages"])
+            k = max(0.0, 1 - h["quantity"] * (h.get("avg_price") or h.get("current_price") or 0) / tot) if tot else 0.0
+            for s_ in p["stages"]:
+                s_["amt"] *= k
         for s_ in p["stages"]:
             s_["price"] = engine.floor_tick(bp * (1 + s_["pct"] / 100))   # 60선 단계는 주문 전에 60선으로 다시 잡힌다
             s_["qty"] = int(s_["amt"] // s_["price"])

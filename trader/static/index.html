@@ -49,14 +49,15 @@ header.card { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22p
 #center { flex: 999 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
 #bookcol { flex: 0 1 270px; min-width: 250px; }
 #order { flex: 1 1 290px; max-width: 330px; display: flex; flex-direction: column; gap: 12px; }
-.w { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; border: 1px solid transparent; }
+.w { display: flex; align-items: center; gap: 6px; padding: 8px; border-radius: 8px; border: 1px solid transparent; }
 .w.on { background: var(--acc-soft); border-color: var(--acc-line); }
-.w .wh { cursor: grab; color: var(--dim); padding: 8px 4px; font-size: 16px; line-height: 1; user-select: none; }
+.w .wh { cursor: grab; color: var(--dim); padding: 8px 0; font-size: 16px; line-height: 1; user-select: none; }
 .w.dragging { opacity: .4; }
 .w.dropup { box-shadow: inset 0 3px 0 var(--acc-line); }
 .w.dropdn { box-shadow: inset 0 -3px 0 var(--acc-line); }
 .w > button.pick { flex: 1; min-width: 0; display: grid; grid-template-columns: 1fr auto; gap: 1px 8px; background: none; border: 0; padding: 0; text-align: left; }
-.w .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.w .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; order: -2; }
+.w .st { order: -1; text-align: right; }   /* 이름 옆엔 짧은 상태만, 가격·등락률은 둘째 줄 — 250px 칸에서 이름이 한 글자로 잘렸다(11-03 사용자) */
 .w .sub { grid-column: 1 / -1; font: 11px var(--mono); color: var(--dim); }
 .auto { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; background: none; border: 0; padding: 2px; color: var(--dim); font-size: 10px; cursor: pointer; }
 .auto i { width: 26px; height: 14px; border-radius: 999px; background: var(--line2); position: relative; transition: background .15s; }
@@ -761,12 +762,13 @@ function svgChart(code) {
   const cToday = cDay && !cp?.c_px && last.t.slice(0, 8) === cDay;
   const cPx = (cToday && last.c) || (cp?.c_px && cs === cp.c_src && cp.c_px) || cp?.ref_cl?.[cs] || (cW?.ref_day && cW.ref_day === cDay && (cs === "reg" ? cW.ref_reg : cW.ref_aft)) || (cp && !cp.same_day && cs === cp.base && cp.base_px) || 0;
   const cGap = cPx ? `BC대비 ${last.c >= cPx ? "+" : ""}${((last.c / cPx - 1) * 100).toFixed(2)}%` : "";   // 11-01 사용자 "C값과 현재가 N% 차이"
-  if (cPx) lines.push([cPx, "var(--gold)", false, cToday ? `임시 BC ${fmt(cPx)} (지금 15분봉 종가 — 오늘 종가 나오면 BC 로 바뀜)` : `BC ${fmt(cPx)} · 지금 ${cGap} (${pmd(cDay)} ${cs === "reg" ? "정규장" : "애프터"} 종가)`]);
+  const dHi0 = cPx && S.flow?.[code]?.[cs === "reg" ? "dhi_reg" : "dhi"];   // 상한가 마감이면 BC = BC날 고점 — 선이 겹쳐 고점이 안 보였다(11-03 사용자 지니언스 10-28 27,300)
+  if (cPx) lines.push([cPx, "var(--gold)", false, cToday ? `임시 BC ${fmt(cPx)} (지금 15분봉 종가 — 오늘 종가 나오면 BC 로 바뀜)` : `BC ${fmt(cPx)}${dHi0 === cPx ? " = BH" : ""} · 지금 ${cGap} (${pmd(cDay)} ${cs === "reg" ? "정규장" : "애프터"} 종가${dHi0 === cPx ? "·고가" : ""})`]);
   const cHi = cPx && S.flow?.[code]?.[ses === "reg" ? "chi_reg" : "chi"];   // HC 는 차트 보기(애프터 포함/정규장)를 따른다 — BC 버튼과 안 묶음(11-01 사용자 "HC는 BC랑 같이 묶이면 안돼")
   const hcGap = cHi ? `${last.c >= cHi ? "+" : ""}${((last.c / cHi - 1) * 100).toFixed(2)}%` : "";   // 11-01 사용자 "차트에 HC" — HC = C 날부터 지금까지 통합(08~20시) 최고가(trader/flow.py chi)
   const dHi = cPx && S.flow?.[code]?.[cs === "reg" ? "dhi_reg" : "dhi"];   // BC 날(신고대금일) 고점 — BC 버튼(규칙/정규/애프터)에 묶음(11-01 사용자 "BC 애프터 누르면 고점도 애프터 고가")
-  if (cHi) lines.push([cHi, "var(--gold)", true, `HC ${fmt(cHi)} · 지금 HC대비 ${hcGap} (${pmd(cDay)}부터 ${ses === "reg" ? "정규장" : "애프터 포함"} 최고가${dHi === cHi ? " = BC날 고점" : ""})`]);
-  if (dHi && dHi !== cHi) lines.push([dHi, "#c9a24a", true, `BC날 고점 ${fmt(dHi)} · 지금 ${last.c >= dHi ? "+" : ""}${((last.c / dHi - 1) * 100).toFixed(2)}% (${pmd(cDay)} ${cs === "reg" ? "정규장" : "애프터 포함"} 고가)`]);
+  if (cHi) lines.push([cHi, "var(--gold)", true, `HC ${fmt(cHi)} · 지금 HC대비 ${hcGap} (${pmd(cDay)}부터 ${ses === "reg" ? "정규장" : "애프터 포함"} 최고가${dHi === cHi ? " = BH" : ""})`]);
+  if (dHi && dHi !== cHi && dHi !== cPx) lines.push([dHi, "#c9a24a", true, `BH ${fmt(dHi)} · 지금 BH대비 ${last.c >= dHi ? "+" : ""}${((last.c / dHi - 1) * 100).toFixed(2)}% (${pmd(cDay)} ${cs === "reg" ? "정규장" : "애프터 포함"} 고가)`]);
   // 오늘 전날 고가를 넘었으면(고점 갱신) 장 끝난 뒤 기준이 오늘 종가로 바뀐다 — 지금가로 미리 보여 준다(10-20 사용자 "오늘로 또 바뀌어야지")
   // 예약이 없는 종목도(다 팔았거나 끝난 예약) 켜진 매수 규칙이 고점 따라가기면 오늘 고점 갱신을 보여 준다(10-20 사용자 에스엠벡셀)
   const fr = (RULES?.rules || []).find((r) => r.on && r.ladder?.on && r.ladder.follow_high?.on), fw = S.watch.find((x) => x.code === code);
@@ -810,9 +812,13 @@ function svgChart(code) {
     s += `<line x1="${i * bw}" x2="${i * bw}" y1="0" y2="${H}" stroke="#3a4250" stroke-width="1"/><text x="${i * bw + 3}" y="${PH + 12}" font-size="11" fill="#8d96a5">${b.t.slice(4, 6)}/${b.t.slice(6, 8)}</text>`; } });
   mas.forEach(([vals, col, dash]) => { const pts = vals.map((v, i) => v === null ? "" : `${(i * bw + bw / 2).toFixed(1)},${y(v).toFixed(1)}`).filter(Boolean).join(" ");
     if (pts) s += `<polyline fill="none" stroke="${col}" stroke-width="1.3" ${dash ? 'stroke-dasharray="5 3"' : ""} clip-path="url(#cp${code})" points="${pts}"/>`; });
-  lines.forEach(([p, col, dash, txt]) => { if (p < lo || p > hi) return;
+  const used = [];                                                  // 가까운 선 글씨가 겹치면 아래로 비켜 쓴다(11-03 사용자 "BH·BC 같은 가격이면 글씨 안 보임") — 선은 제자리
+  [...lines].sort((a, b) => b[0] - a[0]).forEach(([p, col, dash, txt]) => { if (p < lo || p > hi) return;
     s += `<line x1="0" x2="${PW}" y1="${y(p)}" y2="${y(p)}" stroke="${col}" stroke-width="1" ${dash ? 'stroke-dasharray="4 3"' : ""} opacity=".8"/>`;
-    s += `<text x="4" y="${y(p) - 3}" fill="${col}" font-size="11" font-weight="600">${esc(W < 500 ? txt.replace(/\s*\(.*$/, "") : txt)}</text>`; });
+    let ty = y(p) - 3;
+    while (used.some((u) => Math.abs(u - ty) < 12)) ty += 12;
+    used.push(ty);
+    s += `<text x="4" y="${ty}" fill="${col}" font-size="11" font-weight="600">${esc(W < 500 ? txt.replace(/\s*\(.*$/, "") : txt)}</text>`; });
   // 오늘 체결 표시 — 체결 시각과 가장 가까운 봉
   const stamp = (b) => tf === "D" ? b.t.slice(0, 8) : b.t.slice(0, 12);
   S.fills.filter((f) => show.fill && f.code === code).forEach((f) => {

@@ -12,6 +12,21 @@ from datetime import date, datetime
 _TICKS = ((2000, 1), (5000, 5), (20000, 10), (50000, 50), (200000, 100), (500000, 500))
 
 
+# 수능날은 정규장이 1시간 늦다(10:00~16:30) — 그날 정규장 종가는 16:30 봉(11-03 사용자). 해마다 날짜를 더할 것.
+LATE_CLOSE = {"20231116", "20241114", "20251113", "20261119"}
+
+
+def reg_end(day: str) -> str:
+    """그날(YYYYMMDD…) 정규장 끝 시각 HHMM — 평소 1530, 수능날 1630."""
+    return "1630" if day.replace("-", "")[:8] in LATE_CLOSE else "1530"
+
+
+def reg_end_min(day: str) -> int:
+    """reg_end 를 하루 중 분으로(930 / 990)."""
+    e = reg_end(day)
+    return int(e[:2]) * 60 + int(e[2:])
+
+
 def tick_size(price: float) -> int:
     for bound, tick in _TICKS:
         if price < bound:
