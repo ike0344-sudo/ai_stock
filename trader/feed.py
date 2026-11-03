@@ -54,7 +54,8 @@ def parse_quote(values: dict) -> dict | None:
         return None
     return {"px": px, "chg": _float(values.get("12")), "high": abs(_int(values.get("17"))), "low": abs(_int(values.get("18"))), "open": abs(_int(values.get("16"))),
             "value": abs(_int(values.get("14"))) * 1_000_000,
-            "strength": abs(_float(values.get("228"))), "cum": abs(_int(values.get("13"))), "t": time.time()}
+            "strength": abs(_float(values.get("228"))), "cum": abs(_int(values.get("13"))), "t": time.time(),
+            "base": px - _int(values.get("11")) if values.get("11") else 0}   # 기준가 = 현재가 − 전일대비(11-03 실측 116,500 − 300 = 116,200)
 
 
 def parse_book(values: dict) -> dict | None:

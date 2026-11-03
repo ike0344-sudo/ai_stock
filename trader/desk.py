@@ -93,6 +93,24 @@ def _write(name: str, data) -> None:
     os.replace(tmp, STATE / name)
 
 
+def _today_notes(n: int = 80) -> list[dict]:
+    """events.jsonl 에 남긴 오늘 알림 — 최신이 앞."""
+    day, out = date.today().isoformat(), []
+    try:
+        with open(STATE / "events.jsonl", encoding="utf-8") as f:
+            for line in f:
+                if '"note"' in line and day in line:
+                    try:
+                        e = json.loads(line)
+                    except ValueError:
+                        continue
+                    if "note" in e and e.get("ts", "").startswith(day):
+                        out.append({"t": e["ts"][11:19], "text": e["note"], "level": e.get("level", "info")})
+    except OSError:
+        pass
+    return out[::-1][:n]
+
+
 def _log(event: dict) -> None:
     STATE.mkdir(parents=True, exist_ok=True)
     with open(STATE / "events.jsonl", "a", encoding="utf-8") as f:
@@ -138,12 +156,14 @@ class Desk:
         self.deposit: dict | None = None
         self.holdings: list[dict] = []
         self.pending: list[dict] = []
-        self.msgs: list[dict] = []
+        self.msgs: list[dict] = _today_notes()                          # 다시 켜도 오늘 알림 유지(11-03 사용자)
         self.names: dict = {}
         try:
             self.names = json.loads((ROOT / "data" / "stock_names.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             pass
+        for m in self.msgs:                                             # 이름 고치기 전에 남은 '180640 과열 매수'도 종목명으로
+            m["text"] = self._named(m["text"])
         self._new_day()
 
     # ── 공통 ──────────────────────────────────────────────
@@ -295,7 +315,13 @@ class Desk:
             j["closed"] = datetime.now().isoformat(timespec="minutes")
         _write("journal.json", self.journal)
 
+    def _named(self, text: str) -> str:
+        """알림 맨 앞 종목코드 → 종목명(11-03 사용자)."""
+        code = text[:6]
+        return self.names[code] + text[6:] if text[6:7] == " " and code in self.names else text
+
     def note(self, text: str, level: str = "info") -> None:
+        text = self._named(text)
         with _lock:
             self.msgs = ([{"t": datetime.now().strftime("%H:%M:%S"), "text": text, "level": level}] + self.msgs)[:80]
         _log({"note": text, "level": level})
@@ -393,8 +419,9 @@ class Desk:
             except Exception as e:                                      # noqa: BLE001
                 self.note(f"{self.name(code)} 애프터 종가(일봉) 조회 실패: {e}", "warn")
             try:
-                if not day:
-                    out["reg"] = _absint(self.client.request_tr("ka10001", {"stk_cd": code}, path="/api/dostk/stkinfo").get("base_pric"))
+                if not day:   # 11-03 자정에 받은 ka10001 기준가는 전전날 종가였다(안랩 118,100 = 10-30) — 로컬 정규장 종가를 먼저
+                    out["reg"] = (out["day"] and self._local_reg_close(code, out["day"])) or _absint(
+                        self.client.request_tr("ka10001", {"stk_cd": code}, path="/api/dostk/stkinfo").get("base_pric"))
                 elif out["day"]:
                     out["reg"] = self._local_reg_close(code, out["day"]) or self._close_1530(code, out["day"])
             except Exception as e:                                      # noqa: BLE001
@@ -438,7 +465,11 @@ class Desk:
         q, r = feed.quotes.get(code, {}), self.refs.get(code, {})
         h = next((x for x in self.holdings if x["code"] == code), None)
         px = q.get("px") or (h["current_price"] if h else 0)
-        reg = r.get("reg") or 0
+        # 기준가는 오늘 받은 실시간 틱(현재가 − 전일대비)이 정답 — 자정에 받은 ka10001 이 전전날 값이라 호가 등락률이 틀렸다(11-03 안랩)
+        live = q.get("base") if q.get("t", 0) >= time.mktime(date.today().timetuple()) else 0
+        if live and r and r.get("reg") != live:
+            r["reg"] = live                                             # refs·ref() 캐시가 같은 dict — 목록·예약도 같이 고쳐진다
+        reg = live or r.get("reg") or 0
         # 등락률은 실시간 값(0B 12 = 키움이 기준가로 계산)을 먼저 — 없을 때만 기준가로 계산
         return {"px": px, "chg": q.get("chg") if q.get("chg") is not None and q.get("px") else ((px / reg - 1) * 100 if reg and px else None),
                 "high": q.get("high"),
@@ -1314,17 +1345,30 @@ class Desk:
                         s_.update(price=top, qty=max(s_["filled"], int(s_["amt"] // top)))
                     elif not mb[1] <= px <= mb[2]:
                         continue
+                    cpx, cnm = p.get("c_px"), "기준일 종가"
+                    if "c_near" in p and not cpx and p["ref_day"] == today.replace("-", ""):
+                        # 신고대금 당일 정규장은 BC(오늘 종가)를 모른다 — 지금 15분봉 종가(= 현재가)를 임시 BC 로(11-03 사용자, 한진칼 60선이 BC −20% 인데 예약 감시)
+                        # 애프터로 넘어가면 오늘 정규장 종가가 BC(11-03 사용자) — 한 번 받아 c_px 로 박는다(다음 날 아침 _fix_same_day 가 다시 정함)
+                        if now.strftime("%H%M") >= "1531" and time.time() - p.get("c_try", 0) > 60:
+                            p["c_try"] = time.time()
+                            try:
+                                p["c_px"] = self._close_1530(p["code"], p["ref_day"])
+                                changed = True
+                                self.note(f"{p['name']} BC = 오늘 정규장 종가 {p['c_px']:,}")
+                            except Exception as e:                      # noqa: BLE001 — 못 받으면 1분 뒤 다시, 그동안은 지금 15분봉 종가
+                                _log({"c_px_fail": p["code"], "err": str(e)})
+                        cpx, cnm = (p["c_px"], "오늘 정규장 종가(BC)") if p.get("c_px") else (px, "지금 15분봉 종가(임시 BC)")
                     if "c_near" in p and not p.get("c_px") and p["ref_day"] < today.replace("-", ""):
                         if s_.get("cn_day") != today:               # 당일 예약의 C(기준일 종가)를 아직 못 받음 — 모르는 채로 C 아래에서 사지 않게(11-01 사용자 지니언스)
                             s_["cn_day"], changed = today, True
                             self.note(f"{p['name']} 기준일 종가 BC 를 아직 못 받음 — 60선 매수 안 함(받으면 다시)")
                         continue
-                    if p.get("c_px") and top < p["c_px"] * (1 - p["c_near"] / 100):
+                    if cpx and top < cpx * (1 - p["c_near"] / 100):
                         if s_.get("cn_day") != today:               # C 아래로 멀다 — 이 60선에선 안 산다(10-30 사용자). 알림은 하루 한 번
                             s_["cn_day"], changed = today, True
-                            self.note(f"{p['name']} 60선 {top:,}이 기준일 종가 {p['c_px']:,} −{p['c_near']:g}% 아래 — 안 삼")
+                            self.note(f"{p['name']} 60선 {top:,}이 {cnm} {cpx:,} −{p['c_near']:g}% 아래 — 안 삼")
                         continue
-                    if p.get("c_full") and p.get("c_px") and top >= p["c_px"] * (1 - p["c_near"] / 100):
+                    if p.get("c_full") and cpx and top >= cpx * (1 - p["c_near"] / 100):
                         # C −N% 이상 — 아직 주문 안 낸 다른 단계 금액을 이 단계로 합쳐 한 번에 다 산다(10-30 사용자 "C 를 기준으로 −2% 위로는 다 사지게")
                         oth = [x for j, x in enumerate(p["stages"]) if j != i and not x["filled"] and x.get("day") != today and x["amt"] > 0]
                         if oth:
@@ -1332,7 +1376,7 @@ class Desk:
                             for x in oth:
                                 x.update(amt=0, qty=0)
                             s_["qty"], changed = max(s_["filled"], int(s_["amt"] // top)), True
-                            self.note(f"{p['name']} 60선 {top:,} ≥ 기준일 종가 {p['c_px']:,} −{p['c_near']:g}% — 남은 단계 합쳐 한 번에 삼")
+                            self.note(f"{p['name']} 60선 {top:,} ≥ {cnm} {cpx:,} −{p['c_near']:g}% — 남은 단계 합쳐 한 번에 삼")
                 elif px > s_["price"] * (1 + near / 100):
                     continue
                 left = s_["qty"] - s_["filled"]

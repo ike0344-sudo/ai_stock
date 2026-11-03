@@ -460,3 +460,95 @@ def test_seed_fills_from_journal(monkeypatch):
     monkeypatch.setattr(feed, "order_events", deque(maxlen=10))
     object.__new__(d.Desk)._seed_fills()
     assert [(e["side"], e["fill_px"]) for e in feed.order_events] == [("buy", 114300), ("sell", 120000)]
+
+
+def test_prev_ref_prefers_local_regular_close(monkeypatch):
+    """자정에 ka10001 기준가가 전전날 값(118,100)이어도 로컬 정규장 종가(116,200)를 쓴다 — 11-03 안랩 호가 등락률."""
+    from trader import desk as dk
+
+    class C:
+        def get_daily_chart(self, code): return {"stk_dt_pole_chart_qry": [{"dt": "20261102", "cur_prc": "115900"}]}
+        def request_tr(self, *a, **k): return {"base_pric": "118100"}
+    d = dk.Desk.__new__(dk.Desk)
+    d.client, d._refc, d.refs, d.note = C(), {}, {}, lambda *a: None
+    monkeypatch.setattr(dk.Desk, "_local_reg_close", lambda self, c, day: 116200 if day == "20261102" else 0)
+    assert d.ref("053800")["reg"] == 116200
+
+
+def test_live_tick_fixes_stale_reg(monkeypatch):
+    """refs 기준가가 전전날 값(118,100)이어도 오늘 틱(116,500 · 전일대비 +300)이 오면 116,200 으로 — 11-03 안랩."""
+    import time
+    from trader import desk as dk, feed
+    q = feed.parse_quote({"10": "+116500", "11": "+300", "12": "+0.26"})
+    assert q["base"] == 116200
+    monkeypatch.setitem(feed.quotes, "053800", q)
+    d = dk.Desk.__new__(dk.Desk)
+    d.refs, d.holdings = {"053800": {"reg": 118100, "aft": 115900}}, []
+    monkeypatch.setattr(dk.daily_facts, "get", lambda c: None)
+    monkeypatch.setattr(dk.Desk, "vref", lambda self, c: {}, raising=False)
+    try:
+        s = d.snap("053800")
+    except Exception:     # snap 뒤쪽(고점·60선 등)은 이 테스트 밖 — 기준가 고친 것만 본다
+        s = None
+    assert d.refs["053800"]["reg"] == 116200
+    if s:
+        assert s["reg"] == 116200
+    q["t"] = time.time() - 86400 * 2                                  # 어제 틱이면 안 믿는다
+    d.refs["053800"]["reg"] = 118100
+    try:
+        d.snap("053800")
+    except Exception:
+        pass
+    assert d.refs["053800"]["reg"] == 118100
+
+
+def test_notes_reload_from_events(tmp_path, monkeypatch):
+    """다시 켜면 events.jsonl 의 오늘 알림을 다시 읽는다 — 어제 것은 뺌(11-03 사용자)."""
+    from trader import desk as dk
+    monkeypatch.setattr(dk, "STATE", tmp_path)
+    (tmp_path / "events.jsonl").write_text('{"note": "옛날", "level": "info", "ts": "2000-01-01T09:00:00"}\n', encoding="utf-8")
+    dk._log({"note": "안랩 과열 매수", "level": "warn"})
+    dk._log({"other": 1})
+    assert [(m["text"], m["level"]) for m in dk._today_notes()] == [("안랩 과열 매수", "warn")]
+
+
+def test_note_code_to_name(monkeypatch):
+    from trader import desk as dk
+    monkeypatch.setattr(dk, "_log", lambda e: None)
+    d = dk.Desk.__new__(dk.Desk)
+    d.msgs, d.names = [], {"180640": "한진칼"}
+    d.note("180640 과열 매수 — 평소의 102.9배", "warn")
+    d.note("1806405 그대로")
+    assert [m["text"] for m in d.msgs] == ["1806405 그대로", "한진칼 과열 매수 — 평소의 102.9배"]
+
+
+def test_same_day_ma_buy_blocked_below_live_close(monkeypatch):
+    """신고대금 당일(BC 모름)은 지금 15분봉 종가(현재가)가 임시 BC — 60선이 그 −N% 위면 산다, 아래면 안 산다(11-03 사용자)."""
+    for top, want in ((9500, [9500]), (9300, [])):                  # 60선 위 버팀 종가 — 지금가 9,600 의 −2%(9,408) 위/아래
+        k = _desk(monkeypatch, 9600)
+        p = k.plans[0]
+        p.update(ref_day="20261020", same_day=True, base="aft", base_px=10500, c_near=2.0, c_src="reg", ma_confirm=2)
+        p["stages"][0].update(ma=True, band=1.0, amt=100_000, pct=0.0)
+        p["stages"][1].update(amt=0, qty=0)
+        k.ma60_15 = lambda code, base: 9200
+        k._ma_confirmed = lambda p_, s_, _t=top: (_t,)
+        k.ref = lambda code, day=None: {"aft": 10000, "reg": 9900}
+        k._refc, k.note = {}, lambda *a, **kw: None
+        k._place_plans(datetime(2026, 10, 20, 14, 0))
+        assert k.bought == want, top
+
+
+def test_same_day_after_hours_bc_is_regular_close(monkeypatch):
+    """당일 신고대금 뒤 애프터로 넘어가면 BC = 오늘 정규장 종가(11-03 사용자) — 지금가가 아니다."""
+    k = _desk(monkeypatch, 9600)
+    p = k.plans[0]
+    p.update(ref_day="20261020", same_day=True, base="aft", base_px=10500, c_near=2.0, c_src="reg", ma_confirm=2)
+    p["stages"][0].update(ma=True, band=1.0, amt=100_000, pct=0.0)
+    p["stages"][1].update(amt=0, qty=0)
+    k.ma60_15 = lambda code, base: 9200
+    k._ma_confirmed = lambda p_, s_: (9500,)                       # 지금가 기준이면 사지만(9,408 위) 정규장 종가 10,000 −2% 아래
+    k._close_1530 = lambda code, day: 10000
+    k._plan_window = lambda p_, now, strict=False: True              # 애프터 주문 시간은 이 테스트 밖
+    k._refc, k.note = {}, lambda *a, **kw: None
+    k._place_plans(datetime(2026, 10, 20, 16, 0))
+    assert p["c_px"] == 10000 and k.bought == []

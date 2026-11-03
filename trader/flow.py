@@ -32,6 +32,14 @@ _st: dict[str, dict] = {}                                             # 종목 �
 _base: dict[tuple, dict] = {}                                         # (종목, 오늘, C 날) → 평소·과거(하루 한 번)
 _c: dict[str, int] = {}                                               # 종목 → 지금 C(화면 폴링이 넣는다 — C 깨짐 판단용)
 notify = None                                                         # desk.note — 과열·C 깨짐·헛오름을 데스크 알림으로
+name = None                                                           # desk.name — 알림에 코드 말고 종목명(11-03 사용자)
+
+
+def _nm(code: str) -> str:
+    try:
+        return (name and name(code)) or code
+    except Exception:                                                  # noqa: BLE001
+        return code
 
 
 def _int(raw) -> int:
@@ -128,7 +136,7 @@ def on_tick(code: str, values: dict) -> None:
                 s["above"] = True
             elif s["above"] and s["cbreak"] is None:
                 s["cbreak"] = t
-                _emit(code, s, "cbreak", f"{code} BC 깨짐 {px:,} (BC {C:,}) — 30분 사지 말 것 · 매도 몰림", t)
+                _emit(code, s, "cbreak", f"{_nm(code)} BC 깨짐 {px:,} (BC {C:,}) — 30분 사지 말 것 · 매도 몰림", t)
         _close5(code, s, t // 5)
 
 
@@ -160,12 +168,12 @@ def _close5(code: str, s: dict, cur: int) -> None:
         bv, sv, o, c = s["b5"][w]
         end = w * 5 + 5
         if base.get("a1") and bv >= HEAT_X * base["a1"] and c > o and bv > sv:
-            _emit(code, s, "heat", f"{code} 과열 매수 — 평소의 {bv / base['a1']:.1f}배 · 따라 사지 말 것(60분 뒤 −0.3%, 위아래로 크게 흔들림)", end)
+            _emit(code, s, "heat", f"{_nm(code)} 과열 매수 — 평소의 {bv / base['a1']:.1f}배 · 따라 사지 말 것(60분 뒤 −0.3%, 위아래로 크게 흔들림)", end)
         prev = s["b5"].get(w - 1)
         if base.get("bb") is not None and prev and bv + sv:
             ret, flow = c / prev[3] - 1, (bv - sv) / (bv + sv)
             if flow >= base["fq"] and ret > 0 and ret - np.polyval(base["bb"], flow) >= base["rq"]:
-                _emit(code, s, "hot", f"{code} 헛오름 — 매수 힘보다 {ret * 100:+.1f}% 더 튐 · 따라 사지 말 것(30분 뒤 내림 59%)", end)
+                _emit(code, s, "hot", f"{_nm(code)} 헛오름 — 매수 힘보다 {ret * 100:+.1f}% 더 튐 · 따라 사지 말 것(30분 뒤 내림 59%)", end)
 
 
 def _tick_days(code: str, today: str) -> list[str]:

@@ -60,7 +60,7 @@ def _start() -> None:
     shadow.start(D, _chart_fresh)
     from . import slicer
     slicer.run(D)                                                   # Jev 호가 보고 나눠 사기 일감 루프(10-30)
-    flow.notify = D.note                                            # 과열 매수·C 깨짐·헛오름 → 데스크 알림(11-01)
+    flow.notify, flow.name = D.note, D.name                                          # 과열 매수·C 깨짐·헛오름 → 데스크 알림(11-01)
 
     def _flow_warm():                                               # 고른 종목 '평소'·지난 체결을 미리 — 화면 폴링이 첫 계산(종목당 수 초)에 막히지 않게
         while True:
