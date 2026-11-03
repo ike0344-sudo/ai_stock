@@ -59,6 +59,9 @@ header.card { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22p
 .w .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; order: -2; }
 .w .st { order: -1; text-align: right; }   /* 이름 옆엔 짧은 상태만, 가격·등락률은 둘째 줄 — 250px 칸에서 이름이 한 글자로 잘렸다(11-03 사용자) */
 .w .sub { grid-column: 1 / -1; font: 11px var(--mono); color: var(--dim); }
+.w .sub > * { display: block; white-space: nowrap; font-style: normal; }   /* 기준 / 종가 / 애프터 — 늘 같은 자리에서 줄 바꿈(11-03 사용자 "등락률 바뀌면서 줄 바꿈") */
+.w > button.pick > .mono { white-space: nowrap; }
+.w .wa { display: flex; flex-direction: column; align-items: center; gap: 4px; }   /* 자동·빼기 세로로 — 가격·등락률 자리 */
 .auto { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; background: none; border: 0; padding: 2px; color: var(--dim); font-size: 10px; cursor: pointer; }
 .auto i { width: 26px; height: 14px; border-radius: 999px; background: var(--line2); position: relative; transition: background .15s; }
 .auto i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: var(--dim); transition: left .15s; }
@@ -197,7 +200,7 @@ dialog::backdrop { background: rgba(0,0,0,.55); }
 
   <div id="deskView" class="main">
     <section id="left" class="card" aria-label="내가 고른 종목">
-      <div class="row" style="justify-content:space-between"><strong style="font-size:14px">내가 고른 종목</strong><span class="dim" id="wCount"></span></div>
+      <div class="row" style="justify-content:space-between"><strong style="font-size:14px">내가 고른 종목</strong><span class="row" style="gap:6px"><button type="button" class="btn ghost" id="valMode" style="min-height:24px;padding:2px 8px;font-size:11px" title="거래대금 기준 — 정규장 09:00~15:30 / 전체 08:00~20:00"></button><span class="dim" id="wCount"></span></span></div>
       <div class="row" style="gap:6px">
         <label for="add" class="dim" style="position:absolute;width:1px;height:1px;overflow:hidden">종목 추가</label>
         <input id="add" class="in" list="addList" placeholder="종목명·코드" style="flex:1" autocomplete="off">
@@ -306,6 +309,7 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 const fmt = (n) => n == null || isNaN(n) ? "—" : Math.round(n).toLocaleString("ko-KR");
 const fp = (n) => n ? fmt(n) : "—";
+const eok = (v) => v ? fmt(Math.round(v / 1e8)) + "억" : "—";   // 당일 거래대금(통합 08~20시 누적, 0B 14) — 11-03 사용자
 const pct = (n) => n == null || isNaN(n) ? "" : (n > 0 ? "+" : n < 0 ? "−" : "") + Math.abs(n).toFixed(2) + "%";
 const cls = (n) => n > 0 ? "up" : n < 0 ? "dn" : "dim";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -378,7 +382,7 @@ function onLive(d) {
   window.__liveN = (window.__liveN || 0) + 1;                       // 점검용: 받은 실시간 묶음 수
   if (!S) return;
   for (const [c, q] of Object.entries(d.q || {})) {
-    const w = S.watch.find((x) => x.code === c); if (w) { w.px = q.px; w.chg = q.chg; }
+    const w = S.watch.find((x) => x.code === c); if (w) { w.px = q.px; w.chg = q.chg; if (q.value) w.value = q.value; }
     const h = S.holdings.find((x) => x.code === c); if (h) h.px = q.px;
     if (S.active?.code === c) Object.assign(S.active, { px: q.px, chg: q.chg, high: q.high });
     liveBar(c, q);
@@ -450,28 +454,34 @@ function render() {
 }
 
 // ── 종목 목록 ─────────────────────────────────────────
-const wKey = (w) => [w.code, w.name, w.warn, w.status, w.ref_day, w.ref_reg, w.ref_aft, w.reg, w.aft, w.nxt, w.auto, checked.has(w.code), w.code === active].join("|");
+let valReg = store.get("valReg", false);                             // 고른 종목 대금: 정규장(09:00~15:30) / 전체(08:00~20:00) — 11-03 사용자
+const wVal = (w) => valReg ? w.value_reg : w.value;
+const wKey = (w) => [valReg, w.code, w.name, w.warn, w.status, w.ref_day, w.ref_reg, w.ref_aft, w.reg, w.aft, w.nxt, w.auto, checked.has(w.code), w.code === active].join("|");
 function renderWatch() {
   $("wCount").textContent = S.watch.length + "종목";
   const L = $("wlist"), rows = [...L.children];
   if (S.watch.length && rows.length === S.watch.length && S.watch.every((w, i) => rows[i]._k === wKey(w))) {
     // 시세만 바뀌면 글자만 고친다 — 줄을 통째로 갈면 누르는 사이 버튼이 바뀌어 클릭·✕가 씹혔다(10-23 사용자 "클릭·삭제 너무 느려")
-    S.watch.forEach((w, i) => { const [px, ch] = rows[i]._v; px.textContent = fp(w.px); ch.textContent = pct(w.chg); ch.className = `mono ${cls(w.chg)}`; });
+    S.watch.forEach((w, i) => { const [px, ch] = rows[i]._v; px.textContent = fp(w.px); ch.textContent = pct(w.chg); ch.className = `mono ${cls(w.chg)}`; rows[i].querySelector(".wv").textContent = eok(wVal(w)); });
   } else {
   L.innerHTML = S.watch.map((w, i) => `<div class="w ${w.code === active ? "on" : ""}" data-wi="${i}">
     <span class="wh" draggable="true" title="끌어서 순서 바꾸기" aria-label="${esc(w.name)} 끌어서 순서 바꾸기">⠿</span>
     <input type="checkbox" aria-label="${esc(w.name)} 일괄 매도에 포함" data-ck="${w.code}" ${checked.has(w.code) ? "checked" : ""} style="width:16px;height:16px;accent-color:var(--acc);margin:0">
     <button class="pick" type="button" data-pick="${w.code}"><span class="nm">${esc(w.name)}${w.warn ? ` <b class="mk" style="color:var(--up);border-color:var(--up)">${esc(w.warn)}</b>` : ""}</span><span class="mono">${fp(w.px)}</span>
       <span class="st ${w.status}">${w.status}</span><span class="mono ${cls(w.chg)}" style="font-size:12px;text-align:right">${pct(w.chg)}</span>
-      <span class="sub">${w.ref_day ? `<b style="color:var(--acc)">기준 ${w.ref_day.slice(4, 6)}.${w.ref_day.slice(6)}</b> · 종가 ${fp(w.ref_reg)} · 애프터 <span style="color:var(--gold)">${w.nxt ? fp(w.ref_aft) : "NXT 없음"}</span>`
-        : `종가 ${fp(w.reg)} · 애프터 <span style="color:var(--gold)">${w.nxt ? fp(w.aft) : "NXT 없음"}</span>`}</span></button>
+      <span class="sub">${w.ref_day ? `<b style="color:var(--acc)">기준 ${w.ref_day.slice(4, 6)}.${w.ref_day.slice(6)}</b><i>종가 ${fp(w.ref_reg)}</i><i>애프터 <span style="color:var(--gold)">${w.nxt ? fp(w.ref_aft) : "NXT 없음"}</span></i>`
+        : `<i>종가 ${fp(w.reg)}</i><i>애프터 <span style="color:var(--gold)">${w.nxt ? fp(w.aft) : "NXT 없음"}</span></i>`}<i>${valReg ? "정규 대금" : "대금"} <span class="wv" style="color:var(--text)">${eok(wVal(w))}</span></i></span></button>
+    <div class="wa">
     <button type="button" class="auto ${w.auto === false ? "" : "on"}" data-auto="${w.code}" aria-pressed="${w.auto !== false}" title="${w.auto === false ? "자동 매수 꺼짐 — 매수 규칙이 이 종목은 안 봅니다" : "자동 매수 켜짐 — 매수 규칙이 이 종목을 봅니다"}" aria-label="${esc(w.name)} 자동 매수"><i></i><span>자동</span></button>
-    <button class="btn x" type="button" aria-label="${esc(w.name)} 빼기" data-del="${w.code}">✕</button></div>`).join("")
+    <button class="btn x" type="button" aria-label="${esc(w.name)} 빼기" data-del="${w.code}">✕</button></div></div>`).join("")
     || `<div class="dim" style="padding:10px 4px">위 칸에 종목을 넣어 주세요</div>`;
   S.watch.forEach((w, i) => { const el = L.children[i]; el._k = wKey(w); el._v = el.querySelectorAll(".pick > .mono"); });
   }
   $("ckN").textContent = [...checked].filter((c) => S.watch.some((w) => w.code === c)).length;
 }
+const valBtn = () => { $("valMode").textContent = valReg ? "대금: 정규장" : "대금: 전체"; $("valMode").setAttribute("aria-pressed", valReg); };
+valBtn();
+$("valMode").onclick = () => { valReg = !valReg; store.set("valReg", valReg); valBtn(); if (S) renderWatch(); };
 $("wlist").addEventListener("click", async (e) => {
   const p = e.target.closest("[data-pick]"), d = e.target.closest("[data-del]"), au = e.target.closest("[data-auto]");
   if (au) {
@@ -732,7 +742,7 @@ function svgChart(code) {
   if (h && show.avg) lines.push([h.avg_price, "#dfe4ec", true, "평단 " + fmt(h.avg_price)]);
   if (h && show.exit) {
     if (h.stop) lines.push([h.stop, "var(--dn)", false, (h.breakeven ? "본전 손절 " : "손절 ") + fmt(h.stop)]);
-    if (h.env) lines.push([h.env, "var(--dn)", true, "60선 엔벨로프 하단 손절 " + fmt(h.env)]);
+    if (h.env) lines.push([h.env, "var(--dn)", true, "엔벨로프 손절 " + fmt(h.env)]);
     h.takes.forEach((p, i) => lines.push([p, "var(--up)", false, `${i + 1}차 익절 ${fmt(p)}`]));
   }
   S.pending.filter((p) => p.code === code && (show.exit || p.side === "buy")).forEach((p) => lines.push([p.price, p.side === "buy" ? "var(--up)" : "var(--dn)", true, `${p.side === "buy" ? "매수" : "매도"} 대기 ${fmt(p.price)}`]));
@@ -742,15 +752,15 @@ function svgChart(code) {
   // C −N% 아래라 엔진이 안 사는 60선 예약은 안 그린다(desk.py c_near · 11-01 사용자 "사야 될 때만 나오게")
   const cnOf = (p) => p.c_near != null && (p.c_px || p.ref_cl?.[p.c_src || p.base]) ? (p.c_px || p.ref_cl[p.c_src || p.base]) * (1 - p.c_near / 100) : 0;
   // 버팀 매수(ma_confirm)는 60선에 안 닿아도 끝난 15분봉 N개가 60선 위 0~hold% 마감 → 마지막 종가에 삼(desk.py _ma_confirmed) — 그 값이 C −N% 아래면 안 삼
-  const maLine = (p, st) => { const ma = st.ma_px || 0, cn = cnOf(p), tf = `${(st.src || p.base) === "reg" ? "정규장" : "통합"} 15분봉`;
-    if (p.ma_confirm) { const hi = floorTick(ma * (1 + (p.ma_hold ?? 2) / 100)), lo = Math.max(ma, cn ? Math.round(cn) : 0);
+  const maLine = (p, st) => { const ma = st.ma_px || 0, cn = cnOf(p);
+    if (p.ma_confirm) { const hi = floorTick(ma * (1 + (p.ma_hold ?? 2) / 100)), lo = ceilTick(Math.max(ma, cn || 0));   // 호가 단위로 — 60선 이상에서 살 수 있는 첫 가격(11-03 사용자)
       return lo > hi ? null
-        : [lo, "var(--up)", true, `예약 60선 버팀 — ${tf} ${p.ma_confirm}개가 ${fmt(lo)}~${fmt(hi)}에서 마감하면 그 종가에 삼 (60선 ${fmt(ma)}${cn ? ` · BC −${p.c_near}% ${fmt(Math.round(cn))} 이상만` : ""})`]; }
+        : [lo, "var(--up)", true, `예약 버팀 ${fmt(lo)}~${fmt(hi)}`]; }
     const top = ma ? floorTick(ma * (1 + st.pct / 100)) : st.price;
     return cn && top < cn ? null
-      : [top, "var(--up)", true, `예약 ${stName(st)} (${fmt(floorTick(ma * (1 + st.pct / 100) * (1 - st.band / 100)))}~${fmt(st.price)} 들어오면 삼 · 60선 ${fmt(ma)} · ${tf})`]; };
+      : [top, "var(--up)", true, `예약 ${stName(st)} ${fmt(floorTick(ma * (1 + st.pct / 100) * (1 - st.band / 100)))}~${fmt(st.price)}`]; };
   plans.forEach((p) => !liveOf(p) && p.stages.forEach((st) => st.filled < st.qty && (st.ma ? maLine(p, st) : 1) && lines.push(st.ma ? maLine(p, st)
-    : [st.price, "var(--up)", true, `예약 ${st.pct}% ${fmt(st.price)} (${pmd(p.follow_day || p.ref_day)} ${p.base === "reg" ? "정규장" : "애프터"} 종가 ${fmt(p.base_px)} 대비)`])));
+    : [st.price, "var(--up)", true, `예약 ${st.pct}% ${fmt(st.price)}`])));
   // C 선(11-01 사용자 "차트에서 C값에 선 하나") — 기준일(신고대금 날) 종가. 예약이 있으면 그 예약이 고정한 C(고점 따라가기로 안 옮겨짐), 없으면 매수 규칙 기준의 기준일 종가
   const cW = code === active ? S.active : S.watch.find((x) => x.code === code);
   // 보기 기준(11-01 사용자 "차트에 C 보이는 기준도 정규장/애프터") — 'C 규칙'이면 예약의 C 기준(없으면 매수 규칙의 C 기준), 아니면 고른 쪽 종가
@@ -763,12 +773,12 @@ function svgChart(code) {
   const cPx = (cToday && last.c) || (cp?.c_px && cs === cp.c_src && cp.c_px) || cp?.ref_cl?.[cs] || (cW?.ref_day && cW.ref_day === cDay && (cs === "reg" ? cW.ref_reg : cW.ref_aft)) || (cp && !cp.same_day && cs === cp.base && cp.base_px) || 0;
   const cGap = cPx ? `BC대비 ${last.c >= cPx ? "+" : ""}${((last.c / cPx - 1) * 100).toFixed(2)}%` : "";   // 11-01 사용자 "C값과 현재가 N% 차이"
   const dHi0 = cPx && S.flow?.[code]?.[cs === "reg" ? "dhi_reg" : "dhi"];   // 상한가 마감이면 BC = BC날 고점 — 선이 겹쳐 고점이 안 보였다(11-03 사용자 지니언스 10-28 27,300)
-  if (cPx) lines.push([cPx, "var(--gold)", false, cToday ? `임시 BC ${fmt(cPx)} (지금 15분봉 종가 — 오늘 종가 나오면 BC 로 바뀜)` : `BC ${fmt(cPx)}${dHi0 === cPx ? " = BH" : ""} · 지금 ${cGap} (${pmd(cDay)} ${cs === "reg" ? "정규장" : "애프터"} 종가${dHi0 === cPx ? "·고가" : ""})`]);
+  if (cPx) lines.push([cPx, "var(--gold)", false, cToday ? `임시 BC ${fmt(cPx)}` : `BC ${fmt(cPx)}${dHi0 === cPx ? " = BH" : ""} ${cGap.replace("BC대비 ", "")}`]);
   const cHi = cPx && S.flow?.[code]?.[ses === "reg" ? "chi_reg" : "chi"];   // HC 는 차트 보기(애프터 포함/정규장)를 따른다 — BC 버튼과 안 묶음(11-01 사용자 "HC는 BC랑 같이 묶이면 안돼")
   const hcGap = cHi ? `${last.c >= cHi ? "+" : ""}${((last.c / cHi - 1) * 100).toFixed(2)}%` : "";   // 11-01 사용자 "차트에 HC" — HC = C 날부터 지금까지 통합(08~20시) 최고가(trader/flow.py chi)
   const dHi = cPx && S.flow?.[code]?.[cs === "reg" ? "dhi_reg" : "dhi"];   // BC 날(신고대금일) 고점 — BC 버튼(규칙/정규/애프터)에 묶음(11-01 사용자 "BC 애프터 누르면 고점도 애프터 고가")
-  if (cHi) lines.push([cHi, "var(--gold)", true, `HC ${fmt(cHi)} · 지금 HC대비 ${hcGap} (${pmd(cDay)}부터 ${ses === "reg" ? "정규장" : "애프터 포함"} 최고가${dHi === cHi ? " = BH" : ""})`]);
-  if (dHi && dHi !== cHi && dHi !== cPx) lines.push([dHi, "#c9a24a", true, `BH ${fmt(dHi)} · 지금 BH대비 ${last.c >= dHi ? "+" : ""}${((last.c / dHi - 1) * 100).toFixed(2)}% (${pmd(cDay)} ${cs === "reg" ? "정규장" : "애프터 포함"} 고가)`]);
+  if (cHi) lines.push([cHi, "var(--gold)", true, `HC ${fmt(cHi)}${dHi === cHi ? " = BH" : ""} ${hcGap}`]);
+  if (dHi && dHi !== cHi && dHi !== cPx) lines.push([dHi, "#c9a24a", true, `BH ${fmt(dHi)} ${last.c >= dHi ? "+" : ""}${((last.c / dHi - 1) * 100).toFixed(2)}%`]);
   // 오늘 전날 고가를 넘었으면(고점 갱신) 장 끝난 뒤 기준이 오늘 종가로 바뀐다 — 지금가로 미리 보여 준다(10-20 사용자 "오늘로 또 바뀌어야지")
   // 예약이 없는 종목도(다 팔았거나 끝난 예약) 켜진 매수 규칙이 고점 따라가기면 오늘 고점 갱신을 보여 준다(10-20 사용자 에스엠벡셀)
   const fr = (RULES?.rules || []).find((r) => r.on && r.ladder?.on && r.ladder.follow_high?.on), fw = S.watch.find((x) => x.code === code);
@@ -776,20 +786,19 @@ function svgChart(code) {
   if (liveNew) {
     const lv = fw.follow[fr.ladder.base || "reg"];
     levelsFor(fr, fw).forEach((l) => { const pc = parseFloat(l[0]); if (isNaN(pc) || lvMa(l)) return; const px = floorTick(lv.close * (1 + pc / 100));
-      lines.push([px, "var(--gold)", true, `오늘 고점 갱신 → 내일 ${l[0]}% ${fmt(px)} (오늘 종가 ${fmt(lv.close)} 대비, 지금가로 계산 · 장 끝나면 확정)`]); });
+      lines.push([px, "var(--gold)", true, `내일 ${l[0]}% ${fmt(px)}`]); });
   }
   plans.forEach((p) => { const lv = p.follow_high && S.watch.find((x) => x.code === code)?.follow?.[p.base];
     const fr2 = (RULES?.rules || []).find((r) => r.name === p.tag && r.ladder?.on);
     if (lv?.live) (fr2 ? levelsFor(fr2, S.watch.find((x) => x.code === code)).map((l) => ({ pct: +l[0], ma: lvMa(l) })) : p.stages).filter((st) => !st.ma).forEach((st) => { const px = floorTick(lv.close * (1 + st.pct / 100));
-      lines.push([px, "var(--gold)", true, `오늘 고점 갱신 → 내일 ${st.pct}% ${fmt(px)} (오늘 종가 ${fmt(lv.close)} 대비, 지금가로 계산 · 장 끝나면 확정)`]); }); });
+      lines.push([px, "var(--gold)", true, `내일 ${st.pct}% ${fmt(px)}`]); }); });
   // 매수 단계 선(−3%·−5% …) — 클릭 안 한 종목 차트에도 그린다(10-19 사용자). 기준: 고점 따라가기면 고점 갱신 날 종가,
   // 아니면 기준일(없으면 직전 거래일) 종가. 정규장 보기면 정규장 종가, 아니면 주문 칸에서 고른 종가. 기준선 자체는 안 그린다
   if (!plans.length && !liveNew && (side === "buy" || code !== active)) {   // 새 고점이 나면 옛 기준 미리 보기는 안 그린다
     const w = code === active ? S.active : S.watch.find((x) => x.code === code), cb = chartBase(code), fb = followBase(w, cb);
     const bp = fb ? fb.close : w ? (cb === "reg" ? w.ref_reg || w.reg : w.ref_aft || w.aft) : 0;
     const md = (d) => d.slice(4, 6) + "." + d.slice(6);
-    const why = fb ? `${fb.live ? "오늘" : md(fb.day)} 종가 ${fmt(bp)} 대비` : `${w?.ref_day ? "기준일 " + md(w.ref_day) : "직전 거래일"} ${cb === "reg" ? "정규장" : "애프터"} 종가 ${fmt(bp)} 대비`;
-    if (bp) ladder.forEach((l) => { const p = parseFloat(l.pct); if (!isNaN(p)) { const px = floorTick(bp * (1 + p / 100)); lines.push([px, "var(--up)", true, `${l.pct}% ${fmt(px)} (${why})`]); } });
+    if (bp) ladder.forEach((l) => { const p = parseFloat(l.pct); if (!isNaN(p)) { const px = floorTick(bp * (1 + p / 100)); lines.push([px, "var(--up)", true, `${l.pct}% ${fmt(px)}`]); } });
   }
   // 오른쪽 64px 는 가격 칸 — 현재가·십자선 가격표가 봉을 가리지 않게(10-19 사용자 "종가 상자 때문에 현재가 자리가 안 보여", 신고대금 장부 padR 과 같은 방식)
   // 화면 너비 그대로 그린다(늘려 그리면 한 줄 차트에서 글자가 옆으로 퍼진다)

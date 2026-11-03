@@ -628,3 +628,20 @@ def test_suneung_day_regular_close_is_1630():
     from trader import engine
     assert engine.reg_end("20261119") == "1630" and engine.reg_end("20261118") == "1530"
     assert engine.reg_end_min("2026-11-19") == 990 and engine.reg_end("20261119153000") == "1630"
+
+
+def test_reg_value_from_sophie_tape(monkeypatch, tmp_path):
+    """매수 규칙 정규장 대금 = 소피 순위 기록 15:30 까지 마지막 완전한 응답 − 장전 누적(11-03 사용자). 순위 밖은 키움 1분봉으로."""
+    import json
+    from datetime import date
+    from trader import card, desk as dk
+    (tmp_path / "rank_tape").mkdir()
+    day = date.today().isoformat()
+    rows = [{"t": "baseline", "tv": {"180640": 50e8}},
+            {"t": "minute", "hm": "10:00", "pages": 3, "want": 3, "rows": [["180640", 200e8, 1, 1, 1]]},
+            {"t": "minute", "hm": "10:01", "pages": 1, "want": 3, "rows": [["180640", 999e8, 1, 1, 1]]}]
+    (tmp_path / "rank_tape" / f"{day}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    monkeypatch.setattr(card, "SOPHIE_LOGS", tmp_path)
+    d = dk.Desk.__new__(dk.Desk)
+    if dk.datetime.now().strftime("%H%M") >= "0900":
+        assert d.tape_reg("180640") == 150e8 and d.tape_reg("000000") is None

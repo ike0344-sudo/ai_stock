@@ -108,7 +108,7 @@ async def stream(codes: str = "", active: str = ""):
             out: dict = {}
             q = {c: feed.quotes[c] for c in cs if c in feed.quotes and feed.quotes[c].get("t") != sent_q.get(c)}
             if q:
-                out["q"] = {c: {k: v[k] for k in ("px", "chg", "high", "cum", "t") if k in v} for c, v in q.items()}
+                out["q"] = {c: {k: v[k] for k in ("px", "chg", "high", "cum", "value", "t") if k in v} for c, v in q.items()}
                 sent_q.update({c: v.get("t") for c, v in q.items()})
             b = feed.books.get(act) if act else None
             if b and b.get("t") != sent_b:
@@ -309,7 +309,7 @@ def state(code: str = ""):
         watch.append({"code": c, "name": D.name(c), "px": s["px"], "chg": s["chg"], "reg": r.get("reg"), "aft": r.get("aft"),
                       "nxt": r.get("nxt", True), "ref_day": rd, "ref_src": D.ref_src(c), "ref_reg": (rr or {}).get("reg"), "ref_aft": (rr or {}).get("aft"),
                       "status": "보유" if c in held else "주문중" if c in pend else "대기", "follow": D.follow_info(c, rd) if ok else None, "auto": c not in D.no_auto,
-                      "warn": D.warn_info(c).get("text") if ok else None})
+                      "warn": D.warn_info(c).get("text") if ok else None, "value": s["value"], "value_reg": D.tape_reg(c)})
     holdings = []
     for h in D.holdings:
         m = D.meta.get(h["code"], {})

@@ -504,13 +504,47 @@ class Desk:
         """켜진 매수 규칙에 정규장 대금 조건이 있을 때만 정규장 대금을 잰다(키움 1분봉 조회라)."""
         return any(r.get("on") and any(c and c[0] in self.REG_FIELDS for c in (r.get("conds") or [])) for r in self.rules["rules"])
 
+    def tape_reg(self, code: str) -> int | None:
+        """오늘 정규장(09:00~15:30) 대금(원) — 소피증권 순위 기록(rank_tape) 파일만 읽는다(소피에 요청 안 함 · 11-03 사용자 "소피 기록으로").
+        = 15:30 까지 마지막 완전한 응답의 통합 누적 − 09:00 직전 장전 누적(baseline) — 신고대금 장부 tape_regular 와 같은 규칙.
+        소피 순위(대금 상위 ~210) 밖이거나 기록이 없으면 None. 오늘 파일에서 새로 붙은 줄만 읽는다."""
+        if datetime.now().strftime("%H%M") < "0900":
+            return 0
+        from . import card
+        day = date.today().isoformat()
+        t = self.__dict__.setdefault("_tape", {"day": None})
+        if t["day"] != day:
+            t.update(day=day, pos=0, pre={}, last={})
+        try:
+            with open(card.SOPHIE_LOGS / "rank_tape" / f"{day}.jsonl", "rb") as fh:
+                fh.seek(t["pos"])
+                for ln in fh:
+                    if not ln.endswith(b"\n"):                         # 쓰는 중인 줄 — 다음에
+                        break
+                    t["pos"] += len(ln)
+                    j = json.loads(ln)
+                    if j.get("t") == "baseline":
+                        for k, v in (j.get("tv") or {}).items():
+                            if v is not None and v > t["pre"].get(k, 0.0):
+                                t["pre"][k] = v
+                    elif j.get("t") == "minute" and str(j.get("hm", "")).replace(":", "") <= engine.reg_end(day) and j.get("pages") == j.get("want"):
+                        t["last"] = {r[0]: r[1] for r in j.get("rows") or () if r[1] is not None}
+        except (OSError, ValueError):
+            pass
+        v = t["last"].get(code)
+        return int(max(0.0, v - t["pre"].get(code, 0.0))) if v is not None and t["pre"] else None
+
     def reg_value(self, code: str) -> int | None:
-        """오늘 정규장(09:00~15:30) 거래대금(원) — 통합(_AL) 1분봉의 종가 × 거래량 합(신고대금 장부 ①과 같은 방식, 10-20 사용자
-        "거래대금도 정규장 기준"). 1분 기억, 15:31 뒤 한 번 재면 그날은 고정. 09:00 전은 0, 못 받으면 None."""
+        """오늘 정규장(09:00~15:30) 거래대금(원) — 소피 순위 기록이 먼저(tape_regular 과 같은 값, 11-03 사용자).
+        소피 순위 밖·기록 없음이면 통합(_AL) 1분봉의 종가 × 거래량 합(10-20 사용자 "거래대금도 정규장 기준").
+        1분 기억, 15:31 뒤 한 번 재면 그날은 고정. 09:00 전은 0, 못 받으면 None."""
         now = datetime.now()
         hm, t = now.strftime("%H%M"), now.strftime("%Y%m%d")
         if hm < "0900":
             return 0
+        tv = self.tape_reg(code)
+        if tv is not None:
+            return tv
         c = self.__dict__.setdefault("_rv", {})
         hit = c.get(code)
         if hit and hit[0] == t and (hit[3] or time.time() - hit[1] < 60):
